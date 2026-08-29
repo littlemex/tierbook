@@ -63,7 +63,15 @@
       "runs_per_item": 1,
       "nested_under_reference": true,
       "counterexamples": 0,
-      "bill_usd": 0.8997
+      "bill_usd": 0.8997,
+      "cohort": "swebench-v-24-rule-a:20",
+      "paired_vs_reference": {
+        "both": 14,
+        "candidate_only": 0,
+        "reference_only": 6,
+        "neither": 0
+      },
+      "accounting_boundary": "the twenty items that produced a usable episode; the attempts that ended with the gateway returning 200 and an empty stream are excluded and are priced by reliability.mean_sunk_usd instead"
     }
   },
   "eligibility": {
@@ -77,5 +85,11 @@
       "reusable cache measured at 7-14% of the engine's advertised kv_cache_size_tokens",
       "the engine's kv_cache_usage_perc gauge reflects running requests only and is not a cache-occupancy alarm"
     ]
+  },
+  "measurement_target": {
+    "endpoint": "in-cluster vLLM /v1/chat/completions",
+    "served_model_version": "vllm 0.27.1, FP8 weights",
+    "harness_commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
+    "serving_stack": "TP=2 x 2 replicas on g6e.12xlarge"
   }
 }

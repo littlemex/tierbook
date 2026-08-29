@@ -60,7 +60,10 @@
       "runs_per_item": 1,
       "nested_under_reference": null,
       "counterexamples": null,
-      "bill_usd": 14.5899
+      "bill_usd": 14.5899,
+      "cohort": "swebench-v-24-rule-a:20",
+      "paired_vs_reference": null,
+      "accounting_boundary": "the twenty items that produced a usable episode; the attempts that ended with the gateway returning 200 and an empty stream are excluded and are priced by reliability.mean_sunk_usd instead"
     }
   },
   "eligibility": {
@@ -73,5 +76,11 @@
     "notes": [
       "reference tier for the agentic-coding family"
     ]
+  },
+  "measurement_target": {
+    "endpoint": "/v1/chat/completions via gateway",
+    "served_model_version": null,
+    "harness_commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
+    "serving_stack": "gateway to bedrock"
   }
 }

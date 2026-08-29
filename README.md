@@ -23,6 +23,17 @@ Those records stay there and are cited, not copied.
 **It is not a difficulty predictor.** No classifier chooses a tier. That is a measured decision, not a
 stylistic one — see below.
 
+## Two numbers this repository publishes about itself
+
+**No non-inferiority margin anyone would pre-register admits the self-hosted tier.** It solved 14 of 20
+against the reference tier's 20 of 20, and because the comparison is paired, all six discordant items favour
+the reference: the one-sided lower bound on the difference is **−0.47**, not the −0.30 the point estimate
+suggests. An earlier version of this work published −0.30 as the margin required, which understated it.
+
+**A sample of twenty with one run per item cannot certify non-inferiority at a margin anyone wants.** The
+rule is built so that this shows up as `not certified` rather than as a winner, and so that the decision
+record says which of the two happened.
+
 ## The rule
 
 > Offline, per traffic family: assign the cheapest tier whose measured outcome on that family's frozen
