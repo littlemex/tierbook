@@ -1,0 +1,77 @@
+{
+  "id": "api-strong-a",
+  "serves": {
+    "model": "claude-fable-5",
+    "endpoint": "/v1/chat/completions via gateway"
+  },
+  "measured_at": "2026-08-30",
+  "provenance": {
+    "repo": "github.com/littlemex/distributed-ai",
+    "commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
+    "documents": [
+      "2026-08-24-mom-vsr-eks-benchmark/README.md",
+      "2026-08-24-mom-vsr-eks-benchmark/docs/results-escalation-and-the-box.md",
+      "2026-08-24-mom-vsr-eks-benchmark/docs/results-time-and-reliability.md",
+      "2026-08-24-mom-vsr-eks-benchmark/docs/PROTOCOL.md"
+    ]
+  },
+  "adapter": {
+    "wire": "chat_completions",
+    "tool_calling": "native",
+    "compliance": {
+      "unusable_action_rate": 0.0,
+      "no_action_rate": 0.0,
+      "invented_tool_rate": 0.0,
+      "steps_observed": 201
+    },
+    "restrictions": []
+  },
+  "price_card": {
+    "unit": "usd_per_mtok",
+    "source": "AWS Price List API, unit read from the catalog rather than assumed",
+    "fresh_in": 10.0,
+    "cached_in": 1.0,
+    "output": 50.0,
+    "hourly_fixed_usd": null,
+    "cache_hit_rate_observed": 0.785,
+    "reusable_cache_tokens": null
+  },
+  "latency": {
+    "unit": "seconds_per_task",
+    "p50": 97,
+    "mean": 178,
+    "p95": 501,
+    "max": 966,
+    "concurrency_when_measured": 4
+  },
+  "reliability": {
+    "attempts_observed": 24,
+    "failures": 4,
+    "mean_sunk_usd": 4.4212,
+    "failure_classes": [
+      "http 200 with an empty stream, dying at 5, 12, 25 and 28 steps having already billed 0.72, 2.29, 5.43 and 9.25 usd"
+    ]
+  },
+  "families": {
+    "agentic-coding": {
+      "solved": 20,
+      "attempted": 20,
+      "suite": "swebench-verified-24, first instance of each repository family plus the second for families with three or more, fixed before any run; 20 usable after dropping episodes lost to transport",
+      "runs_per_item": 1,
+      "nested_under_reference": null,
+      "counterexamples": null,
+      "bill_usd": 14.5899
+    }
+  },
+  "eligibility": {
+    "context_tokens": null,
+    "modalities": [
+      "text",
+      "image"
+    ],
+    "residency": null,
+    "notes": [
+      "reference tier for the agentic-coding family"
+    ]
+  }
+}

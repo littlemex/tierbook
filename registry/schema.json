@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/littlemex/tierbook/registry/schema.json",
+  "title": "tier record",
+  "description": "What one inference tier was measured to do. Contains no model name in any field the router reads: `serves` is provenance for a human, and every routing decision is taken from the measured fields. A field whose value was not measured is null, never zero and never a published figure -- this deployment has seen an engine advertise 7-14x more reusable cache than it had and a rate card price a model 17x wrong.",
+  "type": "object",
+  "required": ["id", "measured_at", "provenance", "adapter", "price_card", "latency", "reliability", "families"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "description": "Stable key the router uses. Opaque; not parsed."},
+    "serves": {
+      "type": "object",
+      "description": "Human-readable provenance only. The router must not branch on anything in here.",
+      "properties": {
+        "model": {"type": "string"},
+        "endpoint": {"type": "string"},
+        "deployment": {"type": "string"}
+      }
+    },
+    "measured_at": {"type": "string", "format": "date"},
+    "provenance": {
+      "type": "object",
+      "required": ["repo", "commit"],
+      "description": "Where the numbers came from, so a decision is reproducible from versioned inputs.",
+      "properties": {
+        "repo": {"type": "string"},
+        "commit": {"type": "string"},
+        "documents": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "required": ["wire", "tool_calling", "compliance"],
+      "description": "Protocol facts, measured separately from task ability. Conflating the two cost one tier 42% of its actions once.",
+      "properties": {
+        "wire": {"type": "string", "enum": ["chat_completions", "responses", "anthropic_messages"]},
+        "tool_calling": {"type": "string", "enum": ["native", "text_protocol", "none"]},
+        "compliance": {
+          "type": "object",
+          "description": "Fractions of parsed steps, from a measured run.",
+          "properties": {
+            "unusable_action_rate": {"type": ["number", "null"]},
+            "no_action_rate": {"type": ["number", "null"]},
+            "invented_tool_rate": {"type": ["number", "null"]},
+            "steps_observed": {"type": ["integer", "null"]}
+          }
+        },
+        "restrictions": {
+          "type": "array",
+          "description": "Combinations the endpoint refuses, as capability facts rather than as 400s discovered at runtime.",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "price_card": {
+      "type": "object",
+      "required": ["unit", "source", "fresh_in", "output"],
+      "description": "Per request shape, because the cache discount attaches to the shape and not to the text: identical content sent as one long message hit 0% where a growing conversation hit 99.9%.",
+      "properties": {
+        "unit": {"type": "string", "const": "usd_per_mtok"},
+        "source": {"type": "string", "description": "Catalog and retrieval, or the measurement that produced it. Published figures are inadmissible where a measured one exists."},
+        "fresh_in": {"type": "number"},
+        "cached_in": {"type": ["number", "null"], "description": "null when the tier does not report cached tokens. Never coerced to zero: unmeasured is not free."},
+        "output": {"type": "number"},
+        "hourly_fixed_usd": {"type": ["number", "null"], "description": "Non-null makes this tier's effective rate max(token rates, hourly / realised tasks per hour), recomputed hourly."},
+        "cache_hit_rate_observed": {"type": ["number", "null"]},
+        "reusable_cache_tokens": {"type": ["integer", "null"], "description": "Measured by interposing traffic between populate and reuse, not read from the engine's advertised capacity."}
+      }
+    },
+    "latency": {
+      "type": "object",
+      "required": ["unit", "p50", "p95"],
+      "description": "A distribution, because chains stack tails and a mean hides the arrangement that misses its SLO.",
+      "properties": {
+        "unit": {"type": "string", "const": "seconds_per_task"},
+        "p50": {"type": "number"}, "mean": {"type": ["number", "null"]},
+        "p95": {"type": "number"}, "max": {"type": ["number", "null"]},
+        "concurrency_when_measured": {"type": ["integer", "null"], "description": "A latency figure taken at low concurrency is optimistic in exactly the regime where the cost figure is realistic."}
+      }
+    },
+    "reliability": {
+      "type": "object",
+      "required": ["attempts_observed", "failures", "failure_classes"],
+      "description": "The term that reordered the arrangements. Cost of a call is bill + p/(1-p) * mean spend sunk before death, so an unreliable tier that dies late is dearer than its bill.",
+      "properties": {
+        "attempts_observed": {"type": "integer"},
+        "failures": {"type": "integer"},
+        "mean_sunk_usd": {"type": ["number", "null"]},
+        "failure_classes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "families": {
+      "type": "object",
+      "description": "Per traffic family, the measured outcome and whether this tier is nested under the family's reference tier. Nesting is a per-family, per-pair property re-certified at admission, never a global assumption.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["solved", "attempted", "suite"],
+        "properties": {
+          "solved": {"type": "integer"},
+          "attempted": {"type": "integer"},
+          "suite": {"type": "string", "description": "The frozen benchmark set and its selection rule."},
+          "runs_per_item": {"type": ["integer", "null"], "description": "One run measures an episode, not a capability."},
+          "nested_under_reference": {"type": ["boolean", "null"]},
+          "counterexamples": {"type": ["integer", "null"], "description": "Items this tier solved and the reference did not. Non-zero withdraws the chain assumption for this family."},
+          "bill_usd": {"type": ["number", "null"]}
+        }
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "description": "Hard constraints, checked before any cost arithmetic.",
+      "properties": {
+        "context_tokens": {"type": ["integer", "null"]},
+        "modalities": {"type": "array", "items": {"type": "string"}},
+        "residency": {"type": ["string", "null"]},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

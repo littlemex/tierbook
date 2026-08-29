@@ -1,0 +1,81 @@
+{
+  "id": "self-hosted-a",
+  "serves": {
+    "model": "Qwen/Qwen3.6-35B-A3B-FP8",
+    "endpoint": "in-cluster vLLM",
+    "deployment": "g6e.12xlarge, TP=2 x 2 replicas"
+  },
+  "measured_at": "2026-08-30",
+  "provenance": {
+    "repo": "github.com/littlemex/distributed-ai",
+    "commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
+    "documents": [
+      "2026-08-24-mom-vsr-eks-benchmark/README.md",
+      "2026-08-24-mom-vsr-eks-benchmark/docs/results-escalation-and-the-box.md",
+      "2026-08-24-mom-vsr-eks-benchmark/docs/results-time-and-reliability.md",
+      "2026-08-24-mom-vsr-eks-benchmark/docs/PROTOCOL.md"
+    ]
+  },
+  "adapter": {
+    "wire": "chat_completions",
+    "tool_calling": "native",
+    "compliance": {
+      "unusable_action_rate": 0.01,
+      "no_action_rate": 0.002,
+      "invented_tool_rate": 0.0,
+      "steps_observed": 490
+    },
+    "restrictions": [
+      "thinking is off by default via chat_template_kwargs; enabling it tripled output tokens and solved one fewer"
+    ]
+  },
+  "price_card": {
+    "unit": "usd_per_mtok",
+    "source": "measured on this deployment 2026-08-29 at the throughput knee",
+    "fresh_in": 0.236,
+    "cached_in": 0.0188,
+    "output": 4.12,
+    "hourly_fixed_usd": 15.2174,
+    "cache_hit_rate_observed": 0.87,
+    "reusable_cache_tokens": 200000
+  },
+  "latency": {
+    "unit": "seconds_per_task",
+    "p50": 76,
+    "mean": 94,
+    "p95": 275,
+    "max": 276,
+    "concurrency_when_measured": 4
+  },
+  "reliability": {
+    "attempts_observed": 39,
+    "failures": 0,
+    "mean_sunk_usd": null,
+    "failure_classes": [
+      "node containerd death lost 3 episodes in a separate pass; they were re-run and are not in this count"
+    ]
+  },
+  "families": {
+    "agentic-coding": {
+      "solved": 14,
+      "attempted": 20,
+      "suite": "swebench-verified-24, first instance of each repository family plus the second for families with three or more, fixed before any run; 20 usable after dropping episodes lost to transport",
+      "runs_per_item": 1,
+      "nested_under_reference": true,
+      "counterexamples": 0,
+      "bill_usd": 0.8997
+    }
+  },
+  "eligibility": {
+    "context_tokens": 262144,
+    "modalities": [
+      "text",
+      "image"
+    ],
+    "residency": "in-cluster",
+    "notes": [
+      "reusable cache measured at 7-14% of the engine's advertised kv_cache_size_tokens",
+      "the engine's kv_cache_usage_perc gauge reflects running requests only and is not a cache-occupancy alarm"
+    ]
+  }
+}
