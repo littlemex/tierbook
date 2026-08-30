@@ -1,4 +1,4 @@
-# Routing raised quality at the same price, and the comparison it is measured against decides the answer
+# Routing raised quality at the same price, and the yardstick decides whether that is the point
 
 **Measured 2026-08-30**, out of fold: fitted on 488 calibration items, judged on 699 held-out items with zero
 overlap. Eight tiers, all reached through one gateway, priced from that gateway's own rate table.
@@ -77,6 +77,50 @@ concentrated.
 **32 items are solved by nobody.** No router reaches them. Any progress claimed against the oracle without
 subtracting this floor is overstated by 4.6 points.
 
+## Where this sits in the published results, and why the yardstick differs
+
+Two things need separating here, and an earlier draft of this page ran them together.
+
+**What the literature actually says, quoted rather than paraphrased.** LLMRouterBench (arXiv:2601.07206, 400k+
+instances, 21 datasets, 33 models) reports that "several recent approaches, including commercial routers, fail
+to reliably outperform a simple baseline", and that "a substantial gap remains to the Oracle, driven primarily
+by persistent model-recall failures". RouterBench (arXiv:2403.12031, 405k outcomes) frames itself as addressing
+"balancing performance with cost". An earlier draft of this page asserted that both conclude no router beats
+the *best single model*; that specific wording could not be confirmed from the primary sources and has been
+withdrawn in favour of the quoted text.
+
+**Cost is not what distinguishes this project from that work.** It would be convenient to say the published
+routers optimise quality alone, and it is not true: RouterBench is explicitly about balancing performance with
+cost, LLMRouterBench provides metrics for "performance-cost trade-off routing", and FrugalGPT, RouteLLM, Hybrid
+LLM and PILOT are all cost-aware by construction.
+
+What differs is the shape of the objective.
+
+  * **Three axes, not two.** Latency enters, and for a fixed-cost tier it enters through throughput, so the same
+    tier's cost per request moved by a factor of three between two families here. A two-axis frontier cannot
+    express that.
+  * **Constraints the owner states, not a scalarised score.** Quality is a floor with a margin, reliability is
+    its own constraint, and there is no weight vector -- because the exchange rate between a defect and a dollar
+    cannot be set from inside.
+  * **Non-dominated options, not a recommendation.** `frontier()` returns every policy nothing else dominates
+    and marks the rest. The owner picks.
+  * **Refusal is an action.** If nothing satisfies the stated constraints, the answer is to refuse.
+
+On that objective, "did the router beat the best single model" is not the question asked. Both of these are
+frontier points and neither is a defeat: 2.0 points above the cheapest tier at the same money, and 5.6 points
+below the strongest at 56% less. The frontier code already treats them that way; it was this page's prose that
+borrowed a single-axis yardstick.
+
+**One point of direct agreement with the literature.** LLMRouterBench attributes the remaining gap to the oracle
+to "persistent model-recall failures" -- the router failing to recall which model can solve an item. That is
+exactly the shape of the histogram above: 13 items are solved by exactly one of eight tiers, and finding that
+one from the prompt is the hard part. The agreement is worth more than the disagreement would have been,
+because it says the bottleneck found here is the one the field has found at scale.
+
+**And the policy really is a single dictionary lookup**, since a reviewer asked whether the gain was a cascade in
+disguise. `bucket_policy` maps one feature value to one tier and calls it once: no cascade, no second attempt,
+no ensemble, no escalation.
+
 ## What this does not support
 
 **One family.** Knowledge multiple-choice. The two coding corpora in this repository nested strictly, and
@@ -86,6 +130,13 @@ answer.
 **One feature.** The bucket is the benchmark's own category label, which a production router does not get for
 free: it has to be predicted, and a classifier's label is not the benchmark's label. The +2.00 pt figure is
 therefore an upper bound on what the same policy achieves behind a real classifier.
+
+**Label volume is one to two orders of magnitude below the published encoder routers, by the measure that
+matters.** By training examples the gap is smaller than it looks: 1,187 items x 8 tiers is 9,496 (item, tier)
+pairs, which is the same order as Hybrid LLM's 10,000. By **distinct prompts** it is 1,187 against 10,000 to
+120,000, and for a text encoder distinct prompts is the binding constraint -- the eight heads see the same
+1,187 inputs. The bucket policy here sidesteps that because it consumes a categorical label rather than text; a
+learned encoder will not.
 
 **No prompt-only ceiling yet.** The three bounds the design calls for — full-information oracle, empirical
 ceiling from prompt features alone, and irreducible ambiguity — only the first is computed here (0.9542 on the
