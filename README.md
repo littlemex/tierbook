@@ -197,11 +197,26 @@ Separate because their failure modes must not be shared: a compile that refuses 
 held-out fold supports an entry -- exits non-zero and leaves the router serving what it was already serving,
 rather than falling back to something nobody chose.
 
-`tierbook export-vsr` turns a compiled table into a vLLM Semantic Router configuration: one priority decision
-per family naming exactly one tier. The router's own multi-factor selector is deliberately unused, because a
-selector fed by live per-process statistics chooses from evidence nobody committed to and nobody can review
-after an incident. The export refuses three things -- a family with no classifier label, a `provisional` entry
-without an explicit flag, and a chain, whose second stage fires on failures the router does not observe.
+`tierbook export-vsr` turns a compiled table into a vLLM Semantic Router configuration **and the Envoy config
+beside it**, because a router config alone routes nothing: the ExtProc names a model in a header and something
+has to dial the upstream that name refers to. One priority decision per family, naming exactly one tier. The
+router's own multi-factor selector is deliberately unused, because a selector fed by live per-process
+statistics chooses from evidence nobody committed to and nobody can review after an incident.
+
+The export refuses: a family with no classifier label, a `provisional` entry without an explicit flag, a chain
+whose second stage fires on failures the router does not observe, an entrypoint name the router reserves, and a
+data-plane port the router itself binds.
+
+**This path was verified on a cluster**, and doing so corrected eleven things -- six of them fatal or
+eviction-level. The router's own log names the decision it took, so the claim is checkable:
+
+```
+{"msg":"routing_decision","decision":"tierbook_tool_agent_user_retail","selected_model":"api-cheap-a"}
+{"msg":"No decision matched"}
+{"msg":"routing_decision","decision":"","selected_model":"api-strong-a"}
+```
+
+See `docs/results-router-on-a-cluster.md`.
 
 ## What a stranger does on day one
 

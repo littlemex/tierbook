@@ -278,6 +278,12 @@ def draft_from_model_list(models: list[dict], *, base_url: str, api_key_env: str
         "_draft": ("Printed from a live model list. Nothing here is measured. Fill in price_per_mtok or "
                    "hourly_usd, delete what you will not measure, then commit it -- the file will not load "
                    "until you do, which is intentional."),
+        "_draft_is_not_an_inventory": (
+            "A model list is not the set of models a gateway can serve. On the gateway this project uses, "
+            "the list was generated from a hand-maintained table rather than from the registry the request "
+            "path dispatches on, and five servable models appeared in no list at all. So treat this draft as "
+            "a starting point that may be missing entries, never as a complete inventory -- if a model you "
+            "know exists is absent, add it by hand rather than concluding it is unavailable."),
         "candidates": {},
         "families": {},
         "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
@@ -290,7 +296,10 @@ def draft_from_model_list(models: list[dict], *, base_url: str, api_key_env: str
             "deployment": "api",
             "endpoint": {"base_url": base_url, "model": mid, "wire": wire_by_id.get(mid, "chat"),
                          "api_key_env": api_key_env,
-                         "revision": m.get("revision") or m.get("created_at") or None},
+                         # `revision` or nothing. A model list's `created_at` is not a revision -- on the
+                         # gateway this project uses it is generated at request time -- so falling back to it
+                         # would write a timestamp into a field whose whole purpose is to pin a checkpoint.
+                         "revision": m.get("revision") or None},
             "price_per_mtok": None,
             "note": "drafted from a model list; price and wire are unverified claims until someone checks them",
         }

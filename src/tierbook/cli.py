@@ -265,24 +265,49 @@ def cmd_preflight(args) -> int:
 
 
 def cmd_export_vsr(args) -> int:
-    from tierbook.export_vsr import ExportError, export, write
+    """Write the router config, and the Envoy config beside it.
+
+    Both, because a router config alone routes nothing: the ExtProc names a model in a header and something
+    has to dial the upstream that name refers to. Emitting only the first is how this exporter previously
+    produced a deployment with no data plane in it.
+    """
+    from tierbook.export_vsr import ExportError, envoy_config, export, models_used, write
 
     cfg = _config(args)
     table = load_table(args.table)
     signals = dict(pair.split("=", 1) for pair in (args.signal or []))
+    cats = {}
+    for spec in (args.signal_categories or []):
+        label, _, joined = spec.partition("=")
+        cats[label] = [c for c in joined.split(",") if c]
     try:
-        conf = export(table, cfg, signal_for_family=signals, default_model=args.default_model,
-                      listener_port=args.port, request_can_reject=args.can_reject,
-                      allow_provisional=args.allow_provisional)
+        conf, prov = export(table, cfg, signal_for_family=signals, default_model=args.default_model,
+                            listener_port=args.port, entrypoint=args.entrypoint,
+                            request_can_reject=args.can_reject,
+                            allow_provisional=args.allow_provisional, signal_kind=args.signal_kind,
+                            signal_categories=cats)
     except ExportError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
     write(conf, args.out)
-    skipped = conf["_tierbook"]["families_skipped"]
+    # Beside the config, not inside it: the router rejects an unknown top-level key with a warning on every
+    # start, and a config that warns every time is a config whose warnings stop being read.
+    prov_path = write(prov, f"{args.out}.provenance.json")
     print(f"wrote {args.out}: {len(conf['routing']['decisions'])} decision(s) from registry "
-          f"{conf['_tierbook']['compiled_from_registry']}")
-    for s in skipped:
-        print(f"  skipped {s}")
+          f"{prov['compiled_from_registry']}")
+    print(f"wrote {prov_path}: what this config was compiled from")
+    if args.envoy_out:
+        try:
+            envoy = envoy_config(cfg, models_used(conf), listen_port=args.envoy_port,
+                                 extproc_port=args.extproc_port)
+        except ExportError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
+        write(envoy, args.envoy_out)
+        print(f"wrote {args.envoy_out}: {len(envoy['static_resources']['clusters'])} cluster(s), "
+              "including the ExtProc over loopback")
+    for skipped in prov["families_skipped"]:
+        print(f"  skipped {skipped}")
     return 0
 
 
@@ -382,9 +407,23 @@ def main(argv: list[str] | None = None) -> int:
     x.add_argument("--default-model", required=True,
                    help="where traffic no decision matched goes. Not the cheapest tier: an unclassified "
                         "request is one there is no evidence about")
+    x.add_argument("--entrypoint", default="tierbook/routed",
+                   help="the virtual model name a client asks for. Not 'auto', which the "
+                        "router reserves")
     x.add_argument("--port", type=int, default=8801)
     x.add_argument("--can-reject", action="store_true")
     x.add_argument("--allow-provisional", action="store_true")
+    x.add_argument("--envoy-out", default=None,
+                   help="also write the Envoy config. A router config alone routes nothing: something has "
+                        "to dial the upstream the router named")
+    x.add_argument("--envoy-port", type=int, default=8801,
+                   help="the port the data plane listens on. Not 8080: the router binds that "
+                        "for its classification API in the same network namespace")
+    x.add_argument("--extproc-port", type=int, default=50051)
+    x.add_argument("--signal-kind", default="domain",
+                   help="the condition type the classifier emits; 'domain' for the shipped classifier")
+    x.add_argument("--signal-categories", action="append", metavar="LABEL=cat1,cat2",
+                   help="what the chosen classifier keys a label on, when it needs more than a name")
     x.set_defaults(fn=cmd_export_vsr)
 
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")

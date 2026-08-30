@@ -44,6 +44,26 @@ The library's endpoint abstraction is a `base_url`, a model name and which of th
 endpoint speaks. It cannot tell a rented API from a pod next door, and the only place that distinction
 survives is the cost model, where a per-token bill and a per-hour bill are different arithmetic.
 
+## Verified on a real cluster
+
+The manifests here are not written from the shape of a router config. They were applied to a Kubernetes
+cluster, traffic was sent, and the upstream that answered was checked against the tier the compiled table
+named. What that run found, and what it corrected, is in
+`docs/results-router-on-a-cluster.md`.
+
+The short version: the router's own log names the decision it took, so the claim is checkable rather than
+inferred.
+
+```
+{"msg":"routing_decision","decision":"tierbook_tool_agent_user_retail","selected_model":"api-cheap-a"}
+{"msg":"No decision matched"}
+{"msg":"routing_decision","decision":"","selected_model":"api-strong-a"}
+```
+
+The first line is a request whose family the table assigned to the cheap tier, and the upstream that answered
+said so. The last two are a request the classifier put in no declared family, which reached the deliberate
+default rather than the cheapest thing on offer.
+
 ## The one thing to get right
 
 `compile` writes a ConfigMap the router reads at start. Rolling the router on a ConfigMap change is deliberate

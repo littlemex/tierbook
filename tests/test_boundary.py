@@ -372,13 +372,24 @@ def test_the_exported_config_names_the_tier_the_holdout_supported(tmp_path):
     table = compile_to_file(load_registry(LEDGER), {"tool-agent-user-retail": "api-strong-a"},
                             tmp_path / "t.json", margin=0.25, today="2026-08-30",
                             validations=VALIDATION)
-    conf = export(table, cfg, signal_for_family={"tool-agent-user-retail": "retail"},
-                  default_model="api-strong-a")
+    conf, prov = export(table, cfg, signal_for_family={"tool-agent-user-retail": "retail"},
+                        default_model="api-strong-a")
     decisions = conf["routing"]["decisions"]
     assert len(decisions) == 1
     assert decisions[0]["modelRefs"][0]["model"] == "api-cheap-a"
-    # The registry hash travels with the config, which is how a reviewer checks it still matches the ledger.
-    assert conf["_tierbook"]["compiled_from_registry"] == table["registry_version"]
+    # The registry hash travels beside the config -- not inside it, because the router warns on an unknown
+    # top-level key and a config that warns on every start is one whose warnings stop being read. It also
+    # appears in the recipe description, so a reader of the config alone can still check it.
+    assert prov["compiled_from_registry"] == table["registry_version"]
+    assert table["registry_version"] in conf["recipes"][0]["description"]
+    assert "_tierbook" not in conf, "the router rejects unknown top-level keys"
+    # The model catalog is shared, so a recipe may not redefine the cards. The router refuses to start
+    # otherwise, and it names exactly that reason.
+    assert "modelCards" not in conf["recipes"][0]["routing"]
+    assert "modelCards" in conf["routing"]
+    # Pricing is translated into the router's key names, not the ledger's.
+    pricing = conf["providers"]["models"][0].get("pricing") or {}
+    assert "prompt_per_1m" in pricing and "fresh_in" not in pricing
     # The default for unmatched traffic is the reference, not the cheapest thing on offer.
     assert conf["providers"]["defaults"]["default_model"] == "api-strong-a"
 
@@ -404,3 +415,58 @@ def test_a_missing_schema_raises_rather_than_dropping_the_check(tmp_path):
 
     with pytest.raises(ConfigError, match="record schema is missing"):
         _record_schema_keys(tmp_path / "nope.json")
+
+
+def test_a_model_lists_created_at_is_never_read_as_a_revision():
+    """A refusal that always fires teaches an operator to ignore it, which is worse than one that never does.
+
+    An earlier version fell back to `created_at` when a model list carried no `revision`. The operators of the
+    gateway this project measured then confirmed that their `/v1/models` generates `created_at` at request
+    time -- it is neither a registration date nor a model revision. Comparing a fresh timestamp against a
+    stored one reports a mismatch on every call, so the one warning that protects the ledger's core promise
+    would have become noise.
+    """
+    from tierbook.config import draft_from_model_list
+
+    draft = draft_from_model_list(
+        [{"id": "vendor/a", "created_at": "2026-08-30T12:00:00Z"},
+         {"id": "vendor/b", "revision": "2026-07", "created_at": "2026-08-30T12:00:00Z"}],
+        base_url="https://gw/v1", api_key_env="K")
+    assert draft["candidates"]["vendor-a"]["endpoint"]["revision"] is None
+    assert draft["candidates"]["vendor-b"]["endpoint"]["revision"] == "2026-07"
+    # And the draft says a model list is not an inventory: on that gateway five servable models appeared in
+    # no list at all, so absence from the list is not evidence of absence from the gateway.
+    assert "inventory" in " ".join(k for k in draft) or "_draft_is_not_an_inventory" in draft
+
+
+@pytest.mark.parametrize("port,what", [(8080, "classification API"), (50051, "ExtProc"), (9190, "metrics")])
+def test_the_data_plane_cannot_listen_on_a_port_the_router_binds(port, what):
+    """Found on a real cluster: a collision here fails as a crash loop, not as a config error.
+
+    The ExtProc and the data plane share a network namespace because the ExtProc call is on the request path
+    for every request and must not cross a node boundary. So an Envoy listener on the router's own
+    classification API port produces one process that cannot bind, which surfaces as a pod that never becomes
+    ready rather than as anything pointing at the port number that caused it.
+    """
+    from tierbook.export_vsr import ExportError, envoy_config
+
+    cfg = load_config(CANDIDATES)
+    with pytest.raises(ExportError, match="cannot listen on"):
+        envoy_config(cfg, ["api-cheap-a"], listen_port=port)
+
+
+def test_a_reserved_entrypoint_name_is_refused_at_export_time(tmp_path):
+    """Found on a real cluster: the router reserves `auto` and refuses to start, in a stack trace.
+
+    An entrypoint is the virtual model name a client asks for. Refusing it here rather than at start-up is the
+    difference between a message naming the field and a Go stack trace in a crash loop.
+    """
+    from tierbook.export_vsr import ExportError, export
+    from tierbook.table import compile_to_file
+
+    cfg = load_config(CANDIDATES)
+    table = compile_to_file(load_registry(LEDGER), {"tool-agent-user-retail": "api-strong-a"},
+                            tmp_path / "t.json", margin=0.25, today="2026-08-30", validations=VALIDATION)
+    with pytest.raises(ExportError, match="reserves"):
+        export(table, cfg, signal_for_family={"tool-agent-user-retail": "retail"},
+               default_model="api-strong-a", entrypoint="auto")

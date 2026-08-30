@@ -1,17 +1,38 @@
-# The thing on the request path. It reads the compiled table and does what it says.
+# The request path: Envoy terminates HTTP, calls the ExtProc over loopback, and dials whichever upstream the
+# ExtProc named in `x-selected-model`. Both configs come from `tierbook export-vsr`.
 #
-# The router is a vLLM Semantic Router: it classifies a request into a traffic family and names a model. Its
-# own multi-factor selector is deliberately NOT used -- a selector fed by live per-process statistics chooses
-# from evidence nobody committed to and nobody can review after an incident. `tierbook export-vsr` writes a
-# priority decision per family naming exactly one tier: the one a held-out fold supported.
+# Every number and every field below was corrected against a real cluster. What the first version of this file
+# got wrong, in the order the cluster reported it:
 #
-# One replica, and no autoscaler. Two replicas would each observe half the traffic, which matters not for
-# throughput but because it makes an incident harder to explain -- and this pod holds no state worth scaling.
+#   * the data plane was missing entirely -- there was nothing terminating HTTP in front of the ExtProc;
+#   * Envoy listened on 8080, which the router binds for its classification API in the same network namespace,
+#     so one process failed to bind and it surfaced as a pod that never became ready;
+#   * the models volume was 8Gi, and the classifier download exceeds it -- the pod was evicted every time it
+#     finished downloading, with `Usage of EmptyDir volume "models" exceeds the limit`;
+#   * `/health` was guessed as a readiness path. The router's readiness is a TCP check on the gRPC port.
+#
+# The ExtProc and Envoy are co-located deliberately: the ExtProc call is on the request path for every request,
+# so crossing a node boundary would add network variance to every latency the router reports. That is also why
+# the generated Envoy config points its extproc cluster at 127.0.0.1.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tierbook-router-models
+spec:
+  # A PVC rather than an emptyDir because the classifier download is expensive and should survive a pod
+  # replacement. Sized generously: 8Gi is not enough and the failure mode is eviction, not a clear error.
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 40Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tierbook-router
 spec:
+  # One replica, and no autoscaler. Two would each observe half the traffic, which matters not for throughput
+  # but because it makes an incident harder to explain -- and this pod holds no state worth scaling.
   replicas: 1
   strategy: {type: Recreate}
   selector:
@@ -20,39 +41,66 @@ spec:
     metadata:
       labels: {app.kubernetes.io/name: tierbook-router}
       annotations:
-        # Roll when the table changes. A router holding a table that no longer matches the ledger is exactly
-        # what the registry hash exists to catch, and catching it at start beats finding it during an
-        # incident. Your overlay should set this to a checksum of the table ConfigMap.
-        tierbook.dev/table-checksum: "set-me-in-your-overlay"
+        # Roll when the table changes. A router holding a table that no longer matches the ledger is what the
+        # registry hash exists to catch, and catching it at start beats finding it during an incident. Set
+        # this to a checksum of the router-config ConfigMap in your overlay.
+        tierbook.dev/config-checksum: "set-me-in-your-overlay"
     spec:
       containers:
         - name: router
-          # Any OpenAI-compatible router that can be configured from a file works here. The image is
-          # substituted by kustomize; nothing in this manifest depends on which one you use beyond the
-          # config path.
           image: ghcr.io/vllm-project/semantic-router/extproc:latest
-          args: ["--config=/etc/tierbook/router.json", "--secure=false"]
+          args: ["--secure=false"]
           env:
-            # Referenced by name from the router config. The upstream credential, whether that upstream is a
-            # gateway in front of several vendors or one vendor directly.
-            - name: TIERBOOK_API_KEY
-              valueFrom:
-                secretKeyRef: {name: tierbook-credentials, key: api-key, optional: true}
+            - {name: LD_LIBRARY_PATH, value: /app/lib}
+            # The classification API answers "which decision would this request take, and which model would be
+            # named" without calling a model, which is how the routing gets checked without spending anything.
+            # It binds to loopback by default, and acknowledging that it is container-local is what lets it
+            # start at all.
+            - {name: VLLM_SR_MANAGEMENT_INTERNAL_LISTENER, value: "true"}
           ports:
+            - {containerPort: 50051, name: grpc}
+            - {containerPort: 8080, name: classify-api}
+          volumeMounts:
+            # The path is fixed by the image; the file is the JSON `tierbook export-vsr` wrote. JSON is a
+            # subset of YAML, so it loads as-is.
+            - {name: router-config, mountPath: /app/config/config.yaml, subPath: config.yaml, readOnly: true}
+            - {name: models, mountPath: /app/models}
+          startupProbe:
+            # The classifier is downloaded on first start, so the startup budget covers a cold volume rather
+            # than a warm one. Twenty minutes, which was measured as ample and is cheap when unused.
+            tcpSocket: {port: grpc}
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            tcpSocket: {port: grpc}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: {cpu: "1", memory: 4Gi, ephemeral-storage: 4Gi}
+            limits: {cpu: "4", memory: 8Gi, ephemeral-storage: 12Gi}
+        - name: envoy
+          image: envoyproxy/envoy:v1.35-latest
+          args: ["--config-path", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+          ports:
+            # 8801, not 8080: the router binds 8080 for its classification API and the two share a network
+            # namespace. `tierbook export-vsr` refuses to emit a data-plane listener on a port the router
+            # reserves, so this number and the generated config cannot disagree.
             - {containerPort: 8801, name: http}
           volumeMounts:
-            - {name: router-config, mountPath: /etc/tierbook}
+            - {name: envoy-config, mountPath: /etc/envoy, readOnly: true}
           readinessProbe:
-            httpGet: {path: /health, port: http}
-            initialDelaySeconds: 5
+            tcpSocket: {port: http}
+            periodSeconds: 10
           resources:
-            requests: {cpu: "500m", memory: 1Gi}
-            limits: {memory: 2Gi}
+            requests: {cpu: 200m, memory: 256Mi, ephemeral-storage: 512Mi}
+            limits: {memory: 1Gi, ephemeral-storage: 1Gi}
       volumes:
-        # Written by `tierbook export-vsr` from the compiled table. Kept separate from the table ConfigMap so
-        # that a table which compiles but does not export -- a chain, an unmapped family -- fails at export
-        # time rather than at the router's start.
+        # Written by `tierbook export-vsr --out`. Kept separate from the compiled table so that a table which
+        # compiles but does not export -- a chain, an unmapped family, a reserved entrypoint name -- fails at
+        # export time rather than at the router's start.
         - {name: router-config, configMap: {name: tierbook-router-config}}
+        - {name: envoy-config, configMap: {name: tierbook-envoy-config}}
+        - {name: models, persistentVolumeClaim: {claimName: tierbook-router-models}}
 ---
 apiVersion: v1
 kind: Service

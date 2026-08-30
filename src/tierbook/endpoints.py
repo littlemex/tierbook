@@ -13,6 +13,12 @@ Two checks live here because each closes a failure this project actually shipped
     number would have published a false result about a model. So a mismatch is discovered before the run and
     classified as an endpoint incompatibility, never as a task outcome, and the wire actually used is
     recorded inside the record -- a score belongs to the transport it was measured over.
+
+    Probing is the only way to know, and that is now established rather than assumed: the operators of the
+    gateway this project measured confirmed the refusal originates **upstream**, not in the gateway, which
+    forwards the request shape unchanged. So no gateway can declare the combination in advance without
+    publishing a claim about someone else's behaviour that it neither controls nor is notified about. A
+    declaration would be inherited by every score built on it; a probe is cheap and belongs to whoever ran it.
   * **an identity check at route time.** A gateway name can be repointed at a new checkpoint without telling
     anyone. If the identity the backend reports no longer matches the identity in the record, the record does
     not describe what is behind the name and the caller is told so.
@@ -201,7 +207,17 @@ def identity_matches(ep: Endpoint, record: dict) -> str | None:
     for m in (body.get("data") or []):
         if m.get("id") != ep.model:
             continue
-        got = m.get("revision") or m.get("created_at")
+        # `revision` only. NOT `created_at`, which this project previously fell back to: the gateway team
+        # measured that their `/v1/models` generates `created_at` at request time, so it is neither a
+        # registration date nor a model revision. Comparing it against a stored value would report a mismatch
+        # on every single call -- a refusal that always fires, which is worse than one that never does,
+        # because it teaches an operator to ignore the one warning that protects the ledger's core promise.
+        got = m.get("revision")
+        if got is None:
+            return (f"the backend does not report a revision for {ep.model!r}, so nothing here can detect it "
+                    "being repointed at a different checkpoint. The gateway does not guarantee identifying "
+                    "the checkpoint behind a provider-managed alias, so treat this record as describing a "
+                    "moving target rather than assuming stability.")
         if got and str(got) != str(want):
             return (f"the backend reports {ep.model!r} at revision {got!r} and the record was measured at "
                     f"{want!r}; the record does not describe what is behind this name any more")
