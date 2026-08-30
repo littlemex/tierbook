@@ -5,11 +5,12 @@
     "api-strong-a": {
       "deployment": "api",
       "endpoint": {
-        "base_url": "https://gateway.example/v1",
+        "base_url": "https://d8b03j8erit4k.cloudfront.net/v1",
         "model": "strong-model-a",
         "wire": "chat",
         "api_key_env": "TIERBOOK_API_KEY",
-        "revision": "2026-07"
+        "revision": "2026-07",
+        "gateway_version": "main-7129eb0-amd64"
       },
       "price_per_mtok": {
         "fresh_in": 10.0,
@@ -21,14 +22,15 @@
     "api-cheap-a": {
       "deployment": "api",
       "endpoint": {
-        "base_url": "https://gateway.example/v1",
+        "base_url": "https://d8b03j8erit4k.cloudfront.net/v1",
         "model": "cheap-model-a",
         "wire": "responses",
         "api_key_env": "TIERBOOK_API_KEY",
         "revision": "2026-08",
         "refuses_params": [
           "temperature"
-        ]
+        ],
+        "gateway_version": "main-7129eb0-amd64"
       },
       "price_per_mtok": {
         "fresh_in": 2.2,
@@ -59,5 +61,6 @@
       }
     }
   },
-  "_throughput_note": "No throughput override here on purpose. Each record carries its own per-family latency and the concurrency it was measured at, so the figure lives in one place. Override only when you measured throughput under load -- an assumed concurrency is what made an earlier figure in this project wrong."
+  "_throughput_note": "No throughput override here on purpose. Each record carries its own per-family latency and the concurrency it was measured at, so the figure lives in one place. Override only when you measured throughput under load -- an assumed concurrency is what made an earlier figure in this project wrong.",
+  "_gateway_pin": "The API candidates are pinned to gateway image tag main-7129eb0-amd64, built from commit 7129eb0 and immutable in the registry. A gateway decides the wire, the parameters it forwards, the prices it charges against and what it reports as success, so a record taken against one version does not describe another. `substrate_matches()` compares this against each record's measurement_target.gateway_version, and reports when it cannot compare at all rather than passing in silence."
 }

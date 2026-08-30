@@ -59,6 +59,13 @@ class Endpoint:
     next door, something behind a corporate proxy -- this module cannot tell them apart and deliberately does
     not try. `deployment` distinguishes them only where the *cost model* must differ: a per-token bill and an
     hourly bill are arithmetic, not architecture.
+
+    `gateway_version` pins whatever sits in front. This matters for the same reason `revision` does and is
+    more tractable: a provider will not tell you which checkpoint is behind an alias, but a gateway you or
+    your organisation runs can be asked which version it is. A gateway changes what a measurement means --
+    it decides the wire, the parameters it forwards, the prices it charges against, and what it reports as
+    success -- so a record taken against one version does not describe another. Pinned here, recorded in the
+    measurement, and checked before routing.
     """
 
     base_url: str
@@ -66,6 +73,7 @@ class Endpoint:
     wire: str = "chat"                  # "chat" | "responses"; declared, then pre-flighted before measuring
     api_key_env: str | None = None      # the NAME of an environment variable, never a key
     revision: str | None = None         # pinned identity, checked against the record at route time
+    gateway_version: str | None = None  # the pinned version of whatever sits in front, if anything does
     refuses_params: tuple[str, ...] = ()  # parameters this endpoint rejects, discovered by pre-flight
     headers: dict[str, str] = field(default_factory=dict)
     timeout_s: float = 600.0
@@ -228,6 +236,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
             endpoint=Endpoint(
                 base_url=ep["base_url"], model=ep["model"], wire=ep.get("wire", "chat"),
                 api_key_env=ep.get("api_key_env"), revision=ep.get("revision"),
+                gateway_version=ep.get("gateway_version"),
                 refuses_params=tuple(ep.get("refuses_params") or ()),
                 headers=dict(ep.get("headers") or {}), timeout_s=float(ep.get("timeout_s", 600.0)),
             ),

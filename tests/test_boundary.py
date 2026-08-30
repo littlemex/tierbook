@@ -470,3 +470,36 @@ def test_a_reserved_entrypoint_name_is_refused_at_export_time(tmp_path):
     with pytest.raises(ExportError, match="reserves"):
         export(table, cfg, signal_for_family={"tool-agent-user-retail": "retail"},
                default_model="api-strong-a", entrypoint="auto")
+
+
+def test_the_thing_in_front_is_pinned_and_a_missing_pin_is_reported_not_passed():
+    """A gateway is a moving substrate, and it is the one that can actually be asked which version it is.
+
+    A provider will not say which checkpoint is behind an alias -- its operators declined to guarantee that,
+    and correctly. But a gateway decides the wire, the parameters it forwards, the prices it charges against
+    and what it reports as success, so a record taken against one version does not describe another.
+
+    The case this pins is not the mismatch, which is obvious. It is the half-configured one: a pin in
+    configuration and none in the record means nothing was compared, and returning silence there would make
+    "unpinned" read exactly like "checked and fine".
+    """
+    from tierbook.config import Endpoint
+    from tierbook.endpoints import substrate_matches
+
+    pinned = Endpoint(base_url="https://gw/v1", model="m", gateway_version="0.2.0")
+    unpinned = Endpoint(base_url="https://gw/v1", model="m")
+
+    assert substrate_matches(pinned, {"measurement_target": {"gateway_version": "0.2.0"}}) is None
+    assert "does not describe another" in substrate_matches(
+        pinned, {"measurement_target": {"gateway_version": "0.1.0"}})
+    for endpoint, record in ((pinned, {}), (unpinned, {"measurement_target": {"gateway_version": "0.2.0"}}),
+                             (unpinned, {})):
+        why = substrate_matches(endpoint, record)
+        assert why is not None and "moving substrate" in why, (endpoint, record)
+
+
+def test_a_pinned_gateway_version_loads_from_configuration(tmp_path):
+    body = _minimal()
+    body["candidates"]["ref"]["endpoint"]["gateway_version"] = "0.2.0"
+    cfg = load_config(_write(tmp_path, body))
+    assert cfg.candidates["ref"].endpoint.gateway_version == "0.2.0"

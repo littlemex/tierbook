@@ -478,6 +478,20 @@
             "string",
             "null"
           ]
+        },
+        "gateway_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The version of whatever sat in front when this was measured -- a gateway, a proxy, a mesh. A gateway decides the wire, the parameters it forwards, the prices it charges against and what it reports as success, so a record taken against one version does not describe another. `null` says explicitly that nothing was pinned, which is different from the field being absent: absent and null read the same downstream only if nobody distinguishes them, and this schema does."
+        },
+        "gateway_surface": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A content address of the gateway's observable surface at measurement time -- the sorted model identifiers it advertised, each with the wire it declared. Computed rather than declared, because a version string is a pin the operator writes and this notices a substrate that moved without anyone bumping one."
         }
       }
     },

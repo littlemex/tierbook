@@ -28,6 +28,7 @@ acquire a new failure mode because an HTTP library moved.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.error
@@ -186,6 +187,84 @@ def negotiate(ep: Endpoint, *, needs_tools: bool = True) -> tuple[Endpoint, Prob
                             "transport it was measured over")
         return alt, alt_probe
     return ep, probe
+
+
+def gateway_fingerprint(ep: Endpoint) -> str | None:
+    """A content address for the gateway's observable surface, or None when it cannot be read.
+
+    A version string is a pin the operator writes down, and a pin nobody can check is worth little. So this
+    is computed instead of declared: the sorted model identifiers the gateway advertises, each with whatever
+    wire it declares for them. Two reasons that is the right surface to hash.
+
+    It is what a measurement actually depended on. Which models exist, and which wire each one speaks, decides
+    what was measurable and how it was measured -- a tier scored 0 of 20 here purely because of the wire it
+    was reached over.
+
+    And it changes when the substrate changes even if nobody bumps a version. That is not hypothetical: the
+    operators of the gateway this project uses found that their model list was generated from a
+    hand-maintained table rather than from the registry the request path dispatches on, and that five servable
+    models appeared in no list at all. A surface that can be wrong that way can also change quietly, and a
+    fingerprint notices while a version string does not.
+
+    Deliberately **not** an error when it cannot be read. An unreachable gateway is a different problem from a
+    changed one, and conflating them would make this refuse during an outage.
+    """
+    code, body = _get(ep, "/models")
+    if code != 200 or not isinstance(body, dict):
+        return None
+    entries = body.get("data") or body.get("models") or []
+    parts = []
+    for m in sorted(entries, key=lambda m: str(m.get("id") or "")):
+        mid = m.get("id")
+        if not mid:
+            continue
+        parts.append(f"{mid}\x1f{m.get('wire_protocol') or ''}")
+    if not parts:
+        return None
+    return "surface:" + hashlib.sha256("\x1e".join(parts).encode()).hexdigest()[:16]
+
+
+def substrate_matches(ep: Endpoint, record: dict) -> str | None:
+    """Whether the thing in front still is the thing a record was measured against.
+
+    Returns None when it matches or cannot be checked, and a description when it does not. Two checks, in
+    order of how much they are worth:
+
+      1. **the pinned version.** If configuration pins one and the record was measured against one and they
+         disagree, the record is about a different gateway. This is the check the operator controls.
+      2. **the observable surface.** Computed rather than declared, so it catches a substrate that moved
+         without anyone bumping a version.
+
+    Neither is an error when absent. A record measured before either existed is a record about a moving
+    target, which is worth saying rather than refusing over.
+    """
+    target = record.get("measurement_target") or {}
+    pinned, measured = ep.gateway_version, target.get("gateway_version")
+    if pinned and measured and str(pinned) != str(measured):
+        return (f"configuration pins gateway version {pinned!r} and this record was measured against "
+                f"{measured!r}. A gateway decides the wire, the parameters it forwards, the prices it charges "
+                "against and what it calls success, so a record taken against one version does not describe "
+                "another.")
+    was = target.get("gateway_surface")
+    if was:
+        now = gateway_fingerprint(ep)
+        if now and now != was:
+            return (f"the gateway's observable surface is {now} and this record was measured against {was}. "
+                    "The set of models it advertises, or the wire it declares for one of them, has changed. "
+                    "That may be benign, but it is not the substrate the measurement was taken on.")
+    # Silence is only correct when a comparison actually happened. If either side is missing, nothing was
+    # compared, and saying nothing would let "unpinned" read exactly like "checked and fine" -- which is the
+    # shape of the defect this whole module exists to avoid one layer down.
+    if not (pinned and measured) and not was:
+        missing = []
+        if not pinned:
+            missing.append("configuration does not pin `endpoint.gateway_version`")
+        if not measured:
+            missing.append("this record has no `measurement_target.gateway_version`")
+        return (f"{' and '.join(missing)}, so nothing here can detect the thing in front being replaced. "
+                "Record the gateway version and its surface fingerprint when you measure, or treat this "
+                "record as describing a moving substrate.")
+    return None
 
 
 def identity_matches(ep: Endpoint, record: dict) -> str | None:
