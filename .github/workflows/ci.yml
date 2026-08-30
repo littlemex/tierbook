@@ -1,0 +1,44 @@
+# The tests are the specification. Several of them encode claims this project made and then measured to be
+# wrong -- a margin that failed out of fold, two candidates swapping rank, a family where the reference was
+# not the ceiling -- so a change that makes one pass differently has undone a correction.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e '.[dev]'
+      - run: pytest -q
+      # The refusal in the README has to be real. If the shipped example stops refusing at margin 0.15,
+      # the README is lying and CI says so before a reader finds out.
+      - name: the shipped example refuses at the margin that failed out of fold
+        run: |
+          tierbook compile --registry examples/ledger/tiers --validations examples/ledger/validation \
+            --family tool-agent-user-retail=api-strong-a \
+            --throughput-per-family tool-agent-user-retail=4364 \
+            --margin 0.15 --out /tmp/t.json --today 2026-08-30 | tee /tmp/out.txt
+          grep -q "status=refused" /tmp/out.txt
+          grep -q "RANK UNSTABLE" /tmp/out.txt
+      - name: routing a refused entry fails without the awkward flag
+        run: |
+          ! tierbook route --table /tmp/t.json --family tool-agent-user-retail
+          tierbook route --table /tmp/t.json --family tool-agent-user-retail --allow-unvalidated >/dev/null
+      - name: the same command assigns at the margin that held
+        run: |
+          tierbook compile --registry examples/ledger/tiers --validations examples/ledger/validation \
+            --family tool-agent-user-retail=api-strong-a \
+            --throughput-per-family tool-agent-user-retail=4364 \
+            --margin 0.25 --out /tmp/t25.json --today 2026-08-30 | tee /tmp/out25.txt
+          grep -q "status=assigned" /tmp/out25.txt
+          tierbook route --table /tmp/t25.json --family tool-agent-user-retail >/dev/null

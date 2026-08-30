@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tierbook"
+version = "0.1.0"
+description = "A ledger of what each inference tier was measured to do, and a router that only reads it"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "littlemex" }]
+keywords = ["llm", "routing", "inference", "cost", "benchmark"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# The router reads JSON and does arithmetic. It has no runtime dependencies on purpose: a component that
+# decides where money goes should not be able to break because something it did not need moved.
+dependencies = []
+
+[project.optional-dependencies]
+# Only for validating a record you have written by hand. The router does not need it.
+schema = ["jsonschema>=4"]
+dev = ["pytest>=7", "jsonschema>=4"]
+
+[project.scripts]
+tierbook = "tierbook.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/littlemex/tierbook"
+Issues = "https://github.com/littlemex/tierbook/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tierbook"]

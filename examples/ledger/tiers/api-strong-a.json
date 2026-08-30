@@ -1,9 +1,9 @@
 {
-  "id": "self-hosted-a",
+  "schema_version": 1,
+  "id": "api-strong-a",
   "serves": {
-    "model": "Qwen/Qwen3.6-35B-A3B-FP8",
-    "endpoint": "in-cluster vLLM",
-    "deployment": "g6e.12xlarge, TP=2 x 2 replicas"
+    "model": "claude-fable-5",
+    "endpoint": "/v1/chat/completions via gateway"
   },
   "measured_at": "2026-08-30",
   "provenance": {
@@ -20,98 +20,87 @@
     "wire": "chat_completions",
     "tool_calling": "native",
     "compliance": {
-      "unusable_action_rate": 0.01,
-      "no_action_rate": 0.002,
+      "unusable_action_rate": 0.0,
+      "no_action_rate": 0.0,
       "invented_tool_rate": 0.0,
-      "steps_observed": 490
+      "steps_observed": 201
     },
     "restrictions": [
-      "thinking is off by default via chat_template_kwargs; enabling it tripled output tokens and solved one fewer"
+      "rejects the temperature parameter; the adapter drops it"
     ]
   },
   "price_card": {
     "unit": "usd_per_mtok",
-    "source": "measured on this deployment 2026-08-29 at the throughput knee",
-    "fresh_in": 0.236,
-    "cached_in": 0.0188,
-    "output": 4.12,
-    "hourly_fixed_usd": 15.2174,
-    "cache_hit_rate_observed": 0.87,
-    "reusable_cache_tokens": 200000
+    "source": "AWS Price List API, unit read from the catalog rather than assumed",
+    "fresh_in": 10.0,
+    "cached_in": 1.0,
+    "output": 50.0,
+    "hourly_fixed_usd": null,
+    "cache_hit_rate_observed": 0.785,
+    "reusable_cache_tokens": null
   },
   "latency": {
     "unit": "seconds_per_task",
-    "p50": 76,
-    "mean": 94,
-    "p95": 275,
-    "max": 276,
+    "p50": 97,
+    "mean": 178,
+    "p95": 501,
+    "max": 966,
     "concurrency_when_measured": 4
   },
   "reliability": {
-    "attempts_observed": 39,
-    "failures": 0,
-    "mean_sunk_usd": null,
+    "attempts_observed": 24,
+    "failures": 4,
+    "mean_sunk_usd": 4.4212,
     "failure_classes": [
-      "node containerd death lost 3 episodes in a separate pass; they were re-run and are not in this count"
+      "http 200 with an empty stream, dying at 5, 12, 25 and 28 steps having already billed 0.72, 2.29, 5.43 and 9.25 usd"
     ]
   },
   "families": {
     "agentic-coding": {
-      "solved": 14,
+      "solved": 20,
       "attempted": 20,
       "suite": "swebench-verified-24, first instance of each repository family plus the second for families with three or more, fixed before any run; 20 usable after dropping episodes lost to transport",
       "runs_per_item": 1,
-      "nested_under_reference": true,
-      "counterexamples": 0,
-      "bill_usd": 0.8997,
+      "nested_under_reference": null,
+      "counterexamples": null,
+      "bill_usd": 14.5899,
       "cohort": "swebench-v-24-rule-a:20",
-      "paired_vs_reference": {
-        "both": 14,
-        "candidate_only": 0,
-        "reference_only": 6,
-        "neither": 0
-      },
+      "paired_vs_reference": null,
       "accounting_boundary": "the twenty items that produced a usable episode; the attempts that ended with the gateway returning 200 and an empty stream are excluded and are priced by reliability.mean_sunk_usd instead"
     },
     "tool-agent-user-retail": {
-      "solved": 19,
+      "solved": 20,
       "attempted": 20,
       "runs_per_item": 1,
       "suite": "tau-bench retail, the authors' tasks_dev split, all 20, one trial each",
       "cohort": "tau-bench-retail-dev:20",
-      "bill_usd": 0.140562,
+      "bill_usd": 8.315696,
       "accounting_boundary": "the agent's own tokens on all 20 tasks. The user simulator is the same model on every arm, so its spend is a constant of the experiment and is not charged to the tier; no task ended on transport, so nothing is excluded here",
       "counterexamples": 0,
-      "paired_vs_reference": {
-        "both": 19,
-        "candidate_only": 0,
-        "reference_only": 1,
-        "neither": 0
-      },
+      "paired_vs_reference": null,
       "latency": {
         "unit": "seconds_per_task",
-        "p50": 13.2,
-        "mean": 16.5,
+        "p50": 45.4,
+        "mean": 54.7,
         "concurrency_when_measured": 1
       }
     }
   },
   "eligibility": {
-    "context_tokens": 262144,
+    "context_tokens": null,
     "modalities": [
       "text",
       "image"
     ],
-    "residency": "in-cluster",
+    "residency": null,
     "notes": [
-      "reusable cache measured at 7-14% of the engine's advertised kv_cache_size_tokens",
-      "the engine's kv_cache_usage_perc gauge reflects running requests only and is not a cache-occupancy alarm"
+      "reference tier for the agentic-coding family"
     ]
   },
   "measurement_target": {
-    "endpoint": "in-cluster vLLM /v1/chat/completions",
-    "served_model_version": "vllm 0.27.1, FP8 weights",
+    "endpoint": "/v1/chat/completions via gateway",
+    "served_model_version": null,
     "harness_commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
-    "serving_stack": "TP=2 x 2 replicas on g6e.12xlarge"
+    "serving_stack": "gateway to bedrock"
   }
 }

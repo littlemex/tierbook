@@ -1,8 +1,9 @@
 {
-  "id": "api-strong-a",
+  "schema_version": 1,
+  "id": "api-cheap-a",
   "serves": {
-    "model": "claude-fable-5",
-    "endpoint": "/v1/chat/completions via gateway"
+    "model": "gpt-5.6-terra",
+    "endpoint": "/openai/v1/responses via gateway"
   },
   "measured_at": "2026-08-30",
   "provenance": {
@@ -16,71 +17,81 @@
     ]
   },
   "adapter": {
-    "wire": "chat_completions",
+    "wire": "responses",
     "tool_calling": "native",
     "compliance": {
       "unusable_action_rate": 0.0,
       "no_action_rate": 0.0,
       "invented_tool_rate": 0.0,
-      "steps_observed": 201
+      "steps_observed": 244
     },
     "restrictions": [
+      "chat completions refuses function tools together with any reasoning_effort other than none, so tool-using traffic must be addressed on the responses wire to keep reasoning at high",
+      "chat_completions refuses function tools together with any reasoning_effort other than none, so this tier is addressed on the responses wire to keep reasoning at high",
       "rejects the temperature parameter; the adapter drops it"
     ]
   },
   "price_card": {
     "unit": "usd_per_mtok",
     "source": "AWS Price List API, unit read from the catalog rather than assumed",
-    "fresh_in": 10.0,
-    "cached_in": 1.0,
-    "output": 50.0,
+    "fresh_in": 2.2,
+    "cached_in": 0.22,
+    "output": 13.2,
     "hourly_fixed_usd": null,
-    "cache_hit_rate_observed": 0.785,
+    "cache_hit_rate_observed": 0.912,
     "reusable_cache_tokens": null
   },
   "latency": {
     "unit": "seconds_per_task",
-    "p50": 97,
-    "mean": 178,
-    "p95": 501,
-    "max": 966,
+    "p50": 66,
+    "mean": 69,
+    "p95": 130,
+    "max": 173,
     "concurrency_when_measured": 4
   },
   "reliability": {
     "attempts_observed": 24,
-    "failures": 4,
-    "mean_sunk_usd": 4.4212,
-    "failure_classes": [
-      "http 200 with an empty stream, dying at 5, 12, 25 and 28 steps having already billed 0.72, 2.29, 5.43 and 9.25 usd"
-    ]
+    "failures": 0,
+    "mean_sunk_usd": null,
+    "failure_classes": []
   },
   "families": {
     "agentic-coding": {
-      "solved": 20,
+      "solved": 16,
       "attempted": 20,
       "suite": "swebench-verified-24, first instance of each repository family plus the second for families with three or more, fixed before any run; 20 usable after dropping episodes lost to transport",
       "runs_per_item": 1,
-      "nested_under_reference": null,
-      "counterexamples": null,
-      "bill_usd": 14.5899,
+      "nested_under_reference": true,
+      "counterexamples": 0,
+      "bill_usd": 2.9545,
       "cohort": "swebench-v-24-rule-a:20",
-      "paired_vs_reference": null,
+      "paired_vs_reference": {
+        "both": 16,
+        "candidate_only": 0,
+        "reference_only": 4,
+        "neither": 0
+      },
       "accounting_boundary": "the twenty items that produced a usable episode; the attempts that ended with the gateway returning 200 and an empty stream are excluded and are priced by reliability.mean_sunk_usd instead"
     },
     "tool-agent-user-retail": {
-      "solved": 20,
+      "solved": 18,
       "attempted": 20,
       "runs_per_item": 1,
       "suite": "tau-bench retail, the authors' tasks_dev split, all 20, one trial each",
       "cohort": "tau-bench-retail-dev:20",
-      "bill_usd": 8.315696,
+      "bill_usd": 0.585283,
       "accounting_boundary": "the agent's own tokens on all 20 tasks. The user simulator is the same model on every arm, so its spend is a constant of the experiment and is not charged to the tier; no task ended on transport, so nothing is excluded here",
       "counterexamples": 0,
-      "paired_vs_reference": null,
+      "paired_vs_reference": {
+        "both": 18,
+        "candidate_only": 0,
+        "reference_only": 2,
+        "neither": 0
+      },
       "latency": {
         "unit": "seconds_per_task",
-        "p50": 45.4,
-        "mean": 54.7,
+        "p50": 21.5,
+        "mean": 22.3,
         "concurrency_when_measured": 1
       }
     }
@@ -88,18 +99,15 @@
   "eligibility": {
     "context_tokens": null,
     "modalities": [
-      "text",
-      "image"
+      "text"
     ],
     "residency": null,
-    "notes": [
-      "reference tier for the agentic-coding family"
-    ]
+    "notes": []
   },
   "measurement_target": {
-    "endpoint": "/v1/chat/completions via gateway",
+    "endpoint": "/openai/v1/responses via gateway",
     "served_model_version": null,
     "harness_commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
-    "serving_stack": "gateway to bedrock"
+    "serving_stack": "gateway to bedrock-hosted responses api"
   }
 }

@@ -1,8 +1,10 @@
 {
-  "id": "api-cheap-a",
+  "schema_version": 1,
+  "id": "self-hosted-a",
   "serves": {
-    "model": "gpt-5.6-terra",
-    "endpoint": "/openai/v1/responses via gateway"
+    "model": "Qwen/Qwen3.6-35B-A3B-FP8",
+    "endpoint": "in-cluster vLLM",
+    "deployment": "g6e.12xlarge, TP=2 x 2 replicas"
   },
   "measured_at": "2026-08-30",
   "provenance": {
@@ -16,97 +18,101 @@
     ]
   },
   "adapter": {
-    "wire": "responses",
+    "wire": "chat_completions",
     "tool_calling": "native",
     "compliance": {
-      "unusable_action_rate": 0.0,
-      "no_action_rate": 0.0,
+      "unusable_action_rate": 0.01,
+      "no_action_rate": 0.002,
       "invented_tool_rate": 0.0,
-      "steps_observed": 244
+      "steps_observed": 490
     },
     "restrictions": [
-      "chat completions refuses function tools together with any reasoning_effort other than none, so tool-using traffic must be addressed on the responses wire to keep reasoning at high",
-      "chat_completions refuses function tools together with any reasoning_effort other than none, so this tier is addressed on the responses wire to keep reasoning at high",
-      "rejects the temperature parameter; the adapter drops it"
+      "thinking is off by default via chat_template_kwargs; enabling it tripled output tokens and solved one fewer"
     ]
   },
   "price_card": {
     "unit": "usd_per_mtok",
-    "source": "AWS Price List API, unit read from the catalog rather than assumed",
-    "fresh_in": 2.2,
-    "cached_in": 0.22,
-    "output": 13.2,
-    "hourly_fixed_usd": null,
-    "cache_hit_rate_observed": 0.912,
-    "reusable_cache_tokens": null
+    "source": "measured on this deployment 2026-08-29 at the throughput knee",
+    "fresh_in": 0.236,
+    "cached_in": 0.0188,
+    "output": 4.12,
+    "hourly_fixed_usd": 15.2174,
+    "cache_hit_rate_observed": 0.87,
+    "reusable_cache_tokens": 200000
   },
   "latency": {
     "unit": "seconds_per_task",
-    "p50": 66,
-    "mean": 69,
-    "p95": 130,
-    "max": 173,
+    "p50": 76,
+    "mean": 94,
+    "p95": 275,
+    "max": 276,
     "concurrency_when_measured": 4
   },
   "reliability": {
-    "attempts_observed": 24,
+    "attempts_observed": 39,
     "failures": 0,
     "mean_sunk_usd": null,
-    "failure_classes": []
+    "failure_classes": [
+      "node containerd death lost 3 episodes in a separate pass; they were re-run and are not in this count"
+    ]
   },
   "families": {
     "agentic-coding": {
-      "solved": 16,
+      "solved": 14,
       "attempted": 20,
       "suite": "swebench-verified-24, first instance of each repository family plus the second for families with three or more, fixed before any run; 20 usable after dropping episodes lost to transport",
       "runs_per_item": 1,
       "nested_under_reference": true,
       "counterexamples": 0,
-      "bill_usd": 2.9545,
+      "bill_usd": 0.8997,
       "cohort": "swebench-v-24-rule-a:20",
       "paired_vs_reference": {
-        "both": 16,
+        "both": 14,
         "candidate_only": 0,
-        "reference_only": 4,
+        "reference_only": 6,
         "neither": 0
       },
       "accounting_boundary": "the twenty items that produced a usable episode; the attempts that ended with the gateway returning 200 and an empty stream are excluded and are priced by reliability.mean_sunk_usd instead"
     },
     "tool-agent-user-retail": {
-      "solved": 18,
+      "solved": 19,
       "attempted": 20,
       "runs_per_item": 1,
       "suite": "tau-bench retail, the authors' tasks_dev split, all 20, one trial each",
       "cohort": "tau-bench-retail-dev:20",
-      "bill_usd": 0.585283,
+      "bill_usd": 0.140562,
       "accounting_boundary": "the agent's own tokens on all 20 tasks. The user simulator is the same model on every arm, so its spend is a constant of the experiment and is not charged to the tier; no task ended on transport, so nothing is excluded here",
       "counterexamples": 0,
       "paired_vs_reference": {
-        "both": 18,
+        "both": 19,
         "candidate_only": 0,
-        "reference_only": 2,
+        "reference_only": 1,
         "neither": 0
       },
       "latency": {
         "unit": "seconds_per_task",
-        "p50": 21.5,
-        "mean": 22.3,
+        "p50": 13.2,
+        "mean": 16.5,
         "concurrency_when_measured": 1
       }
     }
   },
   "eligibility": {
-    "context_tokens": null,
+    "context_tokens": 262144,
     "modalities": [
-      "text"
+      "text",
+      "image"
     ],
-    "residency": null,
-    "notes": []
+    "residency": "in-cluster",
+    "notes": [
+      "reusable cache measured at 7-14% of the engine's advertised kv_cache_size_tokens",
+      "the engine's kv_cache_usage_perc gauge reflects running requests only and is not a cache-occupancy alarm"
+    ]
   },
   "measurement_target": {
-    "endpoint": "/openai/v1/responses via gateway",
-    "served_model_version": null,
+    "endpoint": "in-cluster vLLM /v1/chat/completions",
+    "served_model_version": "vllm 0.27.1, FP8 weights",
     "harness_commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
-    "serving_stack": "gateway to bedrock-hosted responses api"
+    "serving_stack": "TP=2 x 2 replicas on g6e.12xlarge"
   }
 }

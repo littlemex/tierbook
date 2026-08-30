@@ -1,130 +1,111 @@
 # tierbook
 
-**A ledger of what each inference tier was measured to do, and a router that only reads it.**
+**A ledger of what your tiers were measured to do, and a router that refuses to act beyond it.**
 
-A tier here is not a model name. It is a versioned record of measurements — what its adapter actually
-complies with, what it costs per request shape, how long it takes at the percentile you care about, how
-often it fails and how much it had already billed when it did, what it solved on each traffic family, and
-how its cache behaves when other traffic is interleaved. The router is deliberately thin: it reads the
-ledger, and it does not guess.
+It does not route your traffic out of the box. It measures first, and until a held-out fold supports a choice
+it will decline to make one. That is the feature.
 
-## What this is not
+```console
+pip install tierbook
+tierbook validate --registry examples/ledger/tiers
+tierbook explain  --registry examples/ledger/tiers --family tool-agent-user-retail --reference api-strong-a
+tierbook compile  --registry examples/ledger/tiers --validations examples/ledger/validation \
+                  --family tool-agent-user-retail=api-strong-a --margin 0.15 --out table.json
+```
 
-**It is not a gateway.** [`stratoclave`](https://github.com/littlemex/stratoclave) enforces budgets and
-keeps an auditable ledger of calls, and its own subtitle says model routing stays external. This is that
-external thing. It consumes the gateway's ledger events, capability declarations and price snapshots; it
-never asks the gateway to decide anything.
-
-**It is not infrastructure or an experiment record.**
-[`distributed-ai`](https://github.com/littlemex/distributed-ai) holds the clusters that serve a
-self-hosted tier and the dated, append-only records of the experiments that produced the numbers here.
-Those records stay there and are cited, not copied.
-
-**It is not a difficulty predictor.** No classifier chooses a tier. That is a measured decision, not a
-stylistic one — see below.
-
-## Two numbers this repository publishes about itself
-
-**No non-inferiority margin anyone would pre-register admits the self-hosted tier.** It solved 14 of 20
-against the reference tier's 20 of 20, and because the comparison is paired, all six discordant items favour
-the reference: the one-sided lower bound on the difference is **−0.47**, not the −0.30 the point estimate
-suggests. An earlier version of this work published −0.30 as the margin required, which understated it.
-
-**A sample of twenty with one run per item cannot certify non-inferiority at a margin anyone wants.** The
-rule is built so that this shows up as `not certified` rather than as a winner, and so that the decision
-record says which of the two happened.
-
-## Measured on a family it had never seen
-
-τ-bench retail, 115 held-out tasks, the authors' own split, procedure fixed in advance
-(`docs/PREREG-tau-bench.md`, results in `docs/results-tau-bench.md`):
-
-| tier | solved | $/request | wall p50 |
-|---|---|---|---|
-| self-hosted | 76/115 | **$0.0098** | **17 s** |
-| cheap API | 91/115 | $0.0337 | 25 s |
-| reference | 95/115 | $0.4699 | 68 s |
-
-**The compiled assignment removed 97.2% of the bill** — $54.04 to $1.13 — at 17 points less solve rate and a
-quarter of the latency. At a margin of 0.25 that holds out of fold. **At 0.15 and 0.20 it does not**: the
-same 20-item calibration fold compiled the same tier and the held-out bound was −0.241, outside both. The
-rule was overconfident by about eleven points, which the pre-registration named as a refutation condition.
-
-And **nesting broke for the first time**: the cheap tiers solve 6 and 9 tasks the reference fails, so on this
-family the reference is not the ceiling and routing could raise quality rather than only lower cost. The rule
-records the counterexamples and refuses to build a cascade for the family rather than assuming one is safe.
-
-## The rule
-
-> Offline, per traffic family: assign the cheapest tier whose measured outcome on that family's frozen
-> benchmark set is non-inferior to the family's reference tier, at a margin fixed in advance, scored out of
-> fold. Online, per request: map it to a family, send it to the assigned tier, and escalate **only on
-> observable failure**. Never escalate on a judgement about quality.
-
-Three timescales, and only the first makes a decision:
-
-| when | what happens |
-|---|---|
-| offline, per family | measure, then assign the cheapest sufficient tier |
-| per hour | recompute a fixed-cost tier's effective rate from realised throughput; refresh per-tier failure rates |
-| per request | classify into a family, send, and react only to failures that can be observed with certainty |
-
-The online path has no cleverness in it on purpose.
-
-## Why there is no learned router
-
-Not caution — three measurements, all from the record in `distributed-ai`:
-
-- A learned multi-factor router **lost 3.6 accuracy points and added 12.8 s** while saving 63% of cost.
-- Its selector **named one member for 96% of requests**, which is a family assignment made expensively.
-- An offline per-domain assignment **overfit and lost 2.5 points out of fold**.
-
-Against that, what actually paid was unglamorous: driving each tier through its own native tool-calling
-interface **doubled one tier's solve rate for free**; request *shape* moves input cost by 12× on a tier
-that caches; putting retries into the cost function **reversed which arrangement was cheapest**; and
-picking the right single tier per family beat every router that was implemented.
-
-A small model is admitted for two narrow jobs only — identifying which family a request belongs to when
-metadata cannot, and an abstaining estimate of whether a cheaper tier is safe for a family — and both are
-gated on leave-one-family-out validation, an untouched holdout, and a lower confidence bound on *routed
-outcome*. Classifier accuracy is not the metric. Failing the gate means zero routing authority.
-
-## Escalation fires only on things that cannot be wrong about failure
-
-- a transport error, or an HTTP 200 whose stream ended with no content;
-- an unusable action stream (the adapter could not read a call);
-- budget exhausted — steps, tokens or wall clock — **with no artifact produced**;
-- any check that can *reject* with certainty: a patch that does not apply, output that fails its declared
-  schema, a required field absent.
-
-All of these err in the safe direction: a spurious escalation costs one attempt. **The slot for a semantic
-success detector exists and is empty.** Three families of candidate were eliminated against a
-pre-registered bar of keep-precision 1.00 — signals inside an episode reached 0.77, self-consistency cannot
-pay for itself at any k above 2.06, and a cheap-tier judge on the artifact reached 0.78 with every error in
-the dangerous direction. If one ever clears the bar on a held-out fold it plugs in as one more trigger; it
-does not become a redesign.
-
-**The one thing that would reopen the cheap-first cascade:** a request that arrives carrying its own
-executable acceptance check. The reason in-repository tests were uninformative on the benchmark is that its
-judging tests are `fail_to_pass` tests absent from the checkout by construction — and a requester-supplied
-failing reproduction test *is* such a test, present at inference time. Where one exists, the oracle the
-arithmetic assumed actually exists. Measuring what fraction of real traffic carries one is the first thing
-to do and needs no model work.
-
-## Layout
+That last command **refuses**, on the data shipped with it:
 
 ```
-registry/        the ledger: schema for a tier record, and the measured instances
-routing/         the rule: family table, admission, the objective, the cascade executor
-harness/         the episode harness that produces per-family outcomes for agentic traffic
-docs/            the design, and what it deliberately does not claim
+cannot_reject  status=refused   held out on tau-bench-retail-test:115 at 115 items:
+                                bound -0.2407 is OUTSIDE the margin of -0.15.
+                                The calibration fold chose this tier and the held-out fold does not support it.
+RANK UNSTABLE across folds: calibration ['self-hosted-a', 'api-cheap-a']
+                            vs held-out ['api-cheap-a', 'self-hosted-a']
 ```
+
+Run the same command at `--margin 0.25` and it assigns. The refusal is not a demo: it is what this project's
+compiler did to this project's own conclusion, and the shipped example reproduces it on day one.
+
+## Why a router should refuse things
+
+Three measurements, all in `docs/`, all of which cost money to find.
+
+**A calibration fold will lie to you about which tier is closest.** On a 20-item fold the self-hosted tier's
+paired bound was −0.130 and the cheap API's −0.210, so the compiler chose the self-hosted tier. On a 115-item
+held-out fold the same two were −0.241 and −0.102 — **they swapped rank**. No minimum sample size predicts
+that: the bound was computed correctly and was simply about the wrong twenty items. The only gate that works
+is empirical — a held-out fold, on a different cohort, that the claim survives.
+
+**A learned router lost to picking one model per family.** −3.6 accuracy points, +12.8 s of latency, and a
+selector that named one member for 96% of requests, which is a family assignment made expensively. An
+offline per-domain assignment overfit and lost 2.5 points out of fold. There is no classifier in here, and
+that is a result rather than a taste.
+
+**The expensive tier is not always the ceiling.** On one family the two cheaper tiers each solved tasks the
+reference failed — 6 and 9 of 115 — so routing could have raised quality rather than only lowered cost. A
+router that hardcodes "escalate to the strongest" would have been worse than one that reads the ledger.
+Nesting is a per-family, per-pair measurement here, never an assumption.
+
+## The mechanism
+
+```
+measure  ->  tier record  ->  compile (draft)  ->  validate on a different cohort  ->  route
+```
+
+**A tier is a record of measurements with no model name in anything the router branches on**: adapter
+compliance, a price card per request shape, a latency distribution *per family*, a failure rate with the
+distribution of spend sunk before death, per-family outcomes with a paired 2×2 and the hash of the item set
+they were measured on, and hard eligibility. **A field that was not measured is `null`** — never zero, never
+a published figure. This deployment has seen an engine advertise 7–14× more reusable cache than it had, and a
+rate card price a model 17× wrong.
+
+**Compiling produces a draft.** An entry becomes `assigned` only when a held-out record on a *different*
+cohort hash still supports the claim. Otherwise it is `provisional`, and `tierbook route` refuses it unless
+you pass `--allow-unvalidated`, which is deliberately ugly so that its presence in a deploy script is the
+audit trail.
+
+**The online path is a dictionary lookup and one rule**: escalate only on a failure that can be observed with
+certainty — a transport error, an HTTP 200 whose stream carried no content, an unusable tool call, a budget
+exhausted with no artifact, an artifact that fails its declared schema, or a check *you* supplied that
+rejected it. An artifact that exists is shipped and never second-guessed.
+
+**The slot for a semantic success detector is empty on purpose.** Three families of candidate were eliminated
+against a pre-registered bar of keep-precision 1.00: signals inside an episode reached 0.77, self-consistency
+cannot pay for itself at any k above 2.06, and a cheap-tier judge on the artifact reached 0.78 with every
+error in the dangerous direction. One that clears the bar plugs in as another escalation trigger; it does not
+become a redesign.
+
+## What a stranger does on day one
+
+Not routing. **Producing a record for a tier you own**, then asking the compiler what it can and cannot
+conclude from it. `harness/` holds the instrument this project used, and `examples/ledger/` is a worked ledger
+whose shape you can copy. The contract is `registry/schema.json`; any harness emitting records that conform
+works. The rule the instrument must follow: **a call that died on the wire produces `null` and a transport
+report, never a zero.** One tier here scored 0 of 20 on an endpoint restriction rather than on the task, and a
+harness that had reported that number would have published a false claim about a model.
+
+## What is deliberately not here
+
+- **No circuit breaker, no retry infrastructure, no server.** Those are your operator's, and shipping them
+  would invite running this as production middleware before the evidence supports it.
+- **No shared or central registry.** Other people's cohort hashes are unverifiable. The ledger is yours; the
+  repository ships an empty one and a worked example.
+- **No learned routing, no online adaptation.** Measured, and it lost.
+- **No provider zoo.** One reference adapter. Every gateway is its own landmine, and collecting them is
+  someone else's project.
+
+## The examples are examples
+
+`examples/ledger/` holds three real tiers measured on two real families, and they are **worked examples of the
+schema, not truths about vendors**. Every record carries `measured_at` and a pin of exactly what was measured.
+They will go stale; that is what the pin is for.
 
 ## Status
 
-Alpha, one consumer, and honest about it. The measurements it ships with are from a public benchmark; the
-project's own rule is that no traffic is admitted to a cheaper tier until the work actually being routed is
-measured. Two parameters have to come from outside before there is a unique answer rather than a Pareto
-frontier: **the value of a second** for a family, and **the cost of an escaped defect**. At $1 per defect a
+Alpha. Two parameters must come from outside before any of this has a unique answer rather than a Pareto
+frontier: **the value of a second** for a family, and **the cost of an escaped defect**. At $1 a defect a
 cheap tier ships; at $100 the required keep-precision is 0.993; at $10,000 it is 0.99993 and no affordable
-sample can certify it.
+sample can certify it. The router cannot decide that for you and does not pretend to.
+
+`docs/` carries the design, the pre-registrations written before each measurement, and the results — including
+the two pre-registrations whose predictions failed.

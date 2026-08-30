@@ -9,15 +9,15 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "routing"))
-import policy  # noqa: E402
+sys.path.insert(0, str(ROOT / "src"))
+from tierbook import policy  # noqa: E402
 
 TODAY = "2026-08-30"
 FAMILIES = {"agentic-coding": "api-strong-a"}
 
 
 def registry():
-    return policy.load_registry(ROOT / "registry" / "tiers")
+    return policy.load_registry(ROOT / "examples" / "ledger" / "tiers")
 
 
 # --- the ledger reads back ----------------------------------------------------------------------
