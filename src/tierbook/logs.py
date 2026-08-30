@@ -35,6 +35,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tierbook.evidence import two_by_two
 from tierbook.policy import EXECUTABLE_CHECK, HUMAN_LABEL, MODEL_REFERENCE
 
 #: Ways a logged request's outcome may have been decided by something other than a model's opinion.
@@ -226,10 +227,14 @@ class AgreementStudy:
     agreed: int = 0
     disagreed: int = 0
     items_disagreed: list[str] = field(default_factory=list)
+    #: Ids of the agreed items, kept alongside `agreed` (a plain count) so `disagreement_audit` can hand a
+    #: real id set -- not just a number -- to the shared `evidence.two_by_two` derivation.
+    items_agreed: list[str] = field(default_factory=list)
 
     def observe(self, task_id: str, *, agrees: bool) -> None:
         if agrees:
             self.agreed += 1
+            self.items_agreed.append(task_id)
         else:
             self.disagreed += 1
             self.items_disagreed.append(task_id)
@@ -289,6 +294,26 @@ def disagreement_audit(study: AgreementStudy, labels: dict[str, str]) -> dict:
     candidate_right = sum(1 for i in study.items_disagreed if labels[i] == "candidate")
     reference_right = sum(1 for i in study.items_disagreed if labels[i] == "reference")
     neither = study.disagreed - candidate_right - reference_right
+
+    # The counting arithmetic itself is `evidence.two_by_two`, shared with `evidence.paired` rather than
+    # written out a second time here. What is NOT shared, and is applied right here instead, is the one
+    # assumption this audit makes and does not test: every agreed item is entered into BOTH sides' `solved`
+    # sets, i.e. treated as jointly correct. That is a decision about what this study's data means, made by
+    # this caller before the shared function ever runs -- `two_by_two` itself assumes nothing about
+    # agreement, so it cannot inherit this caller's assumption by accident the way a second hand-written copy
+    # of the arithmetic could.
+    agreed_ids = frozenset(study.items_agreed)
+    attempted = agreed_ids | frozenset(study.items_disagreed)
+    candidate_solved = agreed_ids | frozenset(i for i in study.items_disagreed if labels[i] == "candidate")
+    reference_solved = agreed_ids | frozenset(i for i in study.items_disagreed if labels[i] == "reference")
+    both, cand_only, ref_only, neither_check, _ = two_by_two(attempted, candidate_solved, attempted,
+                                                              reference_solved)
+    assert (both, cand_only, ref_only, neither_check) == (study.agreed, candidate_right, reference_right,
+                                                           neither), (
+        "the shared derivation disagrees with this audit's own counts; that would mean the two have drifted "
+        "apart, which is the exact failure sharing this arithmetic exists to prevent"
+    )
+
     return {
         "usable": True,
         "evidence_class": HUMAN_LABEL,
@@ -302,8 +327,8 @@ def disagreement_audit(study: AgreementStudy, labels: dict[str, str]) -> dict:
         # counted as jointly correct, which is the assumption the audit did not test and which the reading
         # below states rather than hides.
         "paired_vs_reference": {
-            "both": study.agreed, "candidate_only": candidate_right,
-            "reference_only": reference_right, "neither": neither,
+            "both": both, "candidate_only": cand_only,
+            "reference_only": ref_only, "neither": neither_check,
         },
         "reading": (
             "The agreed items are entered as jointly correct, which the audit did not check -- it labelled "

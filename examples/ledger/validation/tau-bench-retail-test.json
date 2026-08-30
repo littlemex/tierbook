@@ -26,11 +26,9 @@
         "mean": 19.7,
         "concurrency_when_measured": 1
       },
-      "paired_vs_reference": {
-        "both": 70,
-        "candidate_only": 6,
-        "reference_only": 25,
-        "neither": 14
+      "evidence": {
+        "path": "evidence/tool-agent-user-retail-test-self-hosted-a-0ae4dae83d2e280f.jsonl",
+        "digest": "sha256:0ae4dae83d2e280f9d093063f3846be4ac254c76aa13390c82d59c362381cc4a"
       }
     },
     "api-cheap-a": {
@@ -44,11 +42,9 @@
         "mean": 26.4,
         "concurrency_when_measured": 1
       },
-      "paired_vs_reference": {
-        "both": 82,
-        "candidate_only": 9,
-        "reference_only": 13,
-        "neither": 11
+      "evidence": {
+        "path": "evidence/tool-agent-user-retail-test-api-cheap-a-d9a8ce7a5b0a6ec3.jsonl",
+        "digest": "sha256:d9a8ce7a5b0a6ec3f768a7ebbdeb602c811bfa617452a3becbce91611a1fc376"
       }
     },
     "api-strong-a": {
@@ -62,7 +58,10 @@
         "mean": 72.4,
         "concurrency_when_measured": 1
       },
-      "paired_vs_reference": null
+      "evidence": {
+        "path": "evidence/tool-agent-user-retail-test-api-strong-a-3841ddd72758797f.jsonl",
+        "digest": "sha256:3841ddd72758797f64fc5e49b303b3f824ceca0e25fc0e55145350d5979fadbf"
+      }
     }
   },
   "claim": {

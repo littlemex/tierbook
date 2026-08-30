@@ -25,6 +25,10 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tierbook.evidence import EvidenceError
+from tierbook.evidence import load as _load_evidence
+from tierbook.evidence import paired as _evidence_paired
+
 
 # --- what a failure looks like ------------------------------------------------------------------
 #
@@ -91,12 +95,40 @@ def _z_for(alpha: float) -> float:
 # --- the ledger ---------------------------------------------------------------------------------
 
 
+#: The day the legacy summary-only path (`paired_vs_reference`, hand-computed and never checked again)
+#: stops being available to a record newly written or re-measured. Set to the day AFTER every record shipped
+#: with this change (all stamped `measured_at: "2026-08-30"`): those are grandfathered rather than being
+#: retroactively broken by a rule this same change introduces, because the finding this constant closes is
+#: about a NEW record finding the legacy path still open (C8), not about rewriting the ledger's own history.
+#: Compared as an ISO date string, which is safe because the format is fixed as YYYY-MM-DD throughout.
+EVIDENCE_CUTOVER_DATE = "2026-08-31"
+
+
+def cutover_violation(record: dict) -> str | None:
+    """Which family of a record dated on/after `EVIDENCE_CUTOVER_DATE` has no evidence, or None if it may load.
+
+    A record measured before the cutover is never checked here -- this is a sunset for what a NEW record may
+    do, not a retroactive rewrite of records that predate the rule. Without it, nothing stops someone writing
+    a new record into the legacy path forever, and a comparison recorded only as a hand-written 2x2 can never
+    be recovered if it turns out to have been wrong.
+    """
+    if record.get("measured_at", "") < EVIDENCE_CUTOVER_DATE:
+        return None
+    for family, outcome in sorted((record.get("families") or {}).items()):
+        if not (outcome or {}).get("evidence"):
+            return (f"family {family!r} was measured {record.get('measured_at')!r}, on or after the "
+                    f"{EVIDENCE_CUTOVER_DATE} evidence cutover, but carries a hand-written summary instead "
+                    "of evidence. The legacy summary-only path is closed to records from this date forward.")
+    return None
+
+
 @dataclass(frozen=True)
 class Tier:
     """One record out of the ledger. Constructed from JSON; never from a model name."""
 
     id: str
     record: dict
+    ledger_root: str = "."
 
     def token_cost(self, fresh_in: int, cached_in: int, out: int) -> float:
         """What a call of this size costs at this tier's measured rates.
@@ -148,8 +180,50 @@ class Tier:
     def outcome(self, family: str) -> dict | None:
         return (self.record.get("families") or {}).get(family)
 
-    def paired(self, family: str) -> dict | None:
-        """The 2x2 against the family's reference, if this record carries it."""
+    def evidence(self, family: str) -> "Evidence | None":
+        """This family's per-item evidence, re-verified now, or `None` if the family has no evidence.
+
+        A family with no `evidence` key is not an error here -- it may be carrying the legacy summary
+        instead, and `paired`/`cohort` fall back to that. Loaded fresh on every call rather than cached on
+        the `Tier`, for the same reason `evidence.load` itself never caches: a `Tier` object can outlive the
+        file on disk, and a cached `Evidence` is how a mutated artifact would keep being trusted.
+        """
+        o = self.outcome(family) or {}
+        ev = o.get("evidence")
+        if not ev:
+            return None
+        return _load_evidence(ev["path"], ledger_root=self.ledger_root)
+
+    def paired(self, family: str, reference: "Tier | None" = None) -> dict | None:
+        """The 2x2 against the family's reference.
+
+        A single `Tier` cannot compute a candidate-vs-reference comparison from its own evidence alone -- a
+        2x2 is a statement about two artifacts, not one. So this derives from evidence when THIS record
+        carries it AND the caller passes `reference` (the other `Tier`, which also needs evidence for the
+        derivation to run): `_quality`, `table._evidence` and `validate.rank_stability` already hold both
+        tiers and pass it. `reference` is optional and keyword-compatible with every call site that predates
+        it, so `t.paired(family)` alone keeps working exactly as before for a caller that only wants "does
+        this record have something recorded" -- it falls back to the hand-written `paired_vs_reference`
+        summary when there is no evidence, or when evidence exists but no reference was supplied to derive
+        against, and returns `None` when neither is available.
+
+        The returned dict carries `excluded` (see `evidence.Paired`) when it was derived, so a caller can
+        surface what the intersection left out rather than silently dropping it (C9). A caller reading only
+        `both`/`candidate_only`/`reference_only`/`neither` -- everything that predates this -- is unaffected.
+        """
+        ev = self.evidence(family)
+        if ev is not None:
+            if reference is not None:
+                ref_ev = reference.evidence(family)
+                if ref_ev is not None:
+                    p = _evidence_paired(ev, ref_ev)
+                    return {"both": p.both, "candidate_only": p.candidate_only,
+                            "reference_only": p.reference_only, "neither": p.neither,
+                            "excluded": p.excluded}
+            # Evidence exists but nothing to derive it against yet. There is deliberately no summary to fall
+            # back to here: a family migrated to evidence has had `paired_vs_reference` removed, because
+            # keeping both would let the two silently disagree.
+            return None
         o = self.outcome(family) or {}
         p = o.get("paired_vs_reference")
         if not p:
@@ -160,8 +234,14 @@ class Tier:
         """Hash of the exact item set this family's outcome was measured on.
 
         Without it there is no way to know two records were measured on the same items, and every paired
-        computation above is illegitimate.
+        computation above is illegitimate. Derived from `evidence(family)` when present, because a
+        hand-written cohort label is exactly how a fold silently reuses another fold's items under a
+        different name (C10): renaming a label defeats a string comparison, but cannot change a
+        content-addressed hash of the same underlying item set.
         """
+        ev = self.evidence(family)
+        if ev is not None:
+            return ev.cohort
         o = self.outcome(family) or {}
         return o.get("cohort")
 
@@ -282,10 +362,17 @@ def tautological(candidate: dict, reference_record: dict) -> str | None:
 
 
 def load_registry(path: str | Path = "registry/tiers") -> dict[str, Tier]:
+    """Read every tier record under `path`.
+
+    `ledger_root` is set to `path`'s parent -- e.g. `examples/ledger/tiers` gives `examples/ledger` -- because
+    that is the directory an evidence artifact's repo-relative path (`examples/ledger/evidence/...`) is
+    expected to resolve inside of. A record with no `evidence` field never touches this at all.
+    """
     out = {}
+    ledger_root = str(Path(path).parent)
     for f in sorted(Path(path).glob("*.json")):
         d = json.loads(f.read_text())
-        out[d["id"]] = Tier(id=d["id"], record=d)
+        out[d["id"]] = Tier(id=d["id"], record=d, ledger_root=ledger_root)
     return out
 
 
@@ -452,7 +539,12 @@ def _quality(tiers: dict[str, Tier], arr: Arrangement, family: str, reference: s
         # a check can reject the head's artifact.
         return 0.0, "the reference is the last stage, so no item it solves is lost"
     head = tiers[arr.head]
-    pair = head.paired(family)
+    try:
+        pair = head.paired(family, tiers[reference])
+    except EvidenceError as e:
+        # A manifest mismatch or an empty intersection is a fact about this pair of records, not a crash:
+        # it means this arrangement cannot be certified, exactly like the absent-2x2 case just below.
+        return None, f"evidence could not be paired against the reference: {e}"
     if not pair:
         return None, "no paired 2x2 against the reference is recorded, so nothing can be certified"
     if head.cohort(family) != tiers[reference].cohort(family):

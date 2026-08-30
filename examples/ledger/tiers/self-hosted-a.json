@@ -83,18 +83,16 @@
       "bill_usd": 0.140562,
       "accounting_boundary": "the agent's own tokens on all 20 tasks. The user simulator is the same model on every arm, so its spend is a constant of the experiment and is not charged to the tier; no task ended on transport, so nothing is excluded here",
       "counterexamples": 0,
-      "paired_vs_reference": {
-        "both": 19,
-        "candidate_only": 0,
-        "reference_only": 1,
-        "neither": 0
-      },
       "latency": {
         "unit": "seconds_per_task",
         "p50": 13.2,
         "mean": 16.5,
         "concurrency_when_measured": 1,
         "note": "Measured within one sequential shard, so concurrency_when_measured is 1 and the throughput derived from it (about 207 tasks an hour) is a LOWER bound on what the deployment sustains. The run recorded no per-task timestamps, so its realised aggregate throughput is not known. The resulting cost per request is therefore an upper bound, which is the safe direction: assuming a higher concurrency to get a lower cost is what made an earlier figure here wrong."
+      },
+      "evidence": {
+        "path": "evidence/tool-agent-user-retail-dev-self-hosted-a-d51148c5a93be603.jsonl",
+        "digest": "sha256:d51148c5a93be60300b4a264629b9cc148033ef4de1ac1337a9fdb10b8671b6a"
       }
     }
   },

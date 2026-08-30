@@ -266,6 +266,18 @@
           "attempted",
           "suite"
         ],
+        "oneOf": [
+          {
+            "required": [
+              "evidence"
+            ]
+          },
+          {
+            "required": [
+              "paired_vs_reference"
+            ]
+          }
+        ],
         "properties": {
           "solved": {
             "type": "integer"
@@ -308,14 +320,36 @@
               "string",
               "null"
             ],
-            "description": "Hash of the exact item set this outcome was measured on. Two records can only be compared as a pair if these match: without it there is no way to know the same items were given to both tiers, and a paired bound computed across different item sets is not a bound."
+            "description": "Hash of the exact item set this outcome was measured on. Two records can only be compared as a pair if these match: without it there is no way to know the same items were given to both tiers, and a paired bound computed across different item sets is not a bound. When `evidence` is present, the cohort is derived from it (see `evidence`) and this field is redundant; a hand-written value here is never trusted over the derived one."
+          },
+          "evidence": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Where the per-item observations live, in place of a hand-computed `paired_vs_reference` summary. Mutually exclusive with `paired_vs_reference` -- exactly one of the two is required -- because a family whose outcome can be recomputed from underlying observations must not also carry a second, independently hand-written number that the recomputation could silently disagree with. `digest` is checked against the artifact's own content on every read, not only at write time, so a file that changed after this record was written is caught rather than trusted.",
+            "required": [
+              "path",
+              "digest"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Repo-relative path to the JSONL artifact. Its filename carries the first 16 hex characters of its own content digest, so the name is fixed once the bytes are and a merged or edited file cannot keep it."
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": "Full content digest of the artifact, `sha256:<64 hex>`. Independent of the 16-character prefix in the filename: this is the record's own claim about which bytes it is evidence for, checked against the artifact on every load rather than assumed from a name that merely looks right."
+              }
+            }
           },
           "paired_vs_reference": {
             "type": [
               "object",
               "null"
             ],
-            "description": "The 2x2 against the family's reference tier on the same cohort. A paired experiment reported as two marginal rates throws away exactly the information that decides the comparison: 14 of 20 against 20 of 20 has a point difference of -0.30, but all six discordant pairs favour the reference and the lower bound is far below that.",
+            "description": "The 2x2 against the family's reference tier on the same cohort, hand-computed from a comparison that was run once and never stored per item. A paired experiment reported as two marginal rates throws away exactly the information that decides the comparison: 14 of 20 against 20 of 20 has a point difference of -0.30, but all six discordant pairs favour the reference and the lower bound is far below that. Mutually exclusive with `evidence`: a family carrying per-item observations derives this shape rather than storing a second, independently hand-written copy of it. Records dated on or after the evidence cutover (see `tierbook.policy.EVIDENCE_CUTOVER_DATE`) may not use this field at all.",
             "required": [
               "both",
               "candidate_only",

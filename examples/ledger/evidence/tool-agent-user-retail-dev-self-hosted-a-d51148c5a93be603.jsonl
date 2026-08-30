@@ -1,0 +1,21 @@
+{"family": "tool-agent-user-retail", "produced_at": "2026-08-30", "run_id": "migrated-2026-08-30-from-2026-08-24-mom-vsr-eks-benchmark:self-hosted-a:dev", "scorer_version": "tau-bench retail: final database state compared against the annotated goal, as run in the 2026-08-24 mom-vsr-eks-benchmark measurement (repo commit ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af). This artifact is a 2026-08-30 migration of that run's already-scored per-item results into the evidence format; the scoring itself was not re-run.", "subject": "self-hosted-a", "suite_manifest_digest": "standin:sha256:5138271284de3ead6a7b8d1d2d658f99f45d1620c15c13617499b8f5f571bf06", "suite_manifest_digest_caveat": "no upstream tau-bench manifest digest was available when this artifact was migrated on 2026-08-30; this digest is a stand-in derived from the suite label and the sorted item ids of this fold, not from the benchmark's own task definitions. It detects a different item SET under this label, not a changed upstream release.", "trials_per_item": 1}
+{"item_id": "0", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "1", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "2", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "3", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "4", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "5", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "6", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "7", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "8", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "9", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "10", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "11", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "12", "note": null, "state": "incorrect", "unobserved_reason": null}
+{"item_id": "13", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "14", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "15", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "16", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "17", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "18", "note": null, "state": "solved", "unobserved_reason": null}
+{"item_id": "19", "note": null, "state": "solved", "unobserved_reason": null}

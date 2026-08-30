@@ -5,8 +5,10 @@
 It does not route your traffic out of the box. It measures first, and until a held-out fold supports a choice
 it will decline to make one. That is the feature.
 
+Not on PyPI yet, so install from a checkout.
+
 ```console
-pip install tierbook
+pip install .
 tierbook validate --registry examples/ledger/tiers
 tierbook explain  --registry examples/ledger/tiers --family tool-agent-user-retail --reference api-strong-a
 tierbook compile  --registry examples/ledger/tiers --validations examples/ledger/validation \
@@ -16,7 +18,7 @@ tierbook compile  --registry examples/ledger/tiers --validations examples/ledger
 That last command **refuses**, on the data shipped with it:
 
 ```
-cannot_reject  status=refused   held out on tau-bench-retail-test:115 at 115 items:
+cannot_reject  status=refused   held out on evidence:721ca50377d2a589 at 115 items:
                                 bound -0.2407 is OUTSIDE the margin of -0.15.
                                 The calibration fold chose this tier and the held-out fold does not support it.
 RANK UNSTABLE across folds: calibration ['self-hosted-a', 'api-cheap-a']
@@ -63,6 +65,13 @@ rate card price a model 17× wrong.
 cohort hash still supports the claim. Otherwise it is `provisional`, and `tierbook route` refuses it unless
 you pass `--allow-unvalidated`, which is deliberately ugly so that its presence in a deploy script is the
 audit trail.
+
+That cohort hash is content-addressed -- derived from the suite manifest and the exact item ids -- only for
+a family whose outcome carries `evidence` (per-item observations, checked on every read). For a family that
+still carries the older hand-written `paired_vs_reference` summary, the cohort is a hand-written label, and
+renaming it, or reusing it on a different item set, defeats the gate above without either record being
+individually invalid. Migrating a family to `evidence` is what closes that gap for it; nothing in this
+codebase closes it retroactively for a summary-only record.
 
 **The online path is a dictionary lookup and one rule**: escalate only on a failure that can be observed with
 certainty — a transport error, an HTTP 200 whose stream carried no content, an unusable tool call, a budget

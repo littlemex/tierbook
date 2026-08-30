@@ -77,12 +77,15 @@
       "bill_usd": 8.315696,
       "accounting_boundary": "the agent's own tokens on all 20 tasks. The user simulator is the same model on every arm, so its spend is a constant of the experiment and is not charged to the tier; no task ended on transport, so nothing is excluded here",
       "counterexamples": 0,
-      "paired_vs_reference": null,
       "latency": {
         "unit": "seconds_per_task",
         "p50": 45.4,
         "mean": 54.7,
         "concurrency_when_measured": 1
+      },
+      "evidence": {
+        "path": "evidence/tool-agent-user-retail-dev-api-strong-a-b134ba8a496892f7.jsonl",
+        "digest": "sha256:b134ba8a496892f78d08f5e55bf1cc57b4694e7caf55f5ad236e9be03a6cc59e"
       }
     }
   },

@@ -93,10 +93,21 @@ def test_without_a_held_out_fold_nothing_is_ever_assigned(tmp_path):
         assert "no held-out fold" in t["families"][FAM][label]["validation"]["reason"]
 
 
-def test_a_held_out_fold_that_reuses_the_calibration_cohort_validates_nothing(tmp_path, monkeypatch):
+def test_a_held_out_fold_that_reuses_the_calibration_items_validates_nothing(tmp_path):
+    """The fold-collision gate, exercised through the items rather than through the label.
+
+    This test used to fake the collision by copying the calibration record's cohort *string*, which worked
+    only because the gate compared hand-written labels -- and that is the defect the content-addressed cohort
+    closes. So the fake had to change with the fix: the held-out record now points at the calibration fold's
+    own evidence artifact, which is a real collision rather than a naming one, and the gate must still catch
+    it. A gate that only ever saw the label version was never tested against an attacker who renames.
+    """
     val = json.loads((VAL / "tau-bench-retail-test.json").read_text())
-    cal_cohort = json.loads((REG / f"{REF}.json").read_text())["families"][FAM]["cohort"]
-    val["cohort"] = cal_cohort
+    for tier_id, entry in val["tiers"].items():
+        cal = json.loads((REG / f"{tier_id}.json").read_text())["families"][FAM].get("evidence")
+        if cal:
+            entry["evidence"] = cal          # the calibration fold's own items, under a held-out record
+    val.pop("cohort", None)
     d = tmp_path / "val"
     d.mkdir()
     (d / "same.json").write_text(json.dumps(val))
@@ -110,15 +121,28 @@ def test_a_held_out_fold_that_reuses_the_calibration_cohort_validates_nothing(tm
 
 
 def test_the_evidence_block_reports_crossovers_so_nesting_is_not_taken_on_faith(tmp_path):
+    """The held-out fold's crossovers, now derived rather than read out of a stored summary.
+
+    The count is the same 6 and 9 it always was. What changed is where it comes from: this test used to read
+    `paired_vs_reference` straight out of the validation JSON, so it would have kept passing against a stored
+    number nobody could check. Deriving it from the artifact means the assertion now also proves the
+    derivation agrees with the figure this project published.
+    """
+    from tierbook.evidence import load, paired
+
     t = compile_at(0.25, tmp_path)
     ev = t["families"][FAM]["evidence"]
     assert "crossovers" in ev and "nested" in ev
-    # On the held-out fold of this family the cheap tiers solve 6 and 9 tasks the reference fails, so the
-    # reference is not the ceiling. The calibration fold saw none of that, which is exactly why the count is
-    # carried rather than a boolean anyone could have hardcoded.
+
     val = json.loads((VAL / "tau-bench-retail-test.json").read_text())
-    crossovers = {k: (v.get("paired_vs_reference") or {}).get("candidate_only")
-                  for k, v in val["tiers"].items() if v.get("paired_vs_reference")}
+    root = ROOT / "examples" / "ledger"
+    ref = load(val["tiers"][REF]["evidence"]["path"], ledger_root=root)
+    crossovers = {}
+    for tier_id, entry in val["tiers"].items():
+        if tier_id == REF:
+            continue
+        cand = load(entry["evidence"]["path"], ledger_root=root)
+        crossovers[tier_id] = paired(cand, ref).candidate_only
     assert crossovers == {"self-hosted-a": 6, "api-cheap-a": 9}
 
 

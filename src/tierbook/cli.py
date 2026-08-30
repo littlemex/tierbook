@@ -28,13 +28,16 @@ from pathlib import Path
 
 from tierbook import SCHEMA_PATH, SCHEMA_VERSION, __version__
 from tierbook.config import ConfigError, draft_from_model_list, load_config
-from tierbook.policy import assign_family, evidence_class, load_registry, registry_version
+from tierbook.evidence import EvidenceError
+from tierbook.policy import assign_family, cutover_violation, evidence_class, load_registry, registry_version
 from tierbook.table import Unvalidated, check_fresh, compile_to_file, load_table, lookup
 
 REQUIRED_FOR_A_DECISION = (
     ("families[<family>].attempted", "how many items the outcome was measured on"),
-    ("families[<family>].cohort", "which items, so two records can be compared as a pair"),
-    ("families[<family>].paired_vs_reference", "the 2x2 against the reference on that same cohort"),
+    ("families[<family>].cohort OR .evidence", "which items, so two records can be compared as a pair -- "
+                                               "derived from evidence when present, hand-written otherwise"),
+    ("families[<family>].paired_vs_reference OR .evidence",
+     "the 2x2 against the reference on that same cohort -- derived from evidence when present"),
     ("price_card.fresh_in", "what a token costs"),
     ("measured_at", "when, so a stale record cannot win a comparison"),
 )
@@ -64,16 +67,31 @@ def cmd_validate(args) -> int:
             except Exception as e:  # noqa: BLE001 - the message is the product here
                 bad += 1
                 print(f"  {t.id}: does not match the schema -- {str(e).splitlines()[0]}")
+        # The cutover: a record dated on or after EVIDENCE_CUTOVER_DATE may not carry a hand-written
+        # summary for any family. Checked once per record, since measured_at lives at the record level.
+        cutover = cutover_violation(t.record)
+        if cutover:
+            bad += 1
+            print(f"  {t.id}: {cutover}")
         # A record can be schema-valid and still unable to support a decision. Say which.
         for family in (t.record.get("families") or {}):
             missing = []
             o = t.outcome(family) or {}
             if not o.get("attempted"):
                 missing.append("attempted")
-            if not o.get("cohort"):
-                missing.append("cohort")
-            if o.get("paired_vs_reference") is None and t.id != args.reference:
-                missing.append("paired_vs_reference")
+            if o.get("evidence"):
+                # Re-verified now, not read back from a cached load: digest, path, schema, uniqueness,
+                # trials_per_item -- everything `evidence.load` checks, checked again on every `validate`.
+                try:
+                    t.evidence(family)
+                except EvidenceError as e:
+                    bad += 1
+                    print(f"  {t.id} / {family}: evidence does not load -- {e}")
+            else:
+                if not o.get("cohort"):
+                    missing.append("cohort")
+                if o.get("paired_vs_reference") is None and t.id != args.reference:
+                    missing.append("paired_vs_reference")
             if missing:
                 print(f"  {t.id} / {family}: schema-valid but cannot be certified -- missing {missing}")
     if bad:
@@ -93,7 +111,13 @@ def cmd_explain(args) -> int:
             print(f"{t.id:22} {'not measured':>10}")
             continue
         per = (o.get("bill_usd") or 0.0) / (o.get("attempted") or 1)
-        p = t.paired(fam) or {}
+        # args.reference is in scope here, so a family carrying evidence derives the real 2x2 rather than
+        # the None a lone Tier.paired(fam) would have to return without the other side. A manifest mismatch
+        # is reported as "nothing to show" in this listing, not a crash of the whole explain command.
+        try:
+            p = t.paired(fam, tiers.get(args.reference)) or {}
+        except EvidenceError:
+            p = {}
         print(f"{t.id:22} {o['solved']:>4}/{o['attempted']:<5} {per:>13.5f} "
               f"{str(p.get('candidate_only')):>11}  {o.get('cohort')}")
     print("\nwhat each margin would choose:")

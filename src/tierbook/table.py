@@ -21,6 +21,7 @@ from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
+from tierbook.evidence import EvidenceError
 from tierbook.policy import Arrangement, Decision, Tier, assign_family, registry_version
 from tierbook.validate import ASSIGNED, PROVISIONAL, REFUSED, check, load_validations, rank_stability
 
@@ -122,10 +123,14 @@ def compile_to_file(
             )
             j = _decision_json(d)
             # The gate between "calibration chose this" and "you may route to it". Compiling produces a
-            # draft; only a held-out fold on a different cohort can make it assigned.
-            cal_cohort = (tiers[reference].outcome(family) or {}).get("cohort")
+            # draft; only a held-out fold on a different cohort can make it assigned. Read through the
+            # accessor rather than the raw field: a hand-written `cohort` string is exactly what a renamed,
+            # reused fold defeats (C10), and `Tier.cohort` derives a content-addressed one when evidence
+            # backs the family.
+            cal_cohort = tiers[reference].cohort(family)
             j["validation"] = check(vals, family, d.chosen.head, reference,
-                                    margin=margin, alpha=alpha, calibration_cohort=cal_cohort)
+                                    margin=margin, alpha=alpha, calibration_cohort=cal_cohort,
+                                    ledger_root=tiers[reference].ledger_root)
             j["status"] = j["validation"]["status"] if d.certified else PROVISIONAL
             if not d.certified:
                 j["validation"]["reason"] = ("nothing was certified on the calibration fold either; "
@@ -151,7 +156,14 @@ def _evidence(tiers: dict[str, Tier], family: str, reference: str) -> dict:
         o = t.outcome(family)
         if not o:
             continue
-        p = t.paired(family) or {}
+        # `reference` is already in scope here, so a family carrying evidence gets the real derived 2x2
+        # rather than the `None` a lone `Tier.paired(family)` would have to return without it. A manifest
+        # mismatch or an empty intersection is a fact about this tier's evidence, reported as "nothing to
+        # show" here rather than crashing the whole compile over one row of a diagnostic table.
+        try:
+            p = t.paired(family, tiers[reference]) or {}
+        except EvidenceError:
+            p = {}
         rows.append({
             "tier": t.id,
             "solved": o.get("solved"),

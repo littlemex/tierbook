@@ -82,17 +82,15 @@
       "bill_usd": 0.585283,
       "accounting_boundary": "the agent's own tokens on all 20 tasks. The user simulator is the same model on every arm, so its spend is a constant of the experiment and is not charged to the tier; no task ended on transport, so nothing is excluded here",
       "counterexamples": 0,
-      "paired_vs_reference": {
-        "both": 18,
-        "candidate_only": 0,
-        "reference_only": 2,
-        "neither": 0
-      },
       "latency": {
         "unit": "seconds_per_task",
         "p50": 21.5,
         "mean": 22.3,
         "concurrency_when_measured": 1
+      },
+      "evidence": {
+        "path": "evidence/tool-agent-user-retail-dev-api-cheap-a-2f57dfb012eb4c44.jsonl",
+        "digest": "sha256:2f57dfb012eb4c4434e5206d9d7d942a0107f112b810bcab238b4a1b4beb64fc"
       }
     }
   },
