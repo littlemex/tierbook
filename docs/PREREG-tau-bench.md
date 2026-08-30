@@ -91,3 +91,41 @@ compiler is not obviously overfitted to coding, not that it generalises.
 
 **Nothing about production traffic.** Still a public benchmark. The repository's rule that no traffic is
 admitted to a cheaper tier until the work actually being routed is measured is unchanged by this.
+
+---
+
+## Addendum, written after calibration and before the held-out run
+
+**Two things had to be decided, and both are recorded here rather than chosen later.**
+
+**The throughput used to amortise a fixed-cost tier must come from the family, not from another one.** The
+first compile of this family reused 616 tasks an hour, which was measured on the coding family at 94 seconds
+a task. On this family the same tier takes **13 seconds** a task, so at the same sixteen episodes in flight it
+sustains about **4,430 an hour** and its amortised share falls from $0.0247 to $0.0034 a task. That is not a
+detail: at the coding figure the self-hosted tier looks *more expensive per request than the cheap API*
+($0.0317 against $0.0293), and at its own family's figure it is three times cheaper. **The schema now carries
+latency per family**, because the second family made it clear that latency is a property of the tier-and-family
+pair rather than of the tier.
+
+**The margin is an input nobody has supplied, so the held-out run reports a grid rather than a chosen value.**
+The non-inferiority margin should come from the cost of an escaped defect, which no one has priced. Picking a
+single number now would mean picking the number that produces the answer I already saw at calibration, since
+the compiled choice moves with it:
+
+| margin | what the calibration fold compiles |
+|---|---|
+| 0.10 | the reference — nothing cheaper is certified |
+| 0.15 | the self-hosted tier |
+| 0.20 | the self-hosted tier |
+| 0.25 | the cheap API, which becomes certified and is cheaper still at some throughputs |
+
+So the grid **(0.10, 0.15, 0.20, 0.25)** is fixed now, all four are reported on the held-out fold, and no
+single one is called the answer. What the held-out fold tests is whether the arrangement each margin compiles
+holds up out of fold — not which margin is right.
+
+**One thing calibration already showed that the design did not predict.** The self-hosted tier's advantage
+over the cheap API on this family is **quality, not price**: its paired lower bound is −0.130 against the
+cheap API's −0.210, while the two cost within 10% of each other per request once the machine is amortised at
+its own family's throughput. On the coding family the story was the reverse. A router that assumed the cheap
+API is always the quality floor and the self-hosted tier always the price play would have got this family
+backwards.

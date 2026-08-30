@@ -24,7 +24,9 @@
       "invented_tool_rate": 0.0,
       "steps_observed": 201
     },
-    "restrictions": []
+    "restrictions": [
+      "rejects the temperature parameter; the adapter drops it"
+    ]
   },
   "price_card": {
     "unit": "usd_per_mtok",
@@ -64,6 +66,23 @@
       "cohort": "swebench-v-24-rule-a:20",
       "paired_vs_reference": null,
       "accounting_boundary": "the twenty items that produced a usable episode; the attempts that ended with the gateway returning 200 and an empty stream are excluded and are priced by reliability.mean_sunk_usd instead"
+    },
+    "tool-agent-user-retail": {
+      "solved": 20,
+      "attempted": 20,
+      "runs_per_item": 1,
+      "suite": "tau-bench retail, the authors' tasks_dev split, all 20, one trial each",
+      "cohort": "tau-bench-retail-dev:20",
+      "bill_usd": 8.315696,
+      "accounting_boundary": "the agent's own tokens on all 20 tasks. The user simulator is the same model on every arm, so its spend is a constant of the experiment and is not charged to the tier; no task ended on transport, so nothing is excluded here",
+      "counterexamples": 0,
+      "paired_vs_reference": null,
+      "latency": {
+        "unit": "seconds_per_task",
+        "p50": 45.4,
+        "mean": 54.7,
+        "concurrency_when_measured": 1
+      }
     }
   },
   "eligibility": {

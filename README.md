@@ -34,6 +34,26 @@ suggests. An earlier version of this work published −0.30 as the margin requir
 rule is built so that this shows up as `not certified` rather than as a winner, and so that the decision
 record says which of the two happened.
 
+## Measured on a family it had never seen
+
+τ-bench retail, 115 held-out tasks, the authors' own split, procedure fixed in advance
+(`docs/PREREG-tau-bench.md`, results in `docs/results-tau-bench.md`):
+
+| tier | solved | $/request | wall p50 |
+|---|---|---|---|
+| self-hosted | 76/115 | **$0.0098** | **17 s** |
+| cheap API | 91/115 | $0.0337 | 25 s |
+| reference | 95/115 | $0.4699 | 68 s |
+
+**The compiled assignment removed 97.2% of the bill** — $54.04 to $1.13 — at 17 points less solve rate and a
+quarter of the latency. At a margin of 0.25 that holds out of fold. **At 0.15 and 0.20 it does not**: the
+same 20-item calibration fold compiled the same tier and the held-out bound was −0.241, outside both. The
+rule was overconfident by about eleven points, which the pre-registration named as a refutation condition.
+
+And **nesting broke for the first time**: the cheap tiers solve 6 and 9 tasks the reference fails, so on this
+family the reference is not the ceiling and routing could raise quality rather than only lower cost. The rule
+records the counterexamples and refuses to build a cascade for the family rather than assuming one is safe.
+
 ## The rule
 
 > Offline, per traffic family: assign the cheapest tier whose measured outcome on that family's frozen

@@ -1,0 +1,68 @@
+{
+  "_comment": [
+    "Held-out validation, kept OUT of registry/tiers on purpose.",
+    "",
+    "A tier record is what the assignment is compiled from. Folding a held-out fold into it would destroy",
+    "the only thing that made the fold held-out, and the next compile would be fitted to the set it is",
+    "supposed to be judged on. So this file records the validation and nothing reads it as calibration.",
+    "",
+    "See docs/results-tau-bench.md for the reading, and docs/PREREG-tau-bench.md for what was fixed first."
+  ],
+  "family": "tool-agent-user-retail",
+  "fold": "the authors' tasks_test split, all 115, one trial each",
+  "cohort": "tau-bench-retail-test:115",
+  "reference": "api-strong-a",
+  "measured_at": "2026-08-30",
+  "user_simulator": "one model for every arm, never the tier under test",
+  "tiers": {
+    "self-hosted-a": {
+      "solved": 76,
+      "attempted": 115,
+      "bill_usd": 1.1266,
+      "usd_per_request": 0.0098,
+      "latency": {
+        "unit": "seconds_per_task",
+        "p50": 17.4,
+        "mean": 19.7,
+        "concurrency_when_measured": 1
+      },
+      "paired_vs_reference": {
+        "both": 70,
+        "candidate_only": 6,
+        "reference_only": 25,
+        "neither": 14
+      }
+    },
+    "api-cheap-a": {
+      "solved": 91,
+      "attempted": 115,
+      "bill_usd": 3.8719,
+      "usd_per_request": 0.03367,
+      "latency": {
+        "unit": "seconds_per_task",
+        "p50": 24.7,
+        "mean": 26.4,
+        "concurrency_when_measured": 1
+      },
+      "paired_vs_reference": {
+        "both": 82,
+        "candidate_only": 9,
+        "reference_only": 13,
+        "neither": 11
+      }
+    },
+    "api-strong-a": {
+      "solved": 95,
+      "attempted": 115,
+      "bill_usd": 54.0432,
+      "usd_per_request": 0.46994,
+      "latency": {
+        "unit": "seconds_per_task",
+        "p50": 68.3,
+        "mean": 72.4,
+        "concurrency_when_measured": 1
+      },
+      "paired_vs_reference": null
+    }
+  }
+}

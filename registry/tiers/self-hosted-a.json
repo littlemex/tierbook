@@ -72,6 +72,28 @@
         "neither": 0
       },
       "accounting_boundary": "the twenty items that produced a usable episode; the attempts that ended with the gateway returning 200 and an empty stream are excluded and are priced by reliability.mean_sunk_usd instead"
+    },
+    "tool-agent-user-retail": {
+      "solved": 19,
+      "attempted": 20,
+      "runs_per_item": 1,
+      "suite": "tau-bench retail, the authors' tasks_dev split, all 20, one trial each",
+      "cohort": "tau-bench-retail-dev:20",
+      "bill_usd": 0.140562,
+      "accounting_boundary": "the agent's own tokens on all 20 tasks. The user simulator is the same model on every arm, so its spend is a constant of the experiment and is not charged to the tier; no task ended on transport, so nothing is excluded here",
+      "counterexamples": 0,
+      "paired_vs_reference": {
+        "both": 19,
+        "candidate_only": 0,
+        "reference_only": 1,
+        "neither": 0
+      },
+      "latency": {
+        "unit": "seconds_per_task",
+        "p50": 13.2,
+        "mean": 16.5,
+        "concurrency_when_measured": 1
+      }
     }
   },
   "eligibility": {

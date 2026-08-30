@@ -186,7 +186,7 @@
         "p50",
         "p95"
       ],
-      "description": "A distribution, because chains stack tails and a mean hides the arrangement that misses its SLO.",
+      "description": "A distribution, because chains stack tails and a mean hides the arrangement that misses its SLO. Superseded per family by `families[<family>].latency` where that exists, because latency turned out to be a property of the tier-and-family pair rather than of the tier.",
       "properties": {
         "unit": {
           "type": "string",
@@ -335,6 +335,39 @@
               "null"
             ],
             "description": "What `bill_usd` covers, so it is never added to a modelled surcharge for the same spend. Default meaning: the items that produced a usable episode, with attempts that died on transport excluded -- those are priced by `reliability.mean_sunk_usd` instead. One boundary, not both."
+          },
+          "latency": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Latency for this tier ON THIS FAMILY. The second family measured here made it clear that latency is a property of the pair and not of the tier: the same tier took 94 seconds a task on one family and 13 on another. A per-family figure supersedes the top-level one.",
+            "properties": {
+              "unit": {
+                "type": "string"
+              },
+              "p50": {
+                "type": "number"
+              },
+              "mean": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "p95": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "concurrency_when_measured": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
           }
         }
       }
