@@ -1,0 +1,12 @@
+# The ledger has to outlive the Job that wrote to it: a decision made last week must stay explicable after
+# the pod is gone. ReadWriteMany because `measure` and `compile` may overlap, and no storage class is named
+# because the right one is a property of your cluster and not of this component.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tierbook-ledger
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 1Gi

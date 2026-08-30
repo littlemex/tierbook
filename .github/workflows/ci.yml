@@ -22,6 +22,10 @@ jobs:
       - run: pytest -q
       # The refusal in the README has to be real. If the shipped example stops refusing at margin 0.15,
       # the README is lying and CI says so before a reader finds out.
+      # The 4364 tasks/h below is a HYPOTHETICAL, kept so these two steps still reach the refused-margin
+      # path. It is the figure a published number here once used: the observed per-task time times an ASSUMED
+      # sixteen requests in flight. The run recorded no timestamps, so it was never measured. The
+      # config-driven step further down pins what happens without it.
       - name: the shipped example refuses at the margin that failed out of fold
         run: |
           tierbook compile --registry examples/ledger/tiers --validations examples/ledger/validation \
@@ -42,3 +46,31 @@ jobs:
             --margin 0.25 --out /tmp/t25.json --today 2026-08-30 | tee /tmp/out25.txt
           grep -q "status=assigned" /tmp/out25.txt
           tierbook route --table /tmp/t25.json --family tool-agent-user-retail >/dev/null
+      - name: the boundary refusals hold from the command line too
+        run: |
+          python -c "import json,pathlib; b=json.loads(pathlib.Path('examples/ledger/candidates.json').read_text()); b['candidates']['self-hosted-a']['image']='vllm/vllm-openai:latest'; pathlib.Path('/tmp/bad.json').write_text(json.dumps(b))"
+          # Serving is not this component's job, and the way to mean that is for the file to fail to load.
+          ! tierbook preflight --config /tmp/bad.json 2>&1 | tee /tmp/bad.txt
+          grep -q "how to START a model" /tmp/bad.txt
+      - name: compiling from the candidate file agrees with compiling from flags
+        run: |
+          tierbook compile --registry examples/ledger/tiers --validations examples/ledger/validation \
+            --config examples/ledger/candidates.json --out /tmp/tc.json --today 2026-08-30 | tee /tmp/outc.txt
+          grep -q "objective cost" /tmp/outc.txt
+          # Without the assumed throughput the rule prefers the cheap API, which is the tier the held-out
+          # fold preferred. A change that puts the self-hosted tier back has reintroduced an unmeasured input.
+          python -c "import json; e=json.load(open('/tmp/tc.json'))['families']['tool-agent-user-retail']['cannot_reject']; assert e['chosen']==['api-cheap-a'], e['chosen']; assert e['status']=='assigned', e['status']"
+      - name: the exported router config names the tier the held-out fold supported
+        run: |
+          tierbook export-vsr --table /tmp/tc.json --config examples/ledger/candidates.json \
+            --signal tool-agent-user-retail=retail --default-model api-strong-a --out /tmp/router.json
+          python -c "import json; c=json.load(open('/tmp/router.json')); d=c['routing']['decisions']; assert len(d)==1 and d[0]['modelRefs'][0]['model']=='api-cheap-a', d"
+      - name: the manifests parse and assume no cluster
+        run: |
+          python -c "
+          import glob, yaml
+          for f in sorted(glob.glob('deploy/base/*.yaml')):
+              list(yaml.safe_load_all(open(f)))
+          "
+          # A manifest that names a namespace has made a decision about somebody else's cluster.
+          ! grep -rn "^  namespace:" deploy/base/

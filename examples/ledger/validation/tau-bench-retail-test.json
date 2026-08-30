@@ -64,5 +64,17 @@
       },
       "paired_vs_reference": null
     }
+  },
+  "claim": {
+    "kind": "correctness",
+    "metric": "task solved as judged by the resulting database state"
+  },
+  "oracle": {
+    "kind": "executable_acceptance",
+    "checker_id": "tau-bench retail: final database state compared against the annotated goal",
+    "independent_of_candidate": true,
+    "existed_before_candidate_output": true,
+    "generator": null,
+    "coverage": null
   }
 }

@@ -192,6 +192,95 @@ class Tier:
         return True
 
 
+# ---------------------------------------------------------------------------------------------------
+# What a record is evidence OF, and what it may therefore do.
+#
+# Three classes, derived from the record's oracle rather than declared separately, so the two cannot
+# disagree. The distinction is load-bearing rather than descriptive: this project measured a model's
+# opinion about another model's output at keep-precision 0.78 against a bar of 1.00, and separately found
+# the strongest tier solving 95 of 115 items while cheaper tiers solved 101 -- so a benchmark scored by
+# agreement with the strongest model would have marked the cheaper tiers DOWN on precisely the six to nine
+# items where they were right. That is not added noise. It inverts the ranking exactly where the ranking
+# decides something.
+#
+# So: a model-referenced record may be compiled, reported, and read. It may never assign, and may never
+# validate anything -- including another model-referenced record, because agreement about agreement
+# compounds rather than confirms.
+# ---------------------------------------------------------------------------------------------------
+
+EXECUTABLE_CHECK = "executable_check"
+HUMAN_LABEL = "human_label"
+MODEL_REFERENCE = "model_reference"
+
+#: The classes a held-out fold may belong to for an entry to become `assigned`.
+MAY_ASSIGN = (EXECUTABLE_CHECK, HUMAN_LABEL)
+
+_ORACLE_CLASS = {
+    "executable_acceptance": EXECUTABLE_CHECK,
+    "external_outcome": EXECUTABLE_CHECK,
+    "human_label": HUMAN_LABEL,
+    "model_generated_reference": MODEL_REFERENCE,
+    "model_judge": MODEL_REFERENCE,
+}
+
+
+def evidence_class(record: dict) -> str:
+    """Which of the three classes a record's outcomes belong to.
+
+    A record whose oracle is missing or unrecognised is treated as model-referenced. The safe default when
+    nobody wrote down what decided an outcome is that it cannot assign: the alternative default silently
+    promotes every record written before this field existed.
+    """
+    oracle = record.get("oracle") or {}
+    cls = _ORACLE_CLASS.get(oracle.get("kind"), MODEL_REFERENCE)
+    if cls != MODEL_REFERENCE and not oracle.get("independent_of_candidate", False):
+        # A check the candidate itself produced is a model-referenced record wearing a shell script. This
+        # project has the measurement: tests taken from the candidate's own output passed on 100% of the
+        # items it failed to solve, because a model that cannot fix a bug writes a test that agrees with it.
+        return MODEL_REFERENCE
+    return cls
+
+
+def may_assign(record: dict) -> bool:
+    return evidence_class(record) in MAY_ASSIGN
+
+
+def comparable(a: dict, b: dict) -> str | None:
+    """Whether two records may be compared for non-inferiority at all, and why not when they may not.
+
+    An agreement score of 0.85 sitting inside a 0.15 margin of a solve rate of 0.90 is a type error rather
+    than a close call: the two numbers are about different questions and their difference denotes nothing.
+    """
+    ca, cb = evidence_class(a), evidence_class(b)
+    if ca != cb:
+        return (f"the two records are different classes of evidence ({ca} and {cb}); their difference is "
+                "not a quality comparison, so no margin applies to it")
+    ka = ((a.get("claim") or {}).get("kind")) or "correctness"
+    kb = ((b.get("claim") or {}).get("kind")) or "correctness"
+    if ka != kb:
+        return (f"the two records claim different things ({ka} and {kb}); a margin between them would "
+                "compare an agreement rate with a solve rate")
+    return None
+
+
+def tautological(candidate: dict, reference_record: dict) -> str | None:
+    """Whether a candidate is being scored against a standard it produced.
+
+    A model graded against its own output scores 1.0 by construction. Refused rather than warned about,
+    because the resulting number looks like the best result in the table.
+    """
+    gen = ((reference_record.get("oracle") or {}).get("generator") or {})
+    gen_model = gen.get("model")
+    if not gen_model:
+        return None
+    for name in (candidate.get("id"), (candidate.get("serves") or {}).get("model"),
+                 (candidate.get("measurement_target") or {}).get("model")):
+        if name and name == gen_model:
+            return (f"{candidate.get('id')!r} is the model that generated the reference answers, so its "
+                    "score against them is 1.0 by construction; this is a tautology, not a measurement")
+    return None
+
+
 def load_registry(path: str | Path = "registry/tiers") -> dict[str, Tier]:
     out = {}
     for f in sorted(Path(path).glob("*.json")):
@@ -235,6 +324,10 @@ class Candidate:
     cost_per_request: float
     certified: bool
     note: str
+    latency_ms_per_request: float = float("inf")
+
+    def value_for(self, objective: str) -> float:
+        return self.cost_per_request if objective == "cost" else self.latency_ms_per_request
 
 
 @dataclass(frozen=True)
@@ -250,6 +343,7 @@ class Decision:
     margin: float
     alpha: float
     why: str
+    objective: str = "cost"
 
 
 def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str,
@@ -274,6 +368,81 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str,
     return total
 
 
+def _family_latency_seconds(o: dict) -> tuple[float | None, int]:
+    """Mean seconds a task took on this family, and the concurrency it was measured at.
+
+    The concurrency comes back with the number because it changes what the number means. A tier measured at
+    concurrency 1 and one measured at concurrency 4 are not comparable as latencies and are not comparable as
+    throughputs either, so a caller that wants either has to see both.
+    """
+    lat = o.get("latency") or {}
+    if (lat.get("unit") or "seconds_per_task") != "seconds_per_task":
+        return None, 1
+    per = lat.get("mean") or lat.get("p50")
+    return (float(per) if per else None), int(lat.get("concurrency_when_measured") or 1)
+
+
+def _latency_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str) -> float:
+    """Expected seconds to an accepted answer, which is the same arithmetic as cost in other units.
+
+    Written as a sibling of `_cost_per_request` deliberately. Reliability is not a component of either
+    objective; it is the denominator of both. A failed attempt is paid for again -- in dollars when the
+    objective is cost and in seconds when it is latency -- so an objective computed per *attempt* would
+    reorder the arrangements. Cost was measured doing exactly that here, and seconds have no reason to
+    behave differently.
+
+    Read from the family's own record. One tier took 94 seconds a task on one family and 17 on another, so a
+    figure borrowed across families is not an approximation, it is a different number.
+    """
+    total = 0.0
+    reach = 1.0
+    for tid in arr.tiers:
+        t = tiers[tid]
+        o = t.outcome(family) or {}
+        n = o.get("attempted") or 0
+        per, _ = _family_latency_seconds(o)
+        if not n or not per:
+            return math.inf
+        p = t.failure_rate
+        attempts = 1.0 / (1.0 - p) if 0.0 < p < 1.0 else 1.0
+        total += reach * per * attempts
+        reach *= max(0.0, 1.0 - (o.get("solved") or 0) / n)
+    return total
+
+
+def throughput_for(t: Tier, family: str, override: float | None) -> tuple[float | None, str | None]:
+    """This family's realised tasks per hour for a fixed-cost tier, or a refusal naming what is missing.
+
+    A fixed hourly bill divided by the wrong family's throughput is how a rented machine came out looking
+    more expensive per request than a cheap API here ($0.0317 against $0.0293) when its own family's figure
+    made it three times cheaper. So the figure is taken from the record for *this* family, an override is
+    accepted, and the absence of both is a named condition rather than a silent infinity.
+
+    Derived as `3600 / mean_seconds * concurrency_when_measured`, which is a **lower** bound whenever the
+    recorded concurrency is lower than what the deployment will really run: one sequential worker at 17
+    seconds a task sustains 207 tasks an hour, and sixteen of them sustain more. A low throughput produces a
+    high amortised share, so this errs towards calling the rented machine expensive -- which is the safe
+    direction, since the opposite error is a machine that looks cheap because someone assumed it was busy.
+
+    That is not hypothetical. A figure published from this project's own run divided the hourly bill by a
+    throughput obtained by multiplying the observed per-task time by an *assumed* sixteen in flight. The run
+    recorded no timestamps, so its realised throughput was never measured, and the assumption was carrying a
+    35x headline. Pass an override only when you measured it under load.
+    """
+    if not t.record["price_card"].get("hourly_fixed_usd"):
+        return None, None                                     # per-token tier: no throughput needed
+    if override:
+        return override, None
+    o = t.outcome(family) or {}
+    per, concurrency = _family_latency_seconds(o)
+    if per:
+        return 3600.0 / per * concurrency, None
+    return None, (f"{t.id!r} bills by the hour and {family!r} has no latency recorded, so its cost per "
+                  "request cannot be computed. It must not be borrowed from another family: the same tier "
+                  "ran 94 seconds a task on one family here and 17 on another. Measure this family, or pass "
+                  "its throughput explicitly.")
+
+
 def _quality(tiers: dict[str, Tier], arr: Arrangement, family: str, reference: str,
              alpha: float) -> tuple[float | None, str]:
     """Lower bound on this arrangement's solve rate minus the reference's, and why it is what it is."""
@@ -288,6 +457,12 @@ def _quality(tiers: dict[str, Tier], arr: Arrangement, family: str, reference: s
         return None, "no paired 2x2 against the reference is recorded, so nothing can be certified"
     if head.cohort(family) != tiers[reference].cohort(family):
         return None, "the two records were not measured on the same item set"
+    mismatch = comparable(head.record, tiers[reference].record)
+    if mismatch:
+        return None, mismatch
+    tauto = tautological(head.record, tiers[reference].record)
+    if tauto:
+        return None, tauto
     lcb = paired_difference_lcb(pair["both"], pair["candidate_only"], pair["reference_only"],
                                pair["neither"], alpha=alpha)
     if lcb is None:
@@ -307,6 +482,9 @@ def assign_family(
     need: dict | None = None,
     today: str | None = None,
     max_age_days: int = 90,
+    objective: str = "cost",
+    latency_slo_p95_ms: float | None = None,
+    min_completion_probability: float | None = None,
 ) -> Decision:
     """Compile one family's assignment. Offline: run it when the registry changes, not per request.
 
@@ -322,6 +500,9 @@ def assign_family(
     if not (tiers[reference].outcome(family) or {}).get("attempted"):
         raise ValueError(f"the reference tier {reference!r} has no measured outcome for {family!r}")
 
+    if objective not in ("cost", "latency"):
+        raise ValueError(f"objective must be 'cost' or 'latency', not {objective!r}")
+    excluded: dict[str, str] = {}
     ref_only = Arrangement((reference,), "outright")
     arrangements = [ref_only]
     for t in tiers.values():
@@ -333,6 +514,17 @@ def assign_family(
             continue
         if not (t.outcome(family) or {}).get("attempted"):
             continue
+        # Reliability as an independent constraint, not a term folded into the objective. A tier that
+        # completes 80% of attempts is cheap per attempt and may still be unusable for traffic that has to
+        # finish; that is a requirement its owner states, not a rate the optimiser may trade away.
+        if min_completion_probability is not None and (1.0 - t.failure_rate) < min_completion_probability:
+            excluded[t.id] = (f"completes {1.0 - t.failure_rate:.3f} of attempts, below the required "
+                              f"{min_completion_probability:.3f}")
+            continue
+        slo = ((t.outcome(family) or {}).get("latency") or {}).get("p95_ms")
+        if latency_slo_p95_ms is not None and slo and slo > latency_slo_p95_ms:
+            excluded[t.id] = f"p95 of {slo:.0f} ms exceeds the stated SLO of {latency_slo_p95_ms:.0f} ms"
+            continue
         arrangements.append(Arrangement((t.id,), "outright"))
         if request_can_reject:
             arrangements.append(Arrangement((t.id, reference), "chain"))
@@ -341,16 +533,22 @@ def assign_family(
     for arr in arrangements:
         lcb, note = _quality(tiers, arr, family, reference, alpha)
         certified = lcb is not None and lcb >= -margin
-        ranked.append(Candidate(arr, lcb, _cost_per_request(tiers, arr, family, realised_tasks_per_hour),
-                                certified, note))
-    ranked.sort(key=lambda c: (not c.certified, c.cost_per_request))
+        tph, refusal = throughput_for(tiers[arr.head], family, realised_tasks_per_hour)
+        cost = math.inf if refusal else _cost_per_request(tiers, arr, family, tph)
+        if refusal:
+            note = f"{note}; cost not computed: {refusal}"
+        ranked.append(Candidate(arr, lcb, cost, certified, note,
+                                _latency_per_request(tiers, arr, family)))
+    # One objective, chosen explicitly. Certification comes first in the key either way: the margin is a
+    # constraint, so an uncertified arrangement never outranks a certified one however cheap or fast it is.
+    ranked.sort(key=lambda c: (not c.certified, c.value_for(objective)))
 
     best = ranked[0]
     if not best.certified or best.arrangement == ref_only:
         # Three different facts end up here and an incident review will care which one it was: nothing was
         # measurable, something cheaper was measurable and failed the margin, or the reference genuinely was
         # the cheapest thing on offer. Saying "the reference won" for the first two would be a lie.
-        cheapest_overall = min(ranked, key=lambda c: c.cost_per_request)
+        cheapest_overall = min(ranked, key=lambda c: c.value_for(objective))
         if best.arrangement == ref_only and cheapest_overall.arrangement == ref_only:
             why = "the reference is also the cheapest arrangement per request"
         elif any(c.quality_lcb is None for c in ranked if c.arrangement != ref_only):
@@ -361,11 +559,16 @@ def assign_family(
             why = (f"a cheaper arrangement exists ({cheapest_overall.arrangement.head}) but failed the "
                    f"margin of {margin:+.2f}; the reference is used because nothing cheaper could be shown "
                    "non-inferior, which is not the same as the reference winning")
+        if excluded:
+            why = f"{why}. Excluded by constraint: " + "; ".join(f"{k} {v}" for k, v in excluded.items())
         return Decision(family, reference, ref_only, False, tuple(ranked),
-                        registry_version(tiers), margin, alpha, why)
+                        registry_version(tiers), margin, alpha, why, objective)
+    unit = "per request" if objective == "cost" else "to an accepted answer"
+    why = f"certified within the margin and lowest {objective} {unit}; {best.note}"
+    if excluded:
+        why += ". Excluded by constraint: " + "; ".join(f"{k} {v}" for k, v in excluded.items())
     return Decision(family, reference, best.arrangement, True, tuple(ranked),
-                    registry_version(tiers), margin, alpha,
-                    f"certified within the margin and cheapest per request; {best.note}")
+                    registry_version(tiers), margin, alpha, why, objective)
 
 
 def compile_table(

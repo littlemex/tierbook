@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tierbook.policy import paired_difference_lcb
+from tierbook.policy import MAY_ASSIGN, evidence_class, paired_difference_lcb
 
 ASSIGNED = "assigned"
 PROVISIONAL = "provisional"
@@ -76,6 +76,19 @@ def check(
 
     for rec in records:
         cohort = rec.get("cohort")
+        cls = evidence_class(rec)
+        if cls not in MAY_ASSIGN:
+            # A fold judged by a model cannot promote an entry, however large it is and however well the
+            # bound holds. It is a diagnostic: it says where to look, never what is true. The one path from
+            # here to `assigned` is an audit of the items where candidate and reference disagreed, since
+            # where they agree the fold contains no information about which of them is right.
+            verdict["reason"] = (
+                f"the held-out fold on {cohort!r} is {cls} evidence, which cannot assign. Agreement with a "
+                "strong model is not an estimate of correctness: measured here, the strongest tier missed 6 "
+                "to 9 items that cheaper tiers solved, so agreement would have scored them down exactly "
+                "where they were right. Audit the disagreements to promote this."
+            )
+            continue
         if calibration_cohort and cohort == calibration_cohort:
             verdict["reason"] = (f"the held-out record reuses the calibration cohort {cohort!r}; a fold that "
                                  "shares its items with calibration validates nothing")

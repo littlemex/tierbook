@@ -1,0 +1,65 @@
+# The thing on the request path. It reads the compiled table and does what it says.
+#
+# The router is a vLLM Semantic Router: it classifies a request into a traffic family and names a model. Its
+# own multi-factor selector is deliberately NOT used -- a selector fed by live per-process statistics chooses
+# from evidence nobody committed to and nobody can review after an incident. `tierbook export-vsr` writes a
+# priority decision per family naming exactly one tier: the one a held-out fold supported.
+#
+# One replica, and no autoscaler. Two replicas would each observe half the traffic, which matters not for
+# throughput but because it makes an incident harder to explain -- and this pod holds no state worth scaling.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tierbook-router
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: tierbook-router}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: tierbook-router}
+      annotations:
+        # Roll when the table changes. A router holding a table that no longer matches the ledger is exactly
+        # what the registry hash exists to catch, and catching it at start beats finding it during an
+        # incident. Your overlay should set this to a checksum of the table ConfigMap.
+        tierbook.dev/table-checksum: "set-me-in-your-overlay"
+    spec:
+      containers:
+        - name: router
+          # Any OpenAI-compatible router that can be configured from a file works here. The image is
+          # substituted by kustomize; nothing in this manifest depends on which one you use beyond the
+          # config path.
+          image: ghcr.io/vllm-project/semantic-router/extproc:latest
+          args: ["--config=/etc/tierbook/router.json", "--secure=false"]
+          env:
+            # Referenced by name from the router config. The upstream credential, whether that upstream is a
+            # gateway in front of several vendors or one vendor directly.
+            - name: TIERBOOK_API_KEY
+              valueFrom:
+                secretKeyRef: {name: tierbook-credentials, key: api-key, optional: true}
+          ports:
+            - {containerPort: 8801, name: http}
+          volumeMounts:
+            - {name: router-config, mountPath: /etc/tierbook}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 5
+          resources:
+            requests: {cpu: "500m", memory: 1Gi}
+            limits: {memory: 2Gi}
+      volumes:
+        # Written by `tierbook export-vsr` from the compiled table. Kept separate from the table ConfigMap so
+        # that a table which compiles but does not export -- a chain, an unmapped family -- fails at export
+        # time rather than at the router's start.
+        - {name: router-config, configMap: {name: tierbook-router-config}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tierbook-router
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: tierbook-router}
+  ports:
+    - {name: http, port: 80, targetPort: http}

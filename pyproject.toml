@@ -35,3 +35,12 @@ Issues = "https://github.com/littlemex/tierbook/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tierbook"]
+
+# `schema.json` lives inside src/tierbook and so travels in the wheel with the modules, which is the point of
+# putting it there. Two things read it and one of them is a refusal: the candidate loader derives the set of
+# keys a configuration file may NOT contain from this schema, and it raises rather than falling back to "no
+# forbidden keys" when the file is missing. Outside the wheel that check would quietly do nothing wherever a
+# candidate file is deployed away from a ledger, which is everywhere. A test asserts it is present.
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "harness/tests"]

@@ -1,0 +1,55 @@
+# One observation. Run it by hand, from a pipeline, or after a deployment -- it is a Job rather than a CronJob
+# because measuring on a timer produces records nobody asked for and a bill nobody predicted.
+#
+# What it may write: one record into the ledger. It cannot compile and it cannot route, which is why those
+# are different objects with different service accounts.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tierbook-measure
+spec:
+  backoffLimit: 0            # a retried measurement is a second measurement; record it as one
+  template:
+    metadata:
+      annotations:
+        # A measurement interrupted half way records a partial cohort, and a partial cohort compared against
+        # a full one is not a paired comparison. Ask the autoscaler to leave it alone.
+        karpenter.sh/do-not-disrupt: "true"
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: measure
+          image: tierbook
+          command: ["/bin/sh", "-c"]
+          # Two steps, and the split is the point.
+          #
+          # `tierbook preflight` asks every candidate the smallest version of the question the run will ask,
+          # and fails here rather than producing a score. One tier in this project's own measurements returned
+          # 0 of 20 because the endpoint refuses function tools together with a reasoning setting on that
+          # wire -- a transport fact that looks exactly like incapability. A harness that had reported that
+          # number would have published a false result about a model.
+          #
+          # The suite itself is YOURS and is meant to be replaced. Running a benchmark is not this
+          # component's responsibility: it consumes records, and anything that can write a record in the
+          # documented shape is a valid producer. `tierbook logs` builds one from your own traffic.
+          args:
+            - |
+              set -eu
+              tierbook preflight --config /etc/tierbook/candidates.json --require-tools
+              exec "${TIERBOOK_SUITE:-tierbook}" ${TIERBOOK_SUITE_ARGS:---help}
+          env:
+            # Names of variables the candidate file refers to. Values come from Secrets you already have;
+            # tierbook never reads a key out of configuration.
+            - name: TIERBOOK_API_KEY
+              valueFrom:
+                secretKeyRef: {name: tierbook-credentials, key: api-key, optional: true}
+          volumeMounts:
+            - {name: candidates, mountPath: /etc/tierbook}
+            - {name: ledger, mountPath: /ledger}
+          resources:
+            requests: {cpu: "500m", memory: 1Gi, ephemeral-storage: 2Gi}
+            limits: {memory: 2Gi, ephemeral-storage: 4Gi}
+      volumes:
+        - {name: candidates, configMap: {name: tierbook-candidates}}
+        - {name: ledger, persistentVolumeClaim: {claimName: tierbook-ledger}}

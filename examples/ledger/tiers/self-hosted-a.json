@@ -93,7 +93,8 @@
         "unit": "seconds_per_task",
         "p50": 13.2,
         "mean": 16.5,
-        "concurrency_when_measured": 1
+        "concurrency_when_measured": 1,
+        "note": "Measured within one sequential shard, so concurrency_when_measured is 1 and the throughput derived from it (about 207 tasks an hour) is a LOWER bound on what the deployment sustains. The run recorded no per-task timestamps, so its realised aggregate throughput is not known. The resulting cost per request is therefore an upper bound, which is the safe direction: assuming a higher concurrency to get a lower cost is what made an earlier figure here wrong."
       }
     }
   },
@@ -114,5 +115,17 @@
     "served_model_version": "vllm 0.27.1, FP8 weights",
     "harness_commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
     "serving_stack": "TP=2 x 2 replicas on g6e.12xlarge"
+  },
+  "claim": {
+    "kind": "correctness",
+    "metric": "task solved as judged by the benchmark's own checker"
+  },
+  "oracle": {
+    "kind": "executable_acceptance",
+    "checker_id": "swe-bench-verified fail_to_pass + tau-bench retail database state",
+    "independent_of_candidate": true,
+    "existed_before_candidate_output": true,
+    "generator": null,
+    "coverage": null
   }
 }

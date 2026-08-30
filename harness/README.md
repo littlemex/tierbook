@@ -133,3 +133,16 @@ because a gateway host is a property of a deployment and not of the experiment. 
 self-hosted tier states its own price and must say where the number came from: the rate
 table prices its key at the top tier because Bedrock publishes no list price, and its generic
 `vllm` key is $0.20 per million, which is neither the machine's cost nor anything measured.
+
+
+## What used to be here, and why it is not
+
+`run.sh`, `sweep.sh` and `collect.sh` were removed. They submitted Kubernetes Jobs against a particular
+namespace, a particular claim and particular images -- which is a description of one cluster, and belongs to
+whoever owns that cluster rather than to a routing component. `deploy/` now holds manifests that assume a
+cluster and name nothing about it.
+
+What remains here is the instrument: the episode loop, the tool protocol, the transport, the scorer and the
+analysis. It runs anywhere Python does, against anything speaking an OpenAI-compatible API, and it is one
+valid producer of records rather than the required one. Anything emitting records that conform to the schema
+works, which is the point of having a schema.

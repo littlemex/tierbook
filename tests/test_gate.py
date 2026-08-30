@@ -19,6 +19,11 @@ REG = ROOT / "examples" / "ledger" / "tiers"
 VAL = ROOT / "examples" / "ledger" / "validation"
 FAM = "tool-agent-user-retail"
 REF = "api-strong-a"
+# A hypothetical, kept so that the margin gate below is still exercised on the tier whose bound fails.
+# It is the figure a published number in this repository once used -- the observed per-task time times an
+# ASSUMED sixteen requests in flight -- and the run recorded no timestamps, so it was never measured. It
+# survives here as a way to reach a code path, never as a cost. `test_boundary.py` pins what happens without
+# it, which is that the rule prefers the cheap API and the refused margins stop being reached at all.
 TP = {FAM: 4364}
 
 

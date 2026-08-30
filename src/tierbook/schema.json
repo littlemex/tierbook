@@ -1,16 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/littlemex/tierbook/registry/schema.json",
+  "$id": "https://github.com/littlemex/tierbook/src/tierbook/schema.json",
   "title": "tier record",
   "description": "What one inference tier was measured to do. Contains no model name in any field the router reads: `serves` is provenance for a human, and every routing decision is taken from the measured fields. A field whose value was not measured is null, never zero and never a published figure -- this deployment has seen an engine advertise 7-14x more reusable cache than it had and a rate card price a model 17x wrong.",
   "type": "object",
   "required": [
     "adapter",
+    "claim",
     "families",
     "id",
     "latency",
     "measured_at",
     "measurement_target",
+    "oracle",
     "price_card",
     "provenance",
     "reliability",
@@ -442,6 +444,123 @@
             "string",
             "null"
           ]
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "description": "What this record's outcomes are a claim ABOUT. Structural rather than a note, because the difference between 'this tier solved the task' and 'this tier agreed with a strong model' is the difference between a routable measurement and a diagnostic.",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "correctness",
+            "reference_agreement"
+          ],
+          "description": "correctness: an independent mechanism decided. reference_agreement: another model's output was the standard, which does not estimate correctness and can never assign."
+        },
+        "metric": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "description": "What decided each outcome. `independent_of_candidate` is the field the compiler gates on: a standard produced by a model that is also a candidate scores that candidate perfectly by construction.",
+      "required": [
+        "kind",
+        "independent_of_candidate"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "executable_acceptance",
+            "external_outcome",
+            "human_label",
+            "model_generated_reference",
+            "model_judge"
+          ]
+        },
+        "checker_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Version of the mechanism, so a record says which checker judged it."
+        },
+        "independent_of_candidate": {
+          "type": "boolean"
+        },
+        "existed_before_candidate_output": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "A check written after seeing the output is not a check. On one corpus here the judging tests were absent from the checkout by construction, which is what made the in-tree tests anti-correlated with solving."
+        },
+        "generator": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "For a model-generated standard: which model, which revision, which prompt digest, when. Recorded so the same checkpoint cannot appear as both standard and candidate under two names.",
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "prompt_digest": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "generated_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "coverage": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "For a benchmark extracted from logs: how much of the log population had an admissible check. A measurement over the checkable subset says nothing about the rest, and the compiler must not extrapolate.",
+          "properties": {
+            "logs_considered": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "with_admissible_check": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "excluded_reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     }

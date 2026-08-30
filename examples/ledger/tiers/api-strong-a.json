@@ -102,5 +102,17 @@
     "served_model_version": null,
     "harness_commit": "ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af",
     "serving_stack": "gateway to bedrock"
+  },
+  "claim": {
+    "kind": "correctness",
+    "metric": "task solved as judged by the benchmark's own checker"
+  },
+  "oracle": {
+    "kind": "executable_acceptance",
+    "checker_id": "swe-bench-verified fail_to_pass + tau-bench retail database state",
+    "independent_of_candidate": true,
+    "existed_before_candidate_output": true,
+    "generator": null,
+    "coverage": null
   }
 }

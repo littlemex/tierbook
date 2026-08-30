@@ -34,6 +34,7 @@ def _decision_json(d: Decision) -> dict:
         "reference": d.reference,
         "chosen": list(d.chosen.tiers),
         "kind": d.chosen.kind,
+        "objective": d.objective,
         "certified": d.certified,
         "why": d.why,
         "margin": d.margin,
@@ -47,6 +48,10 @@ def _decision_json(d: Decision) -> dict:
                 "kind": c.arrangement.kind,
                 "quality_lcb": c.quality_lcb,
                 "cost_per_request": (None if c.cost_per_request == float("inf") else round(c.cost_per_request, 6)),
+                # Both objectives are shown whichever one was optimised, so a reader can see what the choice
+                # gave up on the axis nobody selected.
+                "seconds_to_accepted": (None if c.latency_ms_per_request == float("inf")
+                                        else round(c.latency_ms_per_request, 2)),
                 "certified": c.certified,
                 "note": c.note,
             }
@@ -67,6 +72,9 @@ def compile_to_file(
     max_age_days: int = 90,
     note: str = "",
     validations: str | Path | None = None,
+    objective: str = "cost",
+    latency_slo_p95_ms: float | None = None,
+    min_completion_probability: float | None = None,
 ) -> dict:
     """Compile every family into one file, one entry per family per check condition.
 
@@ -85,6 +93,12 @@ def compile_to_file(
         "margin": margin,
         "alpha": alpha,
         "max_age_days": max_age_days,
+        # Written down because it changes what "best" meant. A table that does not say which objective it
+        # optimised cannot be read: the same ledger compiles different answers for cost and for latency.
+        "objective": objective,
+        "constraints": {"non_inferiority_margin": margin, "alpha": alpha,
+                        "latency_slo_p95_ms": latency_slo_p95_ms,
+                        "min_completion_probability": min_completion_probability},
         "note": note,
         "warning": (
             "This table is only as good as the fold it was compiled from. On the one family where this "
@@ -103,6 +117,8 @@ def compile_to_file(
                 realised_tasks_per_hour=tp.get(family),
                 request_can_reject=can_reject,
                 today=today, max_age_days=max_age_days,
+                objective=objective, latency_slo_p95_ms=latency_slo_p95_ms,
+                min_completion_probability=min_completion_probability,
             )
             j = _decision_json(d)
             # The gate between "calibration chose this" and "you may route to it". Compiling produces a

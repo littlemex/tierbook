@@ -1,0 +1,81 @@
+# Recompile the table from the ledger, and write it where the router reads it.
+#
+# On a schedule because records go stale: a record older than `max_age_days` stops being allowed to win a
+# comparison, so a table that is never recompiled keeps routing on evidence the library would now refuse.
+# The schedule is not the interesting part -- the interesting part is that this job is allowed to REFUSE. If
+# no held-out fold supports an entry, it exits non-zero and leaves the previous ConfigMap in place, so the
+# router keeps serving the decision it was already serving rather than a new one nobody validated.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tierbook-compile
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 10        # kept longer than the successes: a refusal is the interesting outcome
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: tierbook-compile
+          containers:
+            - name: compile
+              image: tierbook
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  # --validations is what makes an entry assignable. Without a held-out fold every entry
+                  # stays provisional, and the router refuses to serve one without an explicit flag whose
+                  # presence in this file is the audit trail.
+                  tierbook compile \
+                    --registry /ledger/tiers \
+                    --validations /ledger/validation \
+                    --config /etc/tierbook/candidates.json \
+                    --out /tmp/table.json
+                  # Replace the ConfigMap only if the compile succeeded. `create --dry-run | apply` is used
+                  # rather than `patch` so that a malformed table cannot half-replace a good one.
+                  kubectl create configmap tierbook-table \
+                    --from-file=table.json=/tmp/table.json \
+                    --dry-run=client -o yaml | kubectl apply -f -
+              volumeMounts:
+                - {name: candidates, mountPath: /etc/tierbook}
+                - {name: ledger, mountPath: /ledger, readOnly: true}
+              resources:
+                requests: {cpu: "200m", memory: 256Mi}
+                limits: {memory: 512Mi}
+          volumes:
+            - {name: candidates, configMap: {name: tierbook-candidates}}
+            - {name: ledger, persistentVolumeClaim: {claimName: tierbook-ledger}}
+---
+# The only write this component needs anywhere in the cluster: one ConfigMap. Named explicitly rather than
+# granted over configmaps generally, because the compiler's whole claim is that it cannot change anything
+# except the table.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tierbook-compile
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tierbook-compile
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [tierbook-table]
+    verbs: [get, update, patch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tierbook-compile
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: tierbook-compile}
+subjects:
+  - {kind: ServiceAccount, name: tierbook-compile}

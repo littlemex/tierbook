@@ -1,0 +1,24 @@
+# No namespace is set here on purpose: the namespace belongs to whoever owns the cluster, and a manifest that
+# names one has quietly made a decision about someone else's cluster. Set it in your own overlay, or pass
+# `-n` at apply time.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ledger-pvc.yaml
+  - measure-job.yaml
+  - compile-cronjob.yaml
+  - router.yaml
+
+configMapGenerator:
+  # Your candidate list. Holds endpoints and prices, never measurements -- the library refuses to load a
+  # candidate entry that sets any key a record may set, so this file cannot become a place where someone
+  # hand-writes an accuracy figure.
+  - name: tierbook-candidates
+    files:
+      - candidates.json
+
+images:
+  - name: tierbook
+    newName: ghcr.io/OWNER/tierbook
+    newTag: latest
