@@ -89,12 +89,26 @@ def single_tier(tier: str) -> object:
 
 def fit_bucket_policy(table: OutcomeTable, calibration: list[str], *, feature: str,
                       constraints: Constraints, tiers: list[str] | None = None,
-                      default: str | None = None) -> tuple[object, dict]:
+                      default: str | None = None, may_train_on: bool | None = None) -> tuple[object, dict]:
     """Choose, per feature bucket, the cheapest tier whose calibration solve rate is within the margin.
 
     Fitted on `calibration` only. The returned assignment is a draft: it says what the calibration fold
     prefers, and nothing about whether that holds anywhere else. `verdict()` is what decides that.
+
+    `may_train_on` is a licence fact, not a data-quality one, and it is required rather than defaulted because
+    the answer is invisible in a licence identifier. One corpus this project uses is CC BY-4.0 and its own card
+    forbids using it for model training, because it was generated with a model whose usage policy forbids that.
+    Fitting a policy on a corpus is training on it. `None` is treated as "not permitted": a licence question
+    answered by omission is answered wrongly, and the omission is silent whereas the refusal is not.
     """
+    if not may_train_on:
+        raise EvidenceError(
+            "fitting a policy on this corpus is training on it, and `may_train_on` is "
+            f"{may_train_on!r}. Permission to evaluate on a corpus is not permission to train on it, and the "
+            "difference does not show up in the licence identifier -- OmniDocBench-JASyn is CC BY-4.0 and its "
+            "card forbids training. Pass may_train_on=True only after reading the corpus's own terms, and "
+            "record the answer in the record's provenance so the next person does not have to."
+        )
     priced, unpriced = table.priced_tiers()
     ts = [t for t in (tiers or table.tiers) if t in priced]
     if not ts:

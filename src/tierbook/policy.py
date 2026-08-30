@@ -292,11 +292,23 @@ EXECUTABLE_CHECK = "executable_check"
 HUMAN_LABEL = "human_label"
 MODEL_REFERENCE = "model_reference"
 
-#: The classes a held-out fold may belong to for an entry to become `assigned`.
-MAY_ASSIGN = (EXECUTABLE_CHECK, HUMAN_LABEL)
+#: The classes a held-out fold may belong to for an entry to become `assigned`. A fixed-weight learned metric
+#: is included and is defined below, after the reason it is not sorted into either pole.
+MAY_ASSIGN = (EXECUTABLE_CHECK, HUMAN_LABEL, "fixed_weight_model_metric")
+
+#: A fixed-weight learned metric is reproducible and is still a model, so it gets its own class rather than
+#: being sorted into either pole. It MAY assign -- refusing COMET outright would leave translation with only
+#: chrF, which measures surface overlap -- but a record scored that way carries the fact, because a learned
+#: metric can be systematically wrong in a way a deterministic one cannot. Measured here: a calibrated
+#: synthetic proxy reversed sign against the official metric, so reproducible is not the same as correct.
+FIXED_WEIGHT_METRIC = "fixed_weight_model_metric"
+
+MAY_ASSIGN_EXTENDED = (EXECUTABLE_CHECK, HUMAN_LABEL, FIXED_WEIGHT_METRIC)
 
 _ORACLE_CLASS = {
     "executable_acceptance": EXECUTABLE_CHECK,
+    "deterministic_metric": EXECUTABLE_CHECK,
+    "fixed_weight_model_metric": FIXED_WEIGHT_METRIC,
     "external_outcome": EXECUTABLE_CHECK,
     "human_label": HUMAN_LABEL,
     "model_generated_reference": MODEL_REFERENCE,

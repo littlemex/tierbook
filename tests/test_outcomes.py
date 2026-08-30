@@ -62,7 +62,7 @@ def test_an_unpriced_tier_is_excluded_and_named_never_charged_as_zero():
 
     with pytest.raises(EvidenceError, match="charged as zero"):
         fit_bucket_policy(_table({"i1": {"free": (SOLVED, None)}}), ["i1"], feature="c",
-                          constraints=Constraints(margin=0.05))
+                          constraints=Constraints(margin=0.05), may_train_on=True)
 
 
 # --- the floor, and what it does to a headroom claim ----------------------------------------------
@@ -130,7 +130,7 @@ def test_fitting_and_judging_on_the_same_items_refuses():
     t = _table({f"i{n}": {"a": (SOLVED, 0.1), "b": (SOLVED, 0.2)} for n in range(6)},
                features={f"i{n}": {"c": "x"} for n in range(6)})
     cons = Constraints(margin=0.05)
-    pol, _ = fit_bucket_policy(t, t.items, feature="c", constraints=cons)
+    pol, _ = fit_bucket_policy(t, t.items, feature="c", constraints=cons, may_train_on=True)
     with pytest.raises(EvidenceError, match="both the calibration and held-out folds"):
         verdict(t, pol, single_tier("b"), t.items, constraints=cons, calibration=t.items)
 
@@ -234,3 +234,22 @@ def test_the_frontier_marks_what_nothing_dominates_rather_than_scoring():
     # therefore on the frontier even though it solves less -- that is the trade the owner has to make.
     assert by["dear"]["on_frontier"] is False and "mid" in by["dear"]["dominated_by"]
     assert by["mid"]["on_frontier"] and by["cheap"]["on_frontier"]
+
+
+def test_fitting_on_a_corpus_nobody_checked_the_training_terms_for_refuses():
+    """A licence fact that does not show up in the licence identifier, so it has to be asked for.
+
+    OmniDocBench-JASyn is CC BY-4.0 and its own dataset card states that using it for model training or
+    distillation is prohibited, because it was generated with a model whose usage policy forbids that. Fitting
+    a policy on a corpus is training on it. `None` is treated as not permitted, because a licence question
+    answered by omission is answered wrongly -- and the omission is silent whereas this refusal is not.
+    """
+    t = _table({f"i{n}": {"a": (SOLVED, 0.1), "b": (SOLVED, 0.2)} for n in range(4)},
+               features={f"i{n}": {"c": "x"} for n in range(4)})
+    for permission in (None, False):
+        with pytest.raises(EvidenceError, match="training on it"):
+            fit_bucket_policy(t, t.items, feature="c", constraints=Constraints(margin=0.05),
+                              may_train_on=permission)
+    pol, info = fit_bucket_policy(t, t.items, feature="c", constraints=Constraints(margin=0.05),
+                                  may_train_on=True)
+    assert pol is not None

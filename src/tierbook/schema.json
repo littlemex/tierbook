@@ -67,6 +67,20 @@
           "items": {
             "type": "string"
           }
+        },
+        "may_train_on": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether this corpus may be used to TRAIN a predictor, as distinct from whether it may be used to evaluate one. The two are not the same permission and the difference is not visible in a licence identifier: OmniDocBench-JASyn is CC BY-4.0 and its card nevertheless states that using it for model training or distillation is prohibited, because it was generated with a model whose usage policy forbids that. `null` means nobody checked, which the compiler treats as 'not permitted' -- a licence question answered by omission is answered wrongly."
+        },
+        "evaluation_only_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When `may_train_on` is false, the reason, so a reader does not have to re-derive it."
         }
       }
     },
@@ -530,11 +544,14 @@
           "type": "string",
           "enum": [
             "executable_acceptance",
+            "deterministic_metric",
+            "fixed_weight_model_metric",
             "external_outcome",
             "human_label",
             "model_generated_reference",
             "model_judge"
-          ]
+          ],
+          "description": "What decided each outcome, ordered from strongest to weakest.\n\n`executable_acceptance` -- a program decided, no model involved.\n`deterministic_metric` -- a metric with no learned parameters against a human reference: BLEU, chrF, exact match. Reproducible bit for bit, and cannot be wrong in a learned direction.\n`fixed_weight_model_metric` -- a learned metric with frozen weights: COMET, BLEURT, MetricX. This sits between the two poles and needs its own name, because it is REPRODUCIBLE (same input, same output, no sampling) while still being a model that can be systematically wrong. Those two properties are usually conflated. This project has the reason not to conflate them: a calibrated synthetic proxy reversed sign against the official metric here, so reproducibility is not correctness.\n`external_outcome` -- a downstream system's own verdict.\n`human_label` -- a person judged it, including a person reviewing a model's draft.\n`model_generated_reference` / `model_judge` -- a model decided. Diagnostic only; cannot assign."
         },
         "checker_id": {
           "type": [
