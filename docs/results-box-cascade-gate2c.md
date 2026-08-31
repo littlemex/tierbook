@@ -80,3 +80,9 @@ signal at the verbose arm's answer position, around token 680, which the eight-p
 
 **Every number here is one corpus, one price table, one day.** The development fold has now been looked at four
 times and selects rather than claims. The frozen fold has not been touched.
+
+**And every interval here resamples items, not runs.** Six repeats of the box on the same 488 items put the
+run-to-run spread at ±1.6 points for the terse arm and ±3.7 for the verbose one, with temperature zero and on
+the same deployment — see [`results-box-run-to-run-noise.md`](results-box-run-to-run-noise.md). Gate 2c's
+−0.43 points rests on the terse arm and was already reported as indistinguishable, so it is unaffected. The
+ceiling figures on this page rest on the verbose arm and are a single run of it.

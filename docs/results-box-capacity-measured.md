@@ -76,6 +76,11 @@ four-token reply is 10 seconds against a p50 of 5.9, so the queue is deep; the o
 two sweeps), as expected for a model with 48 of 64 layers in linear attention. No multi-turn discount exists on
 this box, and none is assumed anywhere here.
 
+**The quality figures it recomputes are one run each.** The box's outcomes are not reproducible between runs
+even at temperature zero — ±3.7 points on 488 items for the verbose arm — so the +24 and +31 item figures here
+are a single run of a noisy arm. See [`results-box-run-to-run-noise.md`](results-box-run-to-run-noise.md). The
+cost figures are unaffected: they come from throughput sweeps, not from outcomes.
+
 **One node, one model, one window.** Every figure is conditioned on that configuration, and the earlier table
 measured at a 262k window on the same hardware differs by more than a factor of two, which is the size of the
 error available from changing a setting.
