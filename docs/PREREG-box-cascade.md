@@ -112,3 +112,32 @@ while TPOT percentiles and queue depth are recorded, with capacity defined as th
 degrades past its stated limit. **No throughput number is estimated.** A throughput figure assumed rather than
 measured moved a published result in this project by a factor of six, and that is why the capacity constraint
 is not allowed to enter any optimisation until it has been observed.
+
+## Addendum, 2026-08-31: the Gate 2 judge, fixed before the development fold is touched
+
+Registered after Gate 1 passed and before any Gate 2 figure is computed, because Gate 1 revealed a cheaper
+judge than the one this document assumed and the substitution has to be declared rather than discovered.
+
+The recorded run carries no logprobs, so the entropy and logit-margin features listed above cannot be computed
+without re-running the box on a GPU. What it does carry, per item, is what the box produced: **the number of
+completion tokens, the finish reason, and whether an answer could be extracted from the text.** Those are
+available after the box answers and before an escalation decision, which is exactly the information this
+construction gets to use.
+
+They are also more interesting than they look. The box's output length is bimodal — a median of 4 tokens
+against a mean of 218.5, a 95th percentile of 2005 and a maximum of 2048, which is the generation cap. Most
+answers are the letter and nothing else; a minority run away until they are cut off.
+
+**Judge family, fixed now:** escalate if the box's completion length is at least a threshold, or its finish
+reason is the length cap, or no answer could be extracted. The threshold is the only fitted parameter and it is
+chosen **on the 488-item calibration fold** by maximising solves subject to the API spend staying within the
+incumbent's, with ties broken towards the cheaper threshold.
+
+**Evaluated once** on the 699-item development fold. Pass requires solving more than 596 with the lower bound
+of the paired difference above zero, and API spend at most $1.6523. Fail, and the finding is that a judge built
+from what the run already recorded is not enough, and the next question is whether logprobs are worth a GPU —
+not a second threshold family on the same fold.
+
+The order in the main document is unchanged in intent: this judge is free, and running it before the capacity
+load test only reorders two measurements neither of which can affect the other's result. If Gate 2 fails there
+is nothing for the capacity number to rescue.
