@@ -157,3 +157,46 @@ ladders".
 
 **No predictor has been fitted yet.** Section 5 measures raw signals, not the model of section 4, and the
 anchor-set mechanism of section 4 has not been built.
+
+## Will this work in a deployment that only ever sees one kind of work?
+
+Added 2026-09-01, because the objection is the right one to raise: "category" is a property of a benchmark
+with seven subjects in it. A tenant whose traffic is entirely financial has one category, so an axis built on
+category contributes nothing there by construction. Three things were measured.
+
+**The single-domain failure is a sample-size problem, not a structural one.** Fitting and evaluating inside one
+category, the predictor is *worse* than each candidate's own average in five of seven domains — but the AUC
+inside those domains is 0.69 to 0.83, so the ranking is intact and the probabilities are not. The cause is the
+number of calibration items, and the mixed-domain fit reproduces the failure when given the same budget:
+
+| calibration items | log loss | against the no-item baseline |
+|---|---|---|
+| 35 | 0.6215 | **−30.5%** |
+| **70** — the within-domain budget | 0.4949 | **−3.9%** |
+| 140 | 0.4688 | +1.6% |
+| 280 | 0.4600 | +3.4% |
+| 488 | 0.4531 | +4.9% |
+
+Adding L2 takes the 70-item case from −3.9% to −0.2%, which confirms overfitting rather than absent signal. So
+the operational figure a tenant needs is **about 140 labelled items from their own traffic**, the same order as
+the 100 to 200 anchor items it takes to place a new candidate.
+
+**The second axis cannot be discovered from the probe.** Clustering items by their pattern of outcomes across
+candidates and then trying to predict an unseen item's cluster from probe features never beats the majority
+class — 86.1% against a majority of 86.1% at two clusters, 60.8% against 60.8% at three, 51.8% against 52.2% at
+four. Feeding the predicted cluster back in gives 0.4517 to 0.4528 against the probe's own 0.4531 and the human
+category's 0.4415. **The category carries external information about the item that no amount of cheap probing
+recovers.**
+
+**But it does not have to be a topic taxonomy.** What made the category work is only that it partitioned items
+into groups whose candidate ranking differed. In a single-domain tenant the useful partition is whatever plays
+that role there — product line, document type, customer segment, endpoint, language — and **whether a given
+label plays it is decided by the between-versus-within decomposition on that tenant's own matrix**, which is
+already part of the mechanism. The requirement generalises as: *the mechanism needs one externally supplied
+partition of items, and it verifies for itself whether the one it was given is worth using.*
+
+**And fixing the domain leaves more item-dependent structure, not less.** Within a single category the second
+component holds 14 to 21% of the variance and Loevinger's H is **lower** than it is over the whole corpus —
+mathematics 0.4431, engineering 0.5829, law 0.5919, against 0.6375 overall. A lower H means the candidate
+ordering depends *more* on the item. A single-domain tenant therefore has more to gain from per-item routing
+than the mixed benchmark suggests, provided they supply a partition and about a hundred and forty labels.
