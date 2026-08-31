@@ -14,8 +14,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from tierbook.audit import ACTIVE, SUPPRESSED, UNDECIDED, audit, headroom  # noqa: E402
-from tierbook.evidence import INCORRECT, SOLVED  # noqa: E402
+from tierbook.audit import (  # noqa: E402
+    ACTIVE, SUPPRESSED, UNDECIDED, audit, escalation_ceiling, headroom,
+)
+from tierbook.evidence import INCORRECT, SOLVED, EvidenceError  # noqa: E402
 from tierbook.optimise import single_tier  # noqa: E402
 from tierbook.outcomes import Cell, OutcomeTable  # noqa: E402
 
@@ -133,3 +135,75 @@ def test_headroom_bounds_what_learning_could_win_before_anything_is_trained():
     perfect = _table({f"i{k}": {"a": (SOLVED, 1.0)} for k in range(50)})
     h2 = headroom(perfect, single_tier("a"))
     assert h2["residual"] == 0.0 and h2["residual_ci"] == (0.0, 0.0)
+
+
+def test_the_escalation_ceiling_names_the_items_a_judge_has_to_keep():
+    """The gain of a box-first construction is the items the box gets right and the strong tier gets wrong.
+
+    Measured on the real corpus: the ceiling solved 625 of 699 against the incumbent's 596, and every one of
+    those 29 was an item the box solved and the incumbent's chosen tier did not. So the number is not "how
+    often the judge escalates correctly" but "does the judge keep the items where the cheap tier beats the
+    dear one", which is the harder question and the one this field reports.
+    """
+    spec = {}
+    # 10 items the box solves and the fallback misses -- the whole gain, and the whole risk.
+    for k in range(10):
+        spec[f"p{k}"] = {"box": (SOLVED, None), "strong": (INCORRECT, 1.0)}
+    # 20 both solve: escalating them buys nothing and costs money.
+    for k in range(20):
+        spec[f"b{k}"] = {"box": (SOLVED, None), "strong": (SOLVED, 1.0)}
+    # 30 only the fallback solves: escalation earns these.
+    for k in range(30):
+        spec[f"e{k}"] = {"box": (INCORRECT, None), "strong": (SOLVED, 1.0)}
+    t = _table(spec)
+
+    c = escalation_ceiling(t, "box", single_tier("strong"))
+    assert c["default_solved"] == 30 and c["fallback_solved"] == 50
+    assert c["ceiling_solved"] == 60, "box's 30 plus the 30 it escalates and the fallback solves"
+    assert c["escalated"] == 30 and c["escalation_rate"] == pytest.approx(0.5)
+    assert c["protected"] == [f"p{k}" for k in range(10)]
+    assert c["quality_gain"] == pytest.approx(10 / 60, abs=5e-5), "reported to four places"
+    assert c["quality_gain_ci"][0] > 0
+    # Paid only on the escalated items, so the saving is what the fallback would have spent on the rest --
+    # including on the items it gets wrong, because a wrong answer is billed like any other.
+    assert c["api_spend_usd"] == pytest.approx(30.0)
+    assert c["fallback_spend_usd"] == pytest.approx(60.0)
+    assert c["api_saving_usd"] == pytest.approx(30.0)
+
+
+def test_the_ceiling_leaves_the_hourly_bill_out_until_a_concurrency_is_passed():
+    """`total_usd` stays None rather than charging the box zero, because the concurrency is a measurement.
+
+    At the break-even amortised price the construction costs exactly what the fallback alone costs, which is
+    what makes that number the thing to measure next rather than a detail.
+    """
+    spec = {f"e{k}": {"box": (INCORRECT, None), "strong": (SOLVED, 1.0)} for k in range(20)}
+    spec.update({f"b{k}": {"box": (SOLVED, None), "strong": (SOLVED, 1.0)} for k in range(80)})
+    t = _table(spec)
+
+    free = escalation_ceiling(t, "box", single_tier("strong"))
+    assert free["total_usd"] is None
+    assert free["api_spend_usd"] == pytest.approx(20.0) and free["fallback_spend_usd"] == pytest.approx(100.0)
+    assert free["break_even_usd_per_item"] == pytest.approx(0.80)
+
+    priced = escalation_ceiling(t, "box", single_tier("strong"),
+                                default_usd_per_item=free["break_even_usd_per_item"])
+    assert priced["total_usd"] == pytest.approx(free["fallback_spend_usd"]), "break-even means exactly this"
+    dearer = escalation_ceiling(t, "box", single_tier("strong"), default_usd_per_item=1.0)
+    assert dearer["total_usd"] > free["fallback_spend_usd"], "a box too dear to amortise loses to no box"
+
+
+def test_a_default_tier_not_run_on_every_item_is_refused():
+    """Every request goes through the default path by construction, so a ceiling on a subset is another experiment."""
+    spec = {f"i{k}": {"box": (SOLVED, None), "strong": (SOLVED, 1.0)} for k in range(10)}
+    spec["missing"] = {"strong": (SOLVED, 1.0)}
+    with pytest.raises(EvidenceError, match="no observed outcome on every item"):
+        escalation_ceiling(_table(spec), "box", single_tier("strong"))
+
+
+def test_an_unpriced_escalation_is_counted_not_charged_as_zero():
+    """A failed call recorded no tokens. Pricing it at zero would make the construction look cheaper than it is."""
+    spec = {f"e{k}": {"box": (INCORRECT, None), "strong": (SOLVED, 1.0 if k else None)} for k in range(5)}
+    c = escalation_ceiling(_table(spec), "box", single_tier("strong"))
+    assert c["escalated"] == 5 and c["unpriced_escalations"] == 1
+    assert c["api_spend_usd"] == pytest.approx(4.0), "four priced escalations, and the fifth is not free"

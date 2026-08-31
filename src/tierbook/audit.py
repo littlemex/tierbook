@@ -32,6 +32,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+from tierbook.evidence import EvidenceError
 from tierbook.outcomes import OutcomeTable
 
 ACTIVE = "active"
@@ -216,3 +217,98 @@ def headroom(table: OutcomeTable, policy, *, items: list[str] | None = None,
             "and the finding is that the existing policy is already at the ceiling of this feature set."
         ),
     }
+
+
+def escalation_ceiling(table: OutcomeTable, default_tier: str, fallback, *, items: list[str] | None = None,
+                       draws: int = 2000, seed: int = 7,
+                       default_usd_per_item: float | None = None) -> dict:
+    """The best an escalation construction could do: run `default_tier` on everything, escalate when it is wrong.
+
+    For a tier billed by the hour rather than per token. Inside a fixed deployment window that tier's marginal
+    cost is zero and its *capacity* is what is scarce, so the question is not "which candidate per item" but
+    "which items are worth spending API money on when the box already has an answer". This computes the ceiling
+    of that construction by escalating with the recorded outcome as the oracle: no judge can escalate better
+    than one that already knows whether the answer is right.
+
+    Run it before building the judge. It is free, and it is the shape of failure this project has already paid
+    for at the expensive end -- a construction whose *oracle* does not beat the incumbent cannot be rescued by a
+    better classifier.
+
+    Two things it reports that the headline numbers hide, because both decide whether the ceiling is reachable.
+
+    **`protected`** is the set of items the default tier solves and the fallback does not. Those items are the
+    whole quality gain, and a real judge earns them only by keeping them -- that is, by being right precisely
+    where the stronger tier is wrong. A judge tuned to escalate whenever it is unsure loses them first.
+
+    **`break_even_usd_per_item`** is the amortised price at which the default tier's own bill eats the API
+    saving. `default_usd_per_item` is a *parameter with no default* on purpose: the concurrency behind that
+    amortisation is a measurement, and an assumed throughput once moved a published figure in this project by a
+    factor of six.
+    """
+    items = items or table.items
+    rng = random.Random(seed)
+    if any(default_tier not in table.cells[i] for i in items):
+        raise EvidenceError(
+            f"{default_tier!r} has no observed outcome on every item, so it cannot be the default path. "
+            "An escalation construction sends every request through the default tier by construction, and a "
+            "ceiling computed on the subset it happens to have been run on is a different experiment."
+        )
+    default_ok, fallback_ok, escalated, spend = set(), set(), [], 0.0
+    unpriced = 0
+    for i in items:
+        row = table.cells[i]
+        if row[default_tier].solved:
+            default_ok.add(i)
+        choice = fallback(i, table.features.get(i, {}))
+        cell = row.get(choice) if choice is not None else None
+        if cell is not None and cell.solved:
+            fallback_ok.add(i)
+        if i not in default_ok:
+            escalated.append(i)
+            if cell is None or cell.usd is None:
+                unpriced += 1
+            else:
+                spend += cell.usd
+    ceiling_ok = default_ok | (fallback_ok & set(escalated))
+    n = len(items)
+    flags = [(1 if i in ceiling_ok else 0, 1 if i in fallback_ok else 0) for i in items]
+    point = sum(a - b for a, b in flags) / n if n else 0.0
+    draws_out = []
+    for _ in range(draws):
+        idx = [rng.randrange(n) for _ in range(n)]
+        draws_out.append(sum(flags[k][0] - flags[k][1] for k in idx) / n)
+    draws_out.sort()
+    lo, hi = draws_out[int(draws * 0.025)], draws_out[int(draws * 0.975) - 1]
+    fallback_spend = 0.0
+    for i in items:
+        choice = fallback(i, table.features.get(i, {}))
+        cell = table.cells[i].get(choice) if choice is not None else None
+        if cell is not None and cell.usd is not None:
+            fallback_spend += cell.usd
+    saving = fallback_spend - spend
+    out = {
+        "items": n,
+        "default_tier": default_tier,
+        "default_solved": len(default_ok),
+        "fallback_solved": len(fallback_ok),
+        "ceiling_solved": len(ceiling_ok),
+        "escalated": len(escalated),
+        "escalation_rate": round(len(escalated) / n, 4) if n else None,
+        "protected": sorted(default_ok - fallback_ok),
+        "quality_gain": round(point, 4),
+        "quality_gain_ci": (round(lo, 4), round(hi, 4)),
+        "api_spend_usd": round(spend, 6),
+        "fallback_spend_usd": round(fallback_spend, 6),
+        "api_saving_usd": round(saving, 6),
+        "unpriced_escalations": unpriced,
+        "break_even_usd_per_item": (round(saving / n, 6) if n else None),
+        "total_usd": None if default_usd_per_item is None else round(spend + default_usd_per_item * n, 6),
+        "reading": (
+            "Escalation is decided by the recorded outcome, so this is a ceiling and not a policy. The quality "
+            "gain interval excluding zero means a judge could win something; the protected set is what it has "
+            "to keep to win it, and those are the items where the default tier is right and the stronger "
+            "fallback is wrong. `total_usd` is None unless the default tier's amortised bill was passed in, "
+            "because the concurrency that decides it is a measurement rather than an assumption."
+        ),
+    }
+    return out
