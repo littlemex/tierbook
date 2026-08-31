@@ -194,3 +194,37 @@ choosing the point that maximises solves subject to total cost at or below the i
 **The development fold has now been looked at three times.** Its numbers are no longer a claim about anything;
 they select. The claim requires Gate 3 on the frozen fold, and if Gate 2b passes, the frozen fold is carved
 before anything else is measured.
+
+## Addendum 3, 2026-08-31: the box is now the MoE, and its verbosity is the only cost lever left
+
+Written before the terse arm is run. The self-hosted lane moved from the dense `Qwen3.8-27B` to the MoE
+`Qwen3.6-35B-A3B`, because every other self-hosted number in this project was measured on the MoE and it
+measured better on every axis taken. That makes it a **different candidate**, so Gate 1 was recomputed rather
+than inherited, on the same 699 item ids with the same eight API tiers.
+
+It is better where it matters and worse where it costs. Box alone 531 against the dense model's 456; the
+ceiling 627 against 625; escalation 24.0% against 34.8%, so the API bill falls to $0.6789. And its median reply
+is **687 tokens against the dense model's 4** — it explains before answering, with thinking off, which is
+where its extra accuracy comes from and also where its bill comes from.
+
+Measured on this deployment at 877-token replies, the box's own price per output token bottoms out at
+**$1.67/Mtok at 128 in flight**, which is the engine's admission cap; the $1.57 the sweep reports at 192 is
+queueing outside the engine at a p95 of 101 seconds and is not an operating point. Break-even needs
+**$1.59/Mtok**. So with a perfect judge the construction lands **3% dearer than the incumbent while solving 31
+more items** — a wash on money, and any real judge's mistakes come out of that.
+
+**The registered question, then: does telling it to answer with the letter alone keep the accuracy?** One
+instruction prepended to the question, the question itself byte-identical, recorded on every row so the arm
+says what it was told. Run on the **488-item calibration fold only**.
+
+Two conditions, both fixed now, and the arm is only worth carrying if it meets both:
+
+1. **Cost.** The box's own bill per item at the measured operating point must fall below the break-even
+   $0.001393, which at 128 in flight means a mean reply under about 830 tokens — a bar the verbose arm misses
+   by 6% and a terse arm should clear by an order of magnitude.
+2. **Accuracy.** The terse arm must stay within **3 points** of the verbose arm's 353/488 on the same fold,
+   so at least 69.3%. Below that, the verbosity *is* the accuracy, this lever is closed, and the honest finding
+   is that the MoE box buys 31 items at cost parity and cannot be made cheaper without giving them back.
+
+If the lever closes, the next question is not another prompt. It is whether 31 items at parity is worth a
+machine, which is a question for the owner and not for a measurement.
