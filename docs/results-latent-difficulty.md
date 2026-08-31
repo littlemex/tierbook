@@ -76,6 +76,39 @@ disagreements sit at a median margin of 0.12. The two engines differ only where 
 reassuring for the deployment and awkward for this study, which is about the undecided region — so the capture
 grades its own answers rather than borrowing the served run's labels.
 
+## The dimension the probe was missing is the domain, and the incumbent router already had it
+
+Added 2026-09-01, after the same capture was used to fit the mechanism's predictor rather than single signals.
+
+Fitting `logit P(candidate m solves item i) = a_m · θ(x_i) + b_m` on the calibration items and scoring on the
+development items, against each candidate's own solve rate as the baseline:
+
+| features for θ | d | log loss | Brier | AUC |
+|---|---|---|---|---|
+| none — the candidate's solve rate | — | 0.4763 | 0.1530 | 0.6893 |
+| probe only | 1 | 0.4531 | 0.1440 | 0.7418 |
+| probe only | 2 | 0.4535 | 0.1440 | 0.7403 |
+| category only | 1 | 0.4700 | 0.1504 | 0.7131 |
+| **probe + category** | 1 | 0.4466 | 0.1415 | 0.7558 |
+| **probe + category** | **2** | **0.4414** | **0.1397** | **0.7653** |
+
+**A second dimension buys nothing on probe features and pays as soon as the category is added.** That resolves
+what looked like a contradiction: the matrix is not one-dimensional — Loevinger's H is 0.6375 — but the probe
+reads only its first axis, and "d = 2 is useless" was a statement about the feature set rather than the matrix.
+
+Removing the first component from the correctness matrix and looking at what is left says what the second axis
+is: **it is the domain.** Its item scores average +0.2115 on mathematics and −0.1839 on health, with engineering
+and law positive and economics and philosophy negative. It correlates weakly with the probe (margin −0.283,
+entropy +0.273) and not at all with prompt length (+0.048).
+
+So the incumbent router — a map from category to tier, the thing every learned router in this project has failed
+to beat — was capturing the second dimension all along, while the probe captures the first. **They were never
+competitors.** The predictor that uses both is better than either: log loss 0.4414 against 0.4531 for the probe
+alone and 0.4700 for the category alone, and 7.3% below the no-item-information baseline.
+
+One correction to the numbers above this section: the first fit of the probe-only model reported 0.4646, and that
+run was under-trained at 60 iterations. At 300 it is 0.4531. The ordering of the findings is unchanged.
+
 ## What this does not support
 
 **It does not say latent difficulty is useless in general.** It says that on a single-token multiple-choice
