@@ -164,6 +164,50 @@ finer** — 488 calibration items over 7 buckets is seventy items each, over 30 
 sixteen is where the estimate of the axis stops being worth having. So the productive version of this idea is
 a taxonomy with *more* items behind each bucket, not a more discriminating one.
 
+## Why it failed was not the text length, and the objection to that has a mechanism
+
+The stated reason above — a couple of hundred words is too little text — was **wrong**, and testing it says so.
+
+**The estimator is reliable at every length in this corpus.** Splitting each item's words into alternating
+halves and computing the rare-word rate on each, the split-half correlation is 0.756 at a median of 56 words
+and 0.740 at 216. It measures the same thing twice. And the correlation with the second dimension does not
+improve with length — −0.144 in the shortest quartile, −0.002 in the longest — so more text was never the
+missing ingredient.
+
+**The real reason is that the quantity is a property of the subject, not of the question.** Decomposing:
+
+| correlation | overall | between category | within category |
+|---|---|---|---|
+| rare-word rate vs the second dimension | −0.072 | **−0.768** | **+0.007** |
+| prompt surprisal vs the second dimension | −0.107 | −0.584 | −0.041 |
+| **probe entropy vs difficulty** (a control that works per item) | +0.375 | +0.405 | **+0.380** |
+
+The vocabulary measure carries all of its information *between* subjects and none *within* one — a textbook
+ecological correlation. Two health questions have the same vocabulary profile and differ in difficulty, which is
+what the probe reads. So the category label is not a noisy proxy for a per-item quantity; **it is the correct
+granularity for that quantity**, and a per-item estimate of it adds variance with no signal, which is exactly
+why it degraded the predictor. The control shows what a per-item signal looks like: nearly the same correlation
+between groups and within them.
+
+**And that makes the objection "surely a large agentic task is different" a real one, for a reason that is not
+length.** In this corpus the unit of variation is the subject and the axis is constant inside it. In an agentic
+task the input carries a specific repository and a specific issue, so the relevant "specialised knowledge" is
+how unusual *this code and this report* are — which can vary item by item inside one repository. Measured on
+the 24 SWE-bench episodes available:
+
+| | MMLU, within subject | SWE-bench, within repository |
+|---|---|---|
+| rare-word rate, within-group spread | carries no signal (r = +0.007) | **sd 0.0525 against a between-repository sd of 0.0783, a ratio of 0.67** |
+
+Inside `astropy` the rate ranges 0.321 to 0.480 and inside `pytest-dev` 0.364 to 0.558. **The axis is not a
+repository constant**, so the structural precondition for it carrying per-item information holds there and the
+finding above does not transfer.
+
+What cannot be settled from what exists: whether that within-repository variation **predicts anything**. Two to
+four instances per repository is no power at all. And the issue texts recoverable from the transcripts are
+truncated at 500 characters — the median and the maximum are both exactly 500 — while a whole episode's prompt
+tokens run to about 677,000, so even this is a measurement of the opening of the input rather than of it.
+
 ## What this does not support
 
 **It does not say latent difficulty is useless in general.** It says that on a single-token multiple-choice
