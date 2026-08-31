@@ -245,6 +245,54 @@ def escalation_ceiling(table: OutcomeTable, default_tier: str, fallback, *, item
     amortisation is a measurement, and an assumed throughput once moved a published figure in this project by a
     factor of six.
     """
+    out = _escalation_run(table, default_tier, fallback, lambda i: not table.cells[i][default_tier].solved,
+                          items=items, draws=draws, seed=seed, default_usd_per_item=default_usd_per_item)
+    out["reading"] = (
+        "Escalation is decided by the recorded outcome, so this is a ceiling and not a policy. The quality "
+        "gain interval excluding zero means a judge could win something; the protected set is what it has "
+        "to keep to win it, and those are the items where the default tier is right and the stronger "
+        "fallback is wrong. `total_usd` is None unless the default tier's amortised bill was passed in, "
+        "because the concurrency that decides it is a measurement rather than an assumption."
+    )
+    # The oracle makes neither mistake by definition, so reporting both as zero would read as a result.
+    out.pop("escalated_though_right")
+    out.pop("kept_though_wrong")
+    out["ceiling_solved"] = out.pop("solved")
+    return out
+
+
+def escalation_outcome(table: OutcomeTable, default_tier: str, fallback, judge,
+                       signals: dict[str, dict], *, items: list[str] | None = None,
+                       draws: int = 2000, seed: int = 7,
+                       default_usd_per_item: float | None = None) -> dict:
+    """The same construction with a real judge in place of the oracle. `judge(item_id, signals) -> bool`.
+
+    `signals` is deliberately a separate argument from `table.features`, and the distinction is a contract
+    rather than a convenience. `features` holds only what is knowable *before* a tier is called, because a
+    policy fitted on anything else is scored on information it will not have. An escalation judge is the one
+    place where more is legitimately available: the default tier has already answered, so its completion
+    length, finish reason and whether an answer could be parsed are all in hand before the escalation decision.
+    Keeping them out of `features` stops that licence from leaking into policies that do not have it.
+
+    Reports the two ways a judge is wrong, because they cost different things. `escalated_though_right` spends
+    API money the construction's saving is made of, and can also *lose* an item when the fallback is worse than
+    the default there. `kept_though_wrong` keeps an answer that is already wrong, which costs nothing and gains
+    nothing -- so a judge tuned to minimise total error rate is optimising the wrong quantity.
+    """
+    out = _escalation_run(table, default_tier, fallback, lambda i: bool(judge(i, signals.get(i, {}))),
+                          items=items, draws=draws, seed=seed, default_usd_per_item=default_usd_per_item)
+    out["reading"] = (
+        "A realisable policy: escalation is decided by the judge from signals the default tier's own answer "
+        "carries. Compare `solved` against the ceiling for how much of the reachable gain the judge got, and "
+        "`escalated_though_right` against the protected set for what it gave away buying it."
+    )
+    return out
+
+
+def _escalation_run(table: OutcomeTable, default_tier: str, fallback, decide, *,
+                    items: list[str] | None, draws: int, seed: int,
+                    default_usd_per_item: float | None) -> dict:
+    """Shared by the ceiling and the realisable policy, so the two are never computed by different arithmetic."""
     items = items or table.items
     rng = random.Random(seed)
     if any(default_tier not in table.cells[i] for i in items):
@@ -255,6 +303,8 @@ def escalation_ceiling(table: OutcomeTable, default_tier: str, fallback, *, item
         )
     default_ok, fallback_ok, escalated, spend = set(), set(), [], 0.0
     unpriced = 0
+    fallback_spend = 0.0
+    solved = set()
     for i in items:
         row = table.cells[i]
         if row[default_tier].solved:
@@ -263,15 +313,20 @@ def escalation_ceiling(table: OutcomeTable, default_tier: str, fallback, *, item
         cell = row.get(choice) if choice is not None else None
         if cell is not None and cell.solved:
             fallback_ok.add(i)
-        if i not in default_ok:
+        if cell is not None and cell.usd is not None:
+            fallback_spend += cell.usd
+        if decide(i):
             escalated.append(i)
+            if i in fallback_ok:
+                solved.add(i)
             if cell is None or cell.usd is None:
                 unpriced += 1
             else:
                 spend += cell.usd
-    ceiling_ok = default_ok | (fallback_ok & set(escalated))
+        elif i in default_ok:
+            solved.add(i)
     n = len(items)
-    flags = [(1 if i in ceiling_ok else 0, 1 if i in fallback_ok else 0) for i in items]
+    flags = [(1 if i in solved else 0, 1 if i in fallback_ok else 0) for i in items]
     point = sum(a - b for a, b in flags) / n if n else 0.0
     draws_out = []
     for _ in range(draws):
@@ -279,21 +334,18 @@ def escalation_ceiling(table: OutcomeTable, default_tier: str, fallback, *, item
         draws_out.append(sum(flags[k][0] - flags[k][1] for k in idx) / n)
     draws_out.sort()
     lo, hi = draws_out[int(draws * 0.025)], draws_out[int(draws * 0.975) - 1]
-    fallback_spend = 0.0
-    for i in items:
-        choice = fallback(i, table.features.get(i, {}))
-        cell = table.cells[i].get(choice) if choice is not None else None
-        if cell is not None and cell.usd is not None:
-            fallback_spend += cell.usd
     saving = fallback_spend - spend
-    out = {
+    esc = set(escalated)
+    return {
         "items": n,
         "default_tier": default_tier,
         "default_solved": len(default_ok),
         "fallback_solved": len(fallback_ok),
-        "ceiling_solved": len(ceiling_ok),
+        "solved": len(solved),
         "escalated": len(escalated),
         "escalation_rate": round(len(escalated) / n, 4) if n else None,
+        "escalated_though_right": len(esc & default_ok),
+        "kept_though_wrong": len([i for i in items if i not in esc and i not in default_ok]),
         "protected": sorted(default_ok - fallback_ok),
         "quality_gain": round(point, 4),
         "quality_gain_ci": (round(lo, 4), round(hi, 4)),
@@ -303,12 +355,4 @@ def escalation_ceiling(table: OutcomeTable, default_tier: str, fallback, *, item
         "unpriced_escalations": unpriced,
         "break_even_usd_per_item": (round(saving / n, 6) if n else None),
         "total_usd": None if default_usd_per_item is None else round(spend + default_usd_per_item * n, 6),
-        "reading": (
-            "Escalation is decided by the recorded outcome, so this is a ceiling and not a policy. The quality "
-            "gain interval excluding zero means a judge could win something; the protected set is what it has "
-            "to keep to win it, and those are the items where the default tier is right and the stronger "
-            "fallback is wrong. `total_usd` is None unless the default tier's amortised bill was passed in, "
-            "because the concurrency that decides it is a measurement rather than an assumption."
-        ),
     }
-    return out

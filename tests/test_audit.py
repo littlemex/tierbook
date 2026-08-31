@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from tierbook.audit import (  # noqa: E402
-    ACTIVE, SUPPRESSED, UNDECIDED, audit, escalation_ceiling, headroom,
+    ACTIVE, SUPPRESSED, UNDECIDED, audit, escalation_ceiling, escalation_outcome, headroom,
 )
 from tierbook.evidence import INCORRECT, SOLVED, EvidenceError  # noqa: E402
 from tierbook.optimise import single_tier  # noqa: E402
@@ -207,3 +207,53 @@ def test_an_unpriced_escalation_is_counted_not_charged_as_zero():
     c = escalation_ceiling(_table(spec), "box", single_tier("strong"))
     assert c["escalated"] == 5 and c["unpriced_escalations"] == 1
     assert c["api_spend_usd"] == pytest.approx(4.0), "four priced escalations, and the fifth is not free"
+
+
+def test_a_judge_is_scored_on_the_two_mistakes_that_cost_different_things():
+    """Escalating an item the box got right spends money and can lose the item; keeping a wrong one costs nothing.
+
+    So a judge tuned to minimise total error rate is optimising the wrong quantity, and this is the field that
+    says so: the same error count can be all of one kind or all of the other with different bills and different
+    solve counts.
+    """
+    spec, signals = {}, {}
+    for k in range(10):                       # box right, fallback wrong: escalating loses the item
+        spec[f"p{k}"] = {"box": (SOLVED, None), "strong": (INCORRECT, 1.0)}
+        signals[f"p{k}"] = {"long": k < 5}    # the judge escalates half of them
+    for k in range(10):                       # box wrong, fallback right: escalating earns the item
+        spec[f"e{k}"] = {"box": (INCORRECT, None), "strong": (SOLVED, 1.0)}
+        signals[f"e{k}"] = {"long": k < 6}    # the judge escalates six of ten
+
+    t = _table(spec)
+    judge = lambda _i, s: s.get("long", False)  # noqa: E731
+    r = escalation_outcome(t, "box", single_tier("strong"), judge, signals)
+
+    assert r["escalated"] == 11
+    assert r["escalated_though_right"] == 5, "five items given away to the weaker answer"
+    assert r["kept_though_wrong"] == 4, "four wrong answers kept, which costs nothing"
+    assert r["solved"] == 5 + 6, "the five protected items it kept, plus the six it escalated and won"
+    assert r["api_spend_usd"] == pytest.approx(11.0), "billed on every escalation, right or wrong"
+
+    ceiling = escalation_ceiling(t, "box", single_tier("strong"))
+    assert ceiling["ceiling_solved"] == 20 and r["solved"] < ceiling["ceiling_solved"]
+    assert len(ceiling["protected"]) == 10, "the judge kept five of the ten it had to keep"
+
+
+def test_the_judge_reads_signals_and_never_the_prior_feature_table():
+    """`features` is what is known before a tier is called; escalation signals are what its answer carried.
+
+    Kept as separate arguments so the licence to use post-answer information cannot leak into a policy that is
+    scored as though it had none.
+    """
+    spec = {f"i{k}": {"box": (INCORRECT, None), "strong": (SOLVED, 1.0)} for k in range(6)}
+    t = _table(spec, {f"i{k}": {"looks_hard": True} for k in range(6)})
+    seen = []
+
+    def judge(item_id, signals):
+        seen.append(signals)
+        return signals.get("ran_long", False)
+
+    r = escalation_outcome(t, "box", single_tier("strong"), judge,
+                           {f"i{k}": {"ran_long": k < 2} for k in range(6)})
+    assert r["escalated"] == 2 and r["solved"] == 2
+    assert all("looks_hard" not in s for s in seen), "the feature table is not handed to the judge"
