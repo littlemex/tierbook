@@ -281,3 +281,73 @@ Two things deliberately not in the family, so that neither can be added after se
 - **An item whose answer letter cannot be located.** 18 of 488 rows have no option letter in the stored head.
   They escalate unconditionally, which is the conservative choice and is registered here so it is not later
   reported as a tuning decision.
+
+## Addendum 5, 2026-08-31: the prefill probe is the judge, the verbose arm is dominated, and Gate 3 is registered on a fold nothing has answered
+
+Written before the frozen fold is collected. This closes the prefill line the owner asked for, and it turns out
+to be where the construction works.
+
+**The probe is the prefill.** A terse instruction makes the box name its option letter at the first generated
+token, whose distribution is computed from the prompt alone — so reading the margin there *is* reading the
+prefill, with no draft model, no hidden-state hook and no long generation. The registered k sweep was
+0/8/32/64/128/full; the end that worked is k ≈ 1.
+
+**And the probe judges the expensive arm better than the expensive arm judges itself.** On the calibration fold,
+the probe's margin predicts the verbose arm's errors at **AUC 0.705**, against the verbose arm's own
+answer-position margin at **0.668** — a four-token probe is a better judge of an 886-token answer than that
+answer's own confidence. The mechanism is visible in the numbers: after the model has written its reasoning, the
+letter that follows is determined by the text it just wrote, so its confidence there measures agreement with
+itself rather than correctness.
+
+**The verbose arm as a middle stage is dominated, measured rather than assumed.** Over a grid of both
+thresholds on the calibration fold, every point that matches the incumbent's quality has the verbose stage
+empty: when the probe is unsure, paying fifteen times the tokens for the box to explain itself is both dearer
+and less accurate than sending the item to an API tier. The middle stage only appears in the region where no API
+is used at all — 366 solved at 33% of the incumbent's cost — which is a different product.
+
+So the frontier is a two-stage one, and it is better than the point Gate 2c's fitting rule chose:
+
+| policy | solved / 488 | total cost | against the incumbent's $1.2659 |
+|---|---|---|---|
+| incumbent | 413 | $1.2659 | — |
+| **probe, escalate when margin < 3** | **412** | **$0.8849** | **70%, one item worse** |
+| probe, escalate when margin < 2 | 403 | $0.7383 | 58%, ten worse |
+| Gate 2c's fitted point, for comparison | 413 | $1.1853 | 94%, equal |
+
+Gate 2c is not being reinterpreted: it failed the arms it was registered against and its fitting rule —
+maximise solves subject to a budget — chose the expensive end of this same curve. What is new here is the rule,
+not the policy.
+
+### Gate 3, registered now
+
+**The frozen fold.** The `validation` fold at `--samples 400`, same seed, same salt, same seven categories:
+roughly 426 items, of which **no model's answer has ever been collected**. 75 of them were once passed through
+the router's intent classifier, which recorded a routing decision and no correctness, so nothing about which
+model solves what has been observed. The eight API tiers have never answered any of it either, so the incumbent's
+own figure will be measured on it for the first time alongside the policy's.
+
+**The policy, fixed:** the probe answers every item terse and greedy at temperature 0; its answer stands when
+the margin at its answer position is at least **θ = 3**; otherwise the item goes to the tier the incumbent's
+`category` map chooses. θ comes from the calibration fold by the rule **"the cheapest grid point whose solve
+count is within one item of the incumbent"**, over θ₁ ∈ {0.5, 1, 2, 3, 4, 6, 8, ∞} — stated so that the number
+is reproducible and not a choice made later.
+
+**Cost:** the probe's tokens at the measured $1.67/Mtok plus the API spend from the price table, reported also
+with the box's bill excluded so the two components are visible.
+
+**Pass** requires both, on one run, with no second fit:
+
+1. the paired lower bound of (policy − incumbent) on solve rate is **at or above −2 points**, and
+2. total cost is **at or below 85%** of the incumbent's on the same fold.
+
+**Fail** is a real outcome and closes the construction: the finding would be that a prefill-cheap judge reaches
+the incumbent's quality on the fold it was tuned on and not on a fold it has never seen.
+
+Registered limitations, so they are not offered afterwards as explanations:
+
+- **One run of a box that does not repeat.** The probe reproduces 92 to 96% of its answers between runs, worth
+  ±1.6 points on 488 items, which is why the quality bar is a lower bound at −2 points rather than an equality.
+- **The incumbent is measured on this fold for the first time**, so its 596-equivalent is not known in advance
+  and the comparison is paired per item rather than against a remembered number.
+- **No third stage, no second threshold, no reweighting.** If the frontier on the frozen fold looks different,
+  that is the result.
