@@ -228,3 +228,56 @@ Two conditions, both fixed now, and the arm is only worth carrying if it meets b
 
 If the lever closes, the next question is not another prompt. It is whether 31 items at parity is worth a
 machine, which is a question for the owner and not for a measurement.
+
+## Addendum 4, 2026-08-31: the terse arm lost its accuracy and found the judge
+
+Written before the development fold is looked at again. Two results from the calibration fold, in the order
+they arrived.
+
+**The terse arm fails its registered accuracy condition.** Told to answer with the option letter and not
+explain, the box gives 319 of 488 against the verbose arm's 353 — **65.4% against 72.3%, a 7.0 point drop
+against the 3 points allowed.** Its cost condition passes by an order of magnitude: a mean reply of 59 tokens
+against 895, a median of 4 against 681. So the lever is closed on its own terms: **the verbosity is the
+accuracy**, and cutting it to make the box cheap gives back more than it saves. Recorded, not reinterpreted.
+
+Worth stating because it is not a nested result: the two arms are not ordered. The verbose arm solves 83 items
+the terse one misses and the terse arm solves 49 the verbose one misses. The net is what fails the gate.
+
+**And the terse arm answered the question this construction has been stuck on since Gate 2.** Its answer letter
+arrives in the first few generated tokens, so the alternatives at that position are in the head that is stored.
+On the calibration fold, for predicting *the box's own error*:
+
+| signal | AUC |
+|---|---|
+| the margin between the chosen letter and the best other letter | **0.838** |
+| the chosen letter's own logprob | 0.824 |
+| entropy over the offered alternatives | 0.819 |
+| completion length (Gate 2's judge) | 0.529 |
+| an `e5` embedding of the prompt (the earlier attempt) | 0.62 |
+
+Median margin 0.688 when wrong against 5.000 when right. This is the first escalation signal on this corpus
+that is not close to a coin.
+
+### Gate 2c, registered now
+
+**Policy family:** the terse arm answers every item. Accept its answer when the margin at the answer position
+is at least θ; otherwise escalate to the incumbent router's own choice. **θ is the only fitted parameter and is
+fitted on the 488-item calibration fold**, choosing the point that maximises solves subject to total cost — API
+spend plus the box's own bill at the measured $1.67/Mtok — staying at or below the incumbent's $1.6523, ties to
+the larger θ.
+
+**Evaluated once on the 699-item development fold**, and this is the last look that fold gets.
+
+**Pass** on either arm, as in Addendum 2: more than 596 solved with the paired interval excluding zero at no
+more than the incumbent's cost; or at least 596 solved with the paired lower bound no worse than −0.5 points at
+no more than three quarters of it.
+
+Two things deliberately not in the family, so that neither can be added after seeing the result:
+
+- **The verbose arm as a middle stage.** A three-stage cascade — terse box, then verbose box, then API — is the
+  obvious shape and cannot be built yet: the verbose arm's answer arrives around token 680, past the eight
+  positions the record keeps, so there is no signal to escalate its misses on. Fixing that is a harness change
+  and a new registration, not an option available to this gate.
+- **An item whose answer letter cannot be located.** 18 of 488 rows have no option letter in the stored head.
+  They escalate unconditionally, which is the conservative choice and is registered here so it is not later
+  reported as a tuning decision.
