@@ -109,6 +109,61 @@ alone and 0.4700 for the category alone, and 7.3% below the no-item-information 
 One correction to the numbers above this section: the first fit of the probe-only model reported 0.4646, and that
 run was under-trained at 60 iterations. At 300 it is 0.4531. The ordering of the findings is unchanged.
 
+## Is "needs specialised knowledge" a third axis? It is the second axis, measured worse
+
+Asked 2026-09-01: would classifying items by how much specialised terminology they carry add anything?
+Three estimators of that were built and measured, and the answer is precise.
+
+**The axis is real, and it is the second dimension rather than a third.** At the category level the
+rare-word rate correlates with the second dimension at **r = −0.766** over seven categories: it runs from
+symbol-heavy general vocabulary at one end — mathematics, mean inverse document frequency 1.289, rare-word
+rate 0.077, the highest digit and symbol density — to specialised terminology at the other, health at 2.352
+and 0.218. "Knowledge required" is a fair name for what the second dimension is.
+
+**But every per-item estimator of it is too noisy to use.** Correlations with the second dimension, per item:
+
+| estimator | how it is computed | r with the second dimension |
+|---|---|---|
+| digit rate | from the text | +0.206 |
+| **prompt surprisal**, mean NLL | the box's own prefill, `prompt_logprobs` | +0.106 |
+| rate of tokens with NLL > 8 | same | +0.113 |
+| rare-word rate | corpus document frequency | −0.072 |
+| mean inverse document frequency | same | −0.088 |
+
+And in the predictor, on the same folds, adding them **costs** accuracy:
+
+| features for θ | d | log loss | AUC |
+|---|---|---|---|
+| **probe + category** | **2** | **0.4414** | **0.7653** |
+| probe + lexical knowledge features | 2 | 0.4562 | 0.7412 |
+| probe + category + lexical | 2 | 0.4475 | 0.7593 |
+| probe + prompt surprisal | 2 | 0.4555 | 0.7460 |
+| probe + category + surprisal | 2 | 0.4539 | 0.7567 |
+| surprisal alone | 2 | 0.4777 | 0.7003 |
+
+**The reason is sample size, not the idea.** A single question is one or two hundred words, which is far too
+little text to estimate its vocabulary's specialisation; the category label is the *same quantity pooled over
+about a hundred and seventy items*, so it has a fraction of the variance. The model-based measure is a better
+per-item estimator than word counting — surprisal reaches +0.106 where rare-word rate manages −0.072 — and it
+is still nowhere near enough.
+
+**Which means the fix is coarser pooling, not finer.** Learned clusterings of the item text were tried against
+the seven human categories, fitted on the calibration items only:
+
+| partition | buckets | log loss at d = 2 | AUC |
+|---|---|---|---|
+| **human category** | 7 | **0.4414** | **0.7653** |
+| tf-idf clusters | 7 | 0.4555 | 0.7391 |
+| tf-idf clusters | 15 | 0.4516 | 0.7554 |
+| tf-idf clusters | 30 | 0.4691 | 0.7360 |
+| tf-idf clusters | 60 | 0.4745 | 0.7306 |
+| category and 30 clusters together | 37 | 0.4573 | 0.7525 |
+
+Every learned partition loses to the seven human categories, and they get **monotonically worse as they get
+finer** — 488 calibration items over 7 buckets is seventy items each, over 30 buckets it is sixteen, and
+sixteen is where the estimate of the axis stops being worth having. So the productive version of this idea is
+a taxonomy with *more* items behind each bucket, not a more discriminating one.
+
 ## What this does not support
 
 **It does not say latent difficulty is useless in general.** It says that on a single-token multiple-choice
