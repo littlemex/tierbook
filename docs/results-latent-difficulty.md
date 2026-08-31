@@ -1,0 +1,91 @@
+# The box's hesitation is real in its layers and already in its output token: the latent signal loses by 0.033
+
+**Measured 2026-09-01** against [`PREREG-latent-difficulty.md`](PREREG-latent-difficulty.md). 2,364 questions
+captured in one forward pass each on the deployed FP8 checkpoint, 935 calibration and 1,429 development items
+graded by the same comparator the harness uses. Everything fitted on the calibration fold, one evaluation.
+
+**It fails the registered bar**, and the way it fails is informative rather than empty.
+
+## The measurement
+
+Predicting "this answer is wrong", AUC:
+
+| signal | where it lives | calibration (CV) | development |
+|---|---|---|---|
+| **entropy over the option letters** | token space | 0.8117 | **0.8424** |
+| margin between the top two letters — today's router | token space | 0.8047 | 0.8295 |
+| both together | token space | 0.8095 | 0.8386 |
+| linear probe on the last layer's hidden state | latent | 0.7605 | **0.8095** |
+| probe on seven layers concatenated | latent | 0.7436 | 0.8022 |
+| five hand-built trajectory features | latent | 0.7680 | 0.7914 |
+| **decision depth** — the layer after which the answer stops changing | latent | — | **0.6575** |
+| total residual-stream movement ("effort") | latent | — | 0.6516 |
+| how many times the leading letter changes | latent | — | 0.5363 |
+| margin at layer 30, mid-network | latent | — | 0.4801 |
+| token space **plus** the hidden-state probe | both | 0.8231 | 0.8461 |
+
+The registered condition was that the best latent signal beat the better token-space baseline by at least 0.03.
+It is **0.033 the other way**: 0.8095 against 0.8424. Adding the probe on top of the token-space pair buys
+**+0.0037**, which is a tenth of the bar and inside the noise of a box whose own answers move by ±1.6 points
+between runs.
+
+## What the shape of the result says
+
+**Your intuition is right about the phenomenon and wrong about where to read it.** Decision depth is a genuine
+signal — 0.6575 is far from a coin — and it is exactly the human-shaped quantity: on easy questions the answer
+is fixed early and stays; on hard ones the leading option is still changing near the top of the network. The
+median question settles at block 36 of 40, the easiest at 28, the hardest not until 40. So the model does have
+something like "I had to think about this one", and it is measurable.
+
+But it is **weaker than simply asking how spread out the final answer distribution is.** The probe's AUC rises
+monotonically with depth — 0.68 at layer 4, 0.73 at 16, 0.79 at 28, 0.81 at 40 — and peaks at the end. That is
+the explanation and the disappointment in one line: by the time the difficulty is linearly decodable from the
+hidden state, it has already been written into the output distribution, which anyone can read through an API for
+free. `Pando` reported the same shape for the logit lens (arXiv:2604.11061), and the late-forming confidence
+described in arXiv:2603.04464 is visible here as the dead mid-network layers — the margin at layer 30 is at
+0.4801, which is no signal at all.
+
+**Cross-layer aggregation did not rescue it.** `ProbeDirichlet` reports 16.7 to 18.9% relative gains from
+aggregating layers (arXiv:2602.11877); here concatenating seven layers scored *below* the last layer alone on
+both folds, which is what a 14,336-dimensional feature does against 935 training rows. That is a fair statement
+about this corpus and this budget, not about their method.
+
+## The byproduct is worth more than the experiment
+
+**Entropy over the ten option letters beats the top-two margin the router uses today: 0.8424 against 0.8295.**
+It costs nothing — the top-eight logprobs at the answer position are already recorded on every row, and the
+router already reads them. That is a free +0.013 to the one signal the whole construction rests on, and it is the
+only actionable finding here.
+
+It also makes sense of the failure. The margin throws away everything except the gap between the first two
+options; the entropy uses all ten. The latent state's advantage was supposed to be "more information than one
+scalar", and most of that advantage was available in token space by not collapsing to one scalar in the first
+place.
+
+## Two methodological findings, both worth keeping
+
+**Left padding silently changes this model's answers.** Thirty of its forty layers are Gated DeltaNet, which
+carries a recurrent state along the sequence, and leading pad tokens enter that state whatever the attention mask
+says. Batch-of-one agreed with the served engine on 8 of 8 items; left-padded batches of eight agreed on 77%.
+Padding on the right and reading each row at its own index is correct instead, because causality keeps the
+trailing pad out of the state. Anyone batching a hybrid-attention model for analysis will hit this.
+
+**The offline capture and the served engine agree exactly where the router acts.** Over 1,187 items they agree on
+77% of answers overall, but on **98.4% of the items whose margin clears the router's threshold**, and the
+disagreements sit at a median margin of 0.12. The two engines differ only where the model is undecided. That is
+reassuring for the deployment and awkward for this study, which is about the undecided region — so the capture
+grades its own answers rather than borrowing the served run's labels.
+
+## What this does not support
+
+**It does not say latent difficulty is useless in general.** It says that on a single-token multiple-choice
+answer, where the whole decision is one position and the output distribution is fully observable, the output
+distribution already carries it. The case that would differ is the one this project cares about most: long
+agentic work, where there is no single answer position, no clean distribution to read, and the interesting
+hesitation is spread over hundreds of steps. Nothing here tests that.
+
+**No claim is made about the deployed router from this capture.** It ran in `transformers` on the same FP8
+checkpoint but different kernels and no tensor parallelism, and the answers diverge in the low-margin region.
+
+**The line is closed as registered.** The next router change is the entropy substitution, in token space, with
+its own registration — not a hidden-state probe.
