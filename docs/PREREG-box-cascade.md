@@ -141,3 +141,56 @@ not a second threshold family on the same fold.
 The order in the main document is unchanged in intent: this judge is free, and running it before the capacity
 load test only reorders two measurements neither of which can affect the other's result. If Gate 2 fails there
 is nothing for the capacity number to rescue.
+
+## Addendum 2, 2026-08-31: a correction to Gate 1's cost column, and the generation cap as the registered Gate 2b
+
+Written before any Gate 2b figure is computed. Two things forced this: Gate 2's judge failed, and the capacity
+number Gate 1 said was unmeasured turns out to have been measured a week earlier, in
+`serving/models/qwen3.8-27b/profiles.env`, on this box at the 262k window with 128-token replies.
+
+**The correction.** Gate 1 quoted the box's amortised cost as $0.00839 per item at concurrency 1 falling to
+$0.00052 at 16. That second figure came from dividing a per-item latency by a concurrency, which is the exact
+arithmetic this project has already been burned by. Against the measured throughput table the box never gets
+there:
+
+| in flight | measured output tok/s | $/item, token-bound | $/item, request-bound |
+|---|---|---|---|
+| 16 | 306.7 | $0.003011 | $0.001764 |
+| 48 — the measured knee | 395.7 | $0.002334 | $0.001367 |
+| 96 | 423.4 | $0.002181 | $0.001278 |
+
+Token-bound prices the box's own output at the measured rate and assumes the recorded mean of 218.5 output
+tokens an item; request-bound assumes the box's cost is per request at the rate the measured 128-token replies
+imply, which is the right model when replies are short and the prefill dominates. Break-even from Gate 1 is
+**$0.001234 an item**. Under both accountings, at every measured concurrency, **the box's own bill exceeds the
+API saving even with a perfect judge.** Gate 1's quality result stands; its cost column was too kind, and the
+oracle construction as measured loses money.
+
+**What is left, and it is not a better classifier.** The box's bill is dominated by a tail it does not need to
+generate: the median reply is 4 tokens, the mean is 218.5, and the 95th percentile is 2005 against a 2048 cap.
+Capping generation attacks the only term that can move, and the capped items are the ones Gate 2 already showed
+are 91% wrong. So the registered Gate 2b is the owner's original question — how far to let the box generate —
+with cost as the objective rather than accuracy:
+
+**Policy family:** the box generates at most `k` tokens. If it produced an answer within `k`, that answer stands;
+otherwise the item escalates to the incumbent's choice. This is computable from the recorded run without a GPU:
+an item whose recorded completion was at most `k` is unaffected, and one that ran longer had no answer at `k`.
+
+**Cost, reported under both accountings and never one:** API spend on escalated items, plus the box's bill from
+`sum(min(completion_tokens, k))` at the measured token rate, and separately plus a flat per-request box cost at
+the measured knee. A conclusion that holds under one and not the other is reported as undecided.
+
+**`k` is fitted on the 488-item calibration fold** over `k` in {4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048},
+choosing the point that maximises solves subject to total cost at or below the incumbent's, ties to the smaller
+`k`. **Evaluated once on the 699-item development fold.**
+
+**Pass** on either arm, both registered now so neither is chosen after the fact:
+
+1. more than 596 solved with the paired interval excluding zero, and total cost at or below $1.6523; or
+2. at least 596 solved with the paired lower bound no worse than −0.5 points, and total cost at or below
+   **$1.2392**, which is three quarters of the incumbent's. Same quality materially cheaper is a win, and
+   saying so in advance stops it from becoming a consolation prize discovered afterwards.
+
+**The development fold has now been looked at three times.** Its numbers are no longer a claim about anything;
+they select. The claim requires Gate 3 on the frozen fold, and if Gate 2b passes, the frozen fold is carved
+before anything else is measured.
