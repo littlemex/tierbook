@@ -200,3 +200,57 @@ component holds 14 to 21% of the variance and Loevinger's H is **lower** than it
 mathematics 0.4431, engineering 0.5829, law 0.5919, against 0.6375 overall. A lower H means the candidate
 ordering depends *more* on the item. A single-domain tenant therefore has more to gain from per-item routing
 than the mixed benchmark suggests, provided they supply a partition and about a hundred and forty labels.
+
+## The noise floor was measured, and it reverses the structural verdict
+
+Added 2026-09-01. Every structural number above carried the caveat that the API tiers' run-to-run flip rate
+was unmeasured. It has now been measured — 137 calibration items re-run on all eight tiers at the same
+configuration, $4.60 — and it changes the answer rather than qualifying it.
+
+| tier | items | run 1 | run 2 | flips | flip rate | 95% interval |
+|---|---|---|---|---|---|---|
+| `claude-fable-5` | 137 | 119 | 121 | 4 | 2.9% | [0.1%, 5.7%] |
+| `claude-opus-5` | 137 | 113 | 116 | 5 | 3.6% | [0.5%, 6.8%] |
+| `claude-sonnet-5` | 137 | 111 | 112 | 7 | 5.1% | [1.4%, 8.8%] |
+| `gpt-5.6-terra` | 137 | 108 | 111 | 7 | 5.1% | [1.4%, 8.8%] |
+| `gpt-5.6-sol` | 137 | 114 | 115 | 9 | 6.6% | [2.4%, 10.7%] |
+| `grok-4.6` | 118 | 104 | 95 | 11 | 9.3% | [4.1%, 14.6%] |
+| `qwen3-next-80b` | 137 | 84 | 84 | 14 | 10.2% | [5.1%, 15.3%] |
+| **`nemotron-super-3-120b`** | 130 | 65 | 66 | **29** | **22.3%** | [15.2%, 29.5%] |
+
+**Pooled, 8.0%** — the same figure as the box's long-form arm. And it is ordered: the strongest tiers are the
+most reproducible, the weakest is a fifth of its own answers away from itself, which is what sitting near a
+decision boundary on many items looks like.
+
+Subtracting the violations that these rates alone produce, using a first-order independent-flip model:
+
+| | uncorrected | noise-corrected |
+|---|---|---|
+| Loevinger's H, knowledge pool | 0.6375 | **0.9743** |
+| weakest pair, `qwen3.8-27b` against `qwen3-next-80b` | H_ij 0.417, 157 violations | H_ij 0.758, 65 left of 157 |
+| a cheaper candidate beating a dearer one | up to 3.2% of items | **0.0% for five of six pairs; 0.2% for the sixth** |
+
+**So "the knowledge pool has specialisation" was an artefact of single-run measurement.** Corrected, both
+families this project has are ability ladders — 0.974 and 1.000 — and the price-relevant asymmetry that would
+have justified per-item specialisation routing is accounted for by flips.
+
+Three consequences, and the first two are the point of building the mechanism this way.
+
+**The verdict statistic did its job.** It said "route" before the noise floor existed and "this is a ladder"
+after, on the same data, because the correction is part of the statistic rather than a caveat attached to it. A
+mechanism that had skipped the floor would have shipped a specialisation router that had nothing to exploit.
+
+**And the mechanism's own recommendation is unchanged**, which is the reassuring part: difficulty routing under
+a cost constraint works on a ladder, and that is what the surviving router does — a cheap probe, a threshold,
+escalation. Every learned router in this project failed to beat the incumbent's *quality* and several beat its
+*cost*, and that is exactly the signature of a ladder.
+
+**The category feature's value is not refuted.** It improved the predictor's log loss from 0.4531 to 0.4414,
+and that measurement stands: knowing the domain helps predict *difficulty* per candidate even when there is no
+specialisation to exploit. What is refuted is the stronger claim that the domain identifies items where a
+cheaper candidate should be preferred on capability grounds.
+
+**Limits of the correction itself.** The flip rates come from 137 items with wide intervals — nemotron's is
+[15.2%, 29.5%] — and the model assumes flips are independent across candidates and items, which they are not:
+hard items flip more. So the honest range for H is 0.64 to 0.97 depending on how much of the violation mass is
+noise, and 0.97 is the best estimate rather than a bound. The direction is not in doubt; the exact value is.
