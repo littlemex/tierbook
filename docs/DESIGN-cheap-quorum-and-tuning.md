@@ -196,6 +196,54 @@ asked for; only one of them catches this. The mechanism found in one run, at no 
 error that three rounds of adversarial review over the same numbers did not — because the reviewers
 were reviewing the analysis and the optimiser was enumerating the alternatives.
 
+## 3c. All three mechanisms on one frontier, and none of them dominates
+
+Added 2026-09-01, after 3b. A frontier that cannot express a mechanism cannot rule it out either, and
+3b's error was exactly that: the quorum was compared against a probe threshold and against the dear
+tier answering everything, while a single candidate answering everything was never enumerated. So the
+optimiser now enumerates all three shapes and ranks them together — 1,620 policies over nine
+candidates on the frozen fold, at no measurement cost.
+
+A **signal** policy is strictly more expressive than a one-member quorum and had to be added for that
+reason: a lone candidate always agrees with itself and so can never escalate, whereas a threshold
+escalates exactly the items the signal flags. Reading the signal is charged at $0.00024, and an item
+with no reading escalates rather than defaulting to confident — defaulting the other way sends
+unmeasured items to the cheap tier, which is the direction that flatters the policy.
+
+The frontier, one row per mechanism that owns a region:
+
+| region | mechanism | policy | accuracy | cost per item |
+|---|---|---|---|---|
+| cheapest | single | the box, escalation never fires | 66.7% | $0.00010 |
+| cheap | quorum | box + `nemotron-super-3-120b` → `gpt-5.6-terra` | 81.1% | $0.00154 |
+| cheap | quorum | box + two cheap APIs → `grok-4.6` | 87.0% | $0.00258 |
+| **middle** | **single** | **`grok-4.6` answering everything** | **89.7%** | **$0.00333** |
+| upper | signal | the box, escalating the 80% of items its probe flags → `claude-opus-5` | 91.4% | $0.00571 |
+| upper | single | `claude-opus-5` answering everything | 92.4% | $0.00593 |
+| top | quorum | `claude-sonnet-5` + two cheap APIs → `claude-opus-5` | 92.7% | $0.00708 |
+| top | single | `claude-opus-5` + `grok-4.6` → `claude-fable-5` | 93.4% | $0.01138 |
+
+**Fourteen frontier points are single candidates, nine are quorums, five are signal thresholds.** So
+the answer to "which mechanism should the router use" is: *it depends on the accuracy you need*, and
+the mechanism's job is to say which one at which floor rather than to have a favourite.
+
+Three readings worth keeping.
+
+**A single mid-priced candidate owns the middle outright.** From $0.00258 to $0.00510 nothing beats
+`grok-4.6` answering everything, and that band is where most of the interesting operating points sit.
+Any construction proposed in that region has to beat 89.7% at $0.00333 or it is not a candidate.
+
+**The incumbent probe router is on the frontier, at one point, and it is a high-escalation one.** Its
+best surviving configuration escalates **80%** of items — the box handles only a fifth — reaching
+91.4% at $0.00571, which beats the best quorum at the same cost by 0.6 points. That is a real result
+for the probe and a narrow one: the signal earns its place only where you want more accuracy than any
+single candidate below `claude-opus-5` delivers, and it earns it by mostly getting out of the way.
+
+**The machinery's own sanity check passes.** `box → opus, escalating 100%` scores 92.4% at $0.00627
+against `opus alone` at 92.4% for $0.00593: identical accuracy, dearer by exactly the wasted box
+call, and correctly excluded from the frontier. A pricing bug would have shown up here as the
+degenerate policy winning.
+
 ## 4. Abstention: the tail is four different things and only one of them is routing
 
 The 51 items nobody solves carry 54.8% of the cascade bill. Both reviews independently said not to build a

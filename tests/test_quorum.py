@@ -235,3 +235,87 @@ def test_an_unobserved_cell_is_an_absent_answer():
     assert stopped == []
     assert escalated == ["i1"]
     assert Cell(UNOBSERVED, None).answer is None
+
+
+# --- the third mechanism, on the same frontier ----------------------------------------------------
+
+def test_a_signal_policy_can_escalate_where_a_one_member_quorum_cannot():
+    """This is why the signal shape has to exist: it is strictly more expressive.
+
+    One candidate always agrees with itself, so a one-member quorum never escalates and is stuck at
+    that candidate's accuracy. A threshold escalates exactly the items the signal flags, so the same
+    candidate plus a usable signal can reach past its own ceiling.
+    """
+    rows, signal = {}, {}
+    for n in range(40):
+        wrong = n % 4 == 3
+        rows[f"i{n}"] = {"a": (INCORRECT if wrong else SOLVED, "C" if wrong else "B", 1.0),
+                         "dear": (SOLVED, "B", 10.0)}
+        # A perfect signal: high exactly on the items `a` gets wrong.
+        signal[f"i{n}"] = 1.0 if wrong else 0.0
+    t = _table(rows)
+
+    from tierbook.quorum import evaluate_signal
+    quorum_alone = evaluate(t, ("a",), "dear")
+    with_signal = evaluate_signal(t, "a", "dear", signal=signal, threshold=0.5)
+
+    assert quorum_alone.accuracy == 0.75, "no escalation is possible, so a's own accuracy is the ceiling"
+    assert with_signal.accuracy == 1.0, "the threshold sends exactly the items a gets wrong"
+    assert with_signal.stopped == 30
+    assert with_signal.mechanism == "signal" and quorum_alone.mechanism == "single"
+
+
+def test_an_item_with_no_signal_reading_escalates():
+    """Defaulting a missing reading to 'confident' sends unmeasured items to the cheap tier, which is
+    the direction that flatters the policy. So absence escalates, as it does in a quorum.
+    """
+    from tierbook.quorum import evaluate_signal
+    t = _table({
+        "read":   {"a": (INCORRECT, "C", 1.0), "dear": (SOLVED, "B", 10.0)},
+        "unread": {"a": (INCORRECT, "C", 1.0), "dear": (SOLVED, "B", 10.0)},
+    })
+    p = evaluate_signal(t, "a", "dear", signal={"read": 0.0}, threshold=0.5)
+    assert p.stopped == 1, "the item with no reading escalated"
+    assert p.accuracy == 0.5
+
+
+def test_reading_the_signal_is_not_free():
+    from tierbook.quorum import evaluate_signal
+    t = _table({"i1": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 10.0)}})
+    free = evaluate_signal(t, "a", "dear", signal={"i1": 0.0}, threshold=0.5)
+    paid = evaluate_signal(t, "a", "dear", signal={"i1": 0.0}, threshold=0.5, probe_usd=0.25)
+    assert paid.usd_per_item == free.usd_per_item + 0.25
+
+
+def test_all_three_mechanisms_are_ranked_on_one_frontier():
+    """A frontier that cannot express a mechanism cannot rule it out either.
+
+    This encodes the comparison error the module was extended to prevent: a quorum was recommended
+    after being compared only against a probe threshold and against the dear tier answering
+    everything, while a single candidate answering everything dominated it and was never enumerated.
+    """
+    from tierbook.quorum import enumerate_signal_policies
+    rows, signal = {}, {}
+    for n in range(60):
+        a_wrong, b_wrong = n % 3 == 0, n % 5 == 0
+        rows[f"i{n}"] = {
+            "a": (INCORRECT if a_wrong else SOLVED, "C" if a_wrong else "B", 1.0),
+            "b": (INCORRECT if b_wrong else SOLVED, "D" if b_wrong else "B", 2.0),
+            "dear": (SOLVED, "B", 20.0),
+        }
+        signal[f"i{n}"] = 1.0 if a_wrong else 0.0
+    t = _table(rows)
+
+    everything = (enumerate_policies(t, candidates=["a", "b"], escalate_to=["a", "b", "dear"],
+                                     min_stopped=10)
+                  + enumerate_signal_policies(t, candidates=["a", "b"], escalate_to=["dear"],
+                                              signal=signal))
+    front = frontier(everything)
+    assert front, "some policy must survive"
+    mechanisms = {p.mechanism for p in front}
+    assert "single" in mechanisms, "a single candidate answering everything is a policy"
+    assert "signal" in mechanisms, "a perfect signal must appear; it reaches 100% cheaply"
+    # And the frontier is a frontier: nothing on it is beaten on both axes.
+    for p in front:
+        assert not any(q is not p and q.accuracy >= p.accuracy and q.usd_per_item < p.usd_per_item
+                       for q in front)

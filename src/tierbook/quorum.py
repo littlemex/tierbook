@@ -65,6 +65,16 @@ class QuorumPolicy:
     solved: int                           # items the policy got right, over `items`
     solved_when_stopped: int              # of `stopped`, how many the agreed answer got right
     usd_per_item: float | None            # None when any needed cell is unpriced
+    # Set on a signal-threshold policy, `None` on a quorum. Both shapes live in one dataclass so one
+    # frontier can rank them against each other; the field is what tells a reader which mechanism a
+    # frontier point came from.
+    signal_threshold: float | None = None
+
+    @property
+    def mechanism(self) -> str:
+        if self.signal_threshold is not None:
+            return "signal"
+        return "single" if len(self.members) == 1 else "quorum"
 
     @property
     def stop_rate(self) -> float:
@@ -175,6 +185,100 @@ def enumerate_policies(table: OutcomeTable, *, candidates: list[str], escalate_t
                 if policy.stopped < min_stopped and policy.stopped != policy.items:
                     continue
                 out.append(policy)
+    return out
+
+
+def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
+                    signal: dict[str, float], threshold: float,
+                    probe_usd: float = 0.0,
+                    prices: dict[str, float] | None = None,
+                    items: list[str] | None = None) -> QuorumPolicy:
+    """One candidate answers; a per-item confidence signal decides whether to escalate.
+
+    This is the third mechanism, and it exists here rather than in its own module so that all three
+    end up on **one** frontier. Leaving it out is how a comparison error survives: a quorum was once
+    reported as the recommended policy after being measured only against a probe threshold and against
+    the frontier tier answering everything, while a single mid-priced candidate answering everything
+    dominated it on both axes and was never enumerated. A frontier that cannot express a mechanism
+    cannot rule it out either.
+
+    A signal policy is strictly more expressive than a one-member quorum: a lone candidate always
+    "agrees" with itself and so can never escalate, whereas a threshold escalates exactly the items
+    the signal flags. `threshold` escalates when `signal[item] >= threshold`, so the signal is an
+    uncertainty (higher means less sure); `probe_usd` is what reading it costs per item, which is not
+    zero when the signal comes from an extra call.
+    """
+    subject = list(items if items is not None else table.items)
+
+    def cost_of(item: str, tier: str) -> float | None:
+        if prices is not None:
+            return prices.get(tier)
+        return _cell(table, item, tier).usd
+
+    kept, escalated = [], []
+    for item in subject:
+        value = signal.get(item)
+        # An item with no signal reading escalates, for the same reason an absent answer breaks a
+        # quorum: an unread signal is not a confident one, and defaulting it to "sure" would send the
+        # unmeasured items to the cheap tier, which is the direction that flatters the policy.
+        if value is None or value >= threshold:
+            escalated.append(item)
+        else:
+            kept.append(item)
+
+    total, unpriced = 0.0, False
+    for item in subject:
+        usd = cost_of(item, member)
+        if usd is None:
+            unpriced = True
+        else:
+            total += usd + probe_usd
+    for item in escalated:
+        usd = cost_of(item, escalate_to)
+        if usd is None:
+            unpriced = True
+        else:
+            total += usd
+
+    right_kept = sum(1 for i in kept if _cell(table, i, member).solved)
+    right_escalated = sum(1 for i in escalated if _cell(table, i, escalate_to).solved)
+    return QuorumPolicy(
+        members=(member,),
+        escalate_to=escalate_to,
+        items=len(subject),
+        stopped=len(kept),
+        solved=right_kept + right_escalated,
+        solved_when_stopped=right_kept,
+        usd_per_item=None if unpriced or not subject else total / len(subject),
+        signal_threshold=threshold,
+    )
+
+
+def enumerate_signal_policies(table: OutcomeTable, *, candidates: list[str], escalate_to: list[str],
+                              signal: dict[str, float], quantiles: tuple[float, ...] = (
+                                  0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                              probe_usd: float = 0.0, prices: dict[str, float] | None = None,
+                              items: list[str] | None = None) -> list[QuorumPolicy]:
+    """Threshold policies at quantiles of the signal, so the sweep does not depend on its units.
+
+    Quantiles rather than raw values because a signal's scale is arbitrary -- an entropy, a margin and
+    a predicted probability have no common range -- and a sweep in raw units silently spends most of
+    its points in a region no item occupies.
+    """
+    subject = list(items if items is not None else table.items)
+    values = sorted(v for v in (signal.get(i) for i in subject) if v is not None)
+    if not values:
+        return []
+    out = []
+    for q in quantiles:
+        idx = min(len(values) - 1, int(q * len(values)))
+        thr = values[idx] if q < 1.0 else values[-1] + 1.0
+        for member in candidates:
+            for tier in escalate_to:
+                if tier == member:
+                    continue
+                out.append(evaluate_signal(table, member, tier, signal=signal, threshold=thr,
+                                           probe_usd=probe_usd, prices=prices, items=items))
     return out
 
 
