@@ -313,6 +313,57 @@ Fixed, and pinned by a test. The direction is the point: the error inflated the 
 is the direction an author's own instrumentation errs in, and the absurd number is the only reason it
 was caught in one run rather than becoming the headline.
 
+## 4c. The cascade's own history cannot drive the stopping rule, and the proof is an exact 0.5
+
+Added 2026-09-01. Section 4b said the rule needed the item model's posterior rather than a failure
+count, so `tierbook.latent_ability` fits one: a one-dimensional item-response model,
+`P(m solves i) = sigmoid(b_m - a_m * theta_i)`, on a grid over `theta` so the posterior after observed
+failures is available in closed form and the bound can be a quantile of it. Candidate parameters are
+fitted on the calibration fold and the rule is evaluated on the frozen fold; `theta` never leaks,
+because at request time the rule reads `p(theta | the failures in this cascade)` starting from the
+prior.
+
+**It improves the rule and still cannot clear a 5% cap.** The best positive-saving point saves 16.5%
+of the frozen fold's bill and gives up 33% of the work it abandons.
+
+**And then the reason turned out to be exact rather than approximate.** At the moment the decision
+matters — every cheap tier has failed and the question is whether to call the dearest one or stop —
+there are 31 such items, 3 of which the dearest tier solves. Asking the posterior to separate them:
+
+| discriminating between "the dear tier will solve it" and "it will not" | AUC |
+|---|---|
+| posterior mean of `P(dear solves)` | **0.5000** |
+| upper bound of `P(dear solves)` | **0.5000** |
+
+Not approximately a coin. **Exactly** one, and the mean predicted probability is 0.166 in both groups
+to three decimals. The reason is that the conditioning set is *identical* for all 31 items — the same
+eight failures — so the posterior is the same distribution and `p_next` is the same number. A rule
+whose only evidence is which tiers failed assigns one value to every item in that state, by
+construction.
+
+**So in this evidence class the rule is not a learned rule at all; it is a fixed abandonment depth.**
+That collapses the design space to nine points, and they are all measurable:
+
+| abandon when this many cheapest tiers have failed | accuracy | bill saved | of the abandoned, share that were solvable |
+|---|---|---|---|
+| never | 96.0% | — | — |
+| **all 8** | **95.6%** | **24.4%** | **9.7%** |
+| all 7 | 95.4% | 36.0% | 12.5% |
+| all 6 | 94.6% | 52.1% | 26.3% |
+| all 4 | 92.7% | 69.7% | 45.1% |
+| all 2 | 74.0% | 96.0% | 84.6% |
+
+**The usable operating point is the deepest one: 24.4% of the bill for 0.4 accuracy points, giving up
+9.7% of the work it abandons.** That fails a 5% cap and passes a 10% one, so whether it ships is the
+owner's cap and not a modelling question — which is the right place for that decision to sit.
+
+**What this closes and what it opens.** It closes the idea that a cascade can learn when to give up
+from its own history: the history is a constant where the decision is, and the ladder structure
+measured earlier is why — closely spaced rungs mean early failures cannot identify what the top rung
+will also fail. It opens exactly one avenue, the one the design already registered: evidence from the
+**item**, through `theta` regressed from cheap features, since that is the only quantity that differs
+between the 3 rescuable items and the 28 hopeless ones at the moment of the decision.
+
 ## 5. The box-tuning experiment
 
 **The ceiling is known and it is modest.** All-API costs $2.6289 over these items; today's box saves 11.3%; a box
