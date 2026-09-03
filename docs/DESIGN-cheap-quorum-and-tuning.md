@@ -88,7 +88,9 @@ visible in the noise floor measured earlier — these tiers flip 3.6% and 5.1% o
 runs, which is the same size as the effects being chased. **A single fold cannot see a 3-point effect here, and
 the pre-registration is the only reason this was caught rather than shipped.**
 
-What survives is section 2's stopping rule, and it survives well: **89.2% at 74% of the frontier tier's cost.**
+What survives is section 2's stopping rule, and it survives well against the *probe*: **89.2% at 74% of the
+frontier tier's cost.** Section 3b, written after this one, shows that surviving against the probe is not the
+same as being the right policy, and that a single mid-priced candidate dominates this point.
 
 The rest of this section is what the calibration fold showed and how it failed, kept because the failure is the
 finding.
@@ -144,6 +146,55 @@ merely annoy:
   `finish_reason` cannot see this.
 - The streaming path **emits no usage block** even when `stream_options.include_usage` is set, so a streamed call
   cannot be costed from its own response. The rows affected here are priced at the arm's median instead.
+
+## 3b. The optimiser was built, and its first act was to overturn section 3
+
+Added 2026-09-01, after section 3's conclusion was written. `tierbook.quorum` enumerates every policy
+— every subset of candidates as the quorum, every candidate as the escalation tier — prices each one
+against a rate card, and returns the ones nothing dominates. Run on the same frozen fold, it reproduces
+the reported point exactly (51% stop, 90.3% accuracy on agreement, 89.2% overall, $0.00441), and then
+says the point should not have been reported:
+
+| policy | accuracy | cost per item |
+|---|---|---|
+| what section 3 recommends: three cheap candidates, escalating to `claude-opus-5` | 89.2% | $0.00441 |
+| **`grok-4.6` answering everything** | **89.7%** | **$0.00333** |
+
+**A single mid-priced candidate is more accurate and 24% cheaper than the whole construction.** It
+dominates on both axes, so no quality floor and no rate card in this family prefers the quorum there.
+
+The reason the earlier sections missed it is worth naming, because it is a comparison error and not a
+measurement error. Every table above fixes `claude-opus-5` as the thing to beat and asks how cheaply
+its accuracy can be approached. Nobody asked the other question — **which single candidate is cheapest
+at a given accuracy** — even though `optimise.single_tier` has existed in this repository the whole
+time. Choosing the baseline is choosing the answer, and one baseline was chosen and never revisited.
+
+The full frontier over nine candidates at this rate card, and it is mostly single candidates:
+
+| policy | stop | accuracy | cost per item |
+|---|---|---|---|
+| `gpt-5.6-terra` alone | 100% | 85.0% | $0.00251 |
+| `claude-sonnet-5` alone | 98% | 87.2% | $0.00322 |
+| **`grok-4.6` alone** | 99% | **89.7%** | **$0.00333** |
+| `claude-opus-5` alone | 100% | 92.4% | $0.00593 |
+| `claude-sonnet-5` + `nemotron-super-3-120b` + `qwen3-next-80b`, escalating to `claude-opus-5` | 51% | **92.7%** | $0.00708 |
+| `claude-opus-5` + `grok-4.6`, escalating to `claude-fable-5` | 90% | 93.4% | $0.01138 |
+
+**Where the quorum does earn its place is above the best single candidate, not below it.** 92.7% is
+higher than anything one candidate reaches here, and it costs 19% more than `claude-opus-5` alone to
+get 0.3 points — which is inside these tiers' own 3.6% to 5.1% run-to-run flip rate, so it is not a
+difference this fold can resolve. The two quorum points at the cheap end (81% and 87%) are real and
+are the only place the rule is clearly the right tool.
+
+**What stands from section 3, and what does not.** The measurement that agreement beats the box's own
+prefill probe at equal cost stands: those are two escalation *signals* compared against each other,
+and the quorum won. What does not stand is the implied conclusion that the resulting policy is what to
+ship. Comparing two signals says which signal is better; it does not say a signal is needed.
+
+**And this is the argument for building the mechanism rather than reporting the optimum.** Both were
+asked for; only one of them catches this. The mechanism found in one run, at no measurement cost, an
+error that three rounds of adversarial review over the same numbers did not — because the reviewers
+were reviewing the analysis and the optimiser was enumerating the alternatives.
 
 ## 4. Abstention: the tail is four different things and only one of them is routing
 

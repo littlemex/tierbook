@@ -55,6 +55,18 @@ class Cell:
     state: str
     usd: float | None                     # None means unpriced, which is NOT zero
     seconds: float | None = None
+    # The answer's identity, as the grader extracted it. `None` means it was not
+    # recorded, or the reply did not parse into one -- and those are the same thing
+    # to a rule that reads agreement, because neither can be shown to match another
+    # candidate's answer.
+    #
+    # This cannot be derived from `state`. Two candidates that are both INCORRECT
+    # may have given the same wrong answer or two different ones, and that
+    # distinction is the entire content of an agreement signal: unanimity among
+    # cheap candidates is a certificate worth stopping on, and unanimity that the
+    # grader rejects is a certificate that the answer key is wrong. Correctness
+    # alone can express neither.
+    answer: str | None = None
 
     @property
     def solved(self) -> bool:
