@@ -154,6 +154,75 @@ def fit_bucket_policy(table: OutcomeTable, calibration: list[str], *, feature: s
     }
 
 
+def assign_by_price_of_quality(probabilities, costs: dict, lam: float, *, allowed: list[str] | None = None):
+    """Per item, take the candidate maximising `p - lam * cost`. `lam` is the price the owner puts on a solve.
+
+    This is the whole optimisation, and it is one line because the problem separates. Maximising expected solves
+    subject to a total budget is a Lagrangian relaxation whose per-item solution is exactly this argmax, so
+    sweeping `lam` traces the entire achievable frontier without ever solving a knapsack.
+
+    It replaces a margin rule that was losing badly and deserves an explanation, because the failure is
+    instructive. The margin rule picked the cheapest candidate whose predicted probability came within a margin
+    of the best predicted probability -- which throws the cost *magnitudes* away and keeps only their order. On
+    the corpus here that collapsed to between one and four distinct choices out of nine and lost to a policy
+    built on a single categorical feature. `lam` has units: dollars per expected solve. A margin does not.
+
+    The other reason to prefer it: `lam` is the number the owner actually has an opinion about. "I will pay up
+    to this much for one more correct answer" is a sentence an owner can say; "route within 0.05 of the best
+    predicted probability" is not.
+    """
+    def pick(item_id: str, features: dict):
+        probs = probabilities(item_id, features)
+        if not probs:
+            return REFUSE
+        cands = [c for c in probs if c in costs and (allowed is None or c in allowed)]
+        if not cands:
+            return REFUSE
+        return max(cands, key=lambda c: probs[c] - lam * costs[c])
+    return pick
+
+
+def sweep_price_of_quality(table: OutcomeTable, probabilities, costs: dict, items: list[str], *,
+                           lambdas: tuple[float, ...] | None = None,
+                           allowed: list[str] | None = None) -> list[dict]:
+    """Trace the frontier by sweeping `lam`, and mark the points nothing else dominates.
+
+    Returned rather than reduced to one answer, because which point to take is the owner's decision and this
+    module's job is to show what is available. The `lam` that produced each row travels with it so a chosen
+    operating point can be reproduced and audited.
+    """
+    if lambdas is None:
+        # Spaced by decade over the range where a dollar per solve is plausible, plus the two extremes: lam = 0
+        # is "quality at any price" and a very large lam is "cheapest regardless".
+        lambdas = (0.0, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0, 100000.0)
+    rows = []
+    for lam in lambdas:
+        pick = assign_by_price_of_quality(probabilities, costs, lam, allowed=allowed)
+        r = table.evaluate(pick, items)
+        r["lambda"] = lam
+        r["distinct_choices"] = len({pick(i, table.features.get(i, {})) for i in items})
+        rows.append(r)
+    for r in rows:
+        r["dominated_by"] = [
+            o["lambda"] for o in rows
+            if o is not r and o["solved"] >= r["solved"] and o["spend_usd"] <= r["spend_usd"]
+            and (o["solved"] > r["solved"] or o["spend_usd"] < r["spend_usd"])
+        ]
+        r["on_frontier"] = not r["dominated_by"]
+    return sorted(rows, key=lambda r: (r["spend_usd"], -r["solved"]))
+
+
+def lambda_for_budget(rows: list[dict], max_spend: float) -> float | None:
+    """The `lam` whose frontier point spends no more than the owner's budget and solves the most.
+
+    Chosen on the calibration fold and then applied unchanged to the held-out one. Choosing it on the fold that
+    reports the result would be fitting the operating point to the judge.
+    """
+    ok = [r for r in rows if r["spend_usd"] <= max_spend]
+    if not ok:
+        return None
+    return max(ok, key=lambda r: r["solved"])["lambda"]
+
 def verdict(table: OutcomeTable, candidate, baseline, holdout: list[str], *,
             constraints: Constraints, calibration: list[str] | None = None) -> dict:
     """Compare two policies on held-out items and return one of three answers.
