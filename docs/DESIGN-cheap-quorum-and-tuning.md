@@ -276,6 +276,43 @@ For the 29 that remain, neither review recommends a classifier, and both propose
   learned part runs in shadow mode until that cap is demonstrably met; only the deterministic pre-flight gates
   real traffic before then.
 
+## 4b. The abstention rule is built, and the failure count alone cannot drive it
+
+Added 2026-09-01. `tierbook.abstain` implements section 4: the two free repairs, and the sequential
+rule that stops when the bound on continuing no longer pays for the next call.
+
+**The free repairs reproduce exactly.** `broken_key_candidates` flags 19 items over the 1,187 — the
+same 19 a human confirmed — and `duplicate_groups` finds the 10 groups covering 20 items.
+
+**The sequential rule, swept over its two parameters, never clears a 5% lost-success cap.** The
+oracle that skips exactly the 51 items nobody solves saves 54.8% of the bill and loses nothing, which
+is the ceiling. Against it:
+
+| value of a success | decay per failure | items stopped | bill saved | solvable items given up |
+|---|---|---|---|---|
+| $0.30 | 0.70 | 21 | 35.9% | **19.0%** |
+| $0.10 | 0.50 | 76 | 70.6% | 32.9% |
+| $0.05 | 0.50 | 104 | 78.4% | 51.0% |
+| $0.01 | 0.20 | 266 | 96.4% | 80.8% |
+
+The best point loses nearly a fifth of the work it abandons. **So the learned part stays in shadow
+mode**, which is what section 4 registered, and only the deterministic pre-flight gates traffic.
+
+**The reason is structural and it says what the fix has to be.** "How many tiers have failed so far"
+is a good signal for *this item is hard* and a bad one for *this item is hopeless*, and the two are
+not close in size here: 51 items are solved by nobody while 143 need a tier dearer than the cheap
+ones. Failing four cheap tiers is therefore overwhelmingly evidence for "escalate", not for "stop", and
+a bound driven by the failure count alone must confuse them. The rule needs the item model's posterior
+— which conditions on the item's own features, not only on the count — and until that posterior exists
+the rule has nothing usable to read.
+
+**A defect found by running it, worth recording because of its direction.** The first measurement
+reported savings of up to 242% of the entire bill. `usd_saved` was counting every remaining tier,
+including the ones a cheapest-first cascade would never reach because it stops at the first success.
+Fixed, and pinned by a test. The direction is the point: the error inflated the rule's benefit, which
+is the direction an author's own instrumentation errs in, and the absurd number is the only reason it
+was caught in one run rather than becoming the headline.
+
 ## 5. The box-tuning experiment
 
 **The ceiling is known and it is modest.** All-API costs $2.6289 over these items; today's box saves 11.3%; a box
