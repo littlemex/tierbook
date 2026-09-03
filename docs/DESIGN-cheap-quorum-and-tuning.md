@@ -364,6 +364,50 @@ will also fail. It opens exactly one avenue, the one the design already register
 **item**, through `theta` regressed from cheap features, since that is the only quantity that differs
 between the 3 rescuable items and the 28 hopeless ones at the moment of the decision.
 
+## 4d. Before spending GPU time: what the box is worth, and at which floor
+
+Added 2026-09-01. Section 5 registers a tuning pilot whose prize was estimated at −25.9% of the bill,
+computed when `claude-opus-5` was the only escalation tier considered. Sections 3b and 3c changed the
+comparison, so the prize was recomputed on the frontier before any GPU time is bought. It costs
+nothing to ask, and it moves the answer.
+
+**The box is on the frontier — eleven of twenty-four points involve it — and its marginal value is
+almost entirely confined to one accuracy floor.** Deleting it from the candidate set and re-solving:
+
+| accuracy floor | cheapest policy with the box | cheapest without it | what the box is worth |
+|---|---|---|---|
+| 85% | `gpt-5.6-terra` alone, $0.00251 | the same | **0.0%** |
+| 88% | `grok-4.6` alone, $0.00333 | the same | **0.0%** |
+| **90%** | `gpt-5.6-terra` + box → `claude-opus-5`, $0.00537 | `claude-opus-5` alone, $0.00593 | **+9.4%** |
+| 92% | `claude-opus-5` alone, $0.00593 | the same | **0.0%** |
+
+At three of four floors the box contributes exactly nothing at these prices: it holds frontier points
+below 87% accuracy, which is beneath where anyone would operate. Its whole present value is 9.4% of the
+bill at a 90% floor, and there it works as a **quorum member** rather than as the tier that answers.
+
+**And tuning it is worth more than section 5 estimated, not less.** Simulating a better box by granting
+it the correct answer on items it currently misses — an upper bound, since tuning has to actually
+achieve that — and re-solving the 90% floor each time:
+
+| box solve rate | cheapest policy at a 90% floor | cost per item | against today |
+|---|---|---|---|
+| 66.4% (today) | `gpt-5.6-terra` + box → `claude-opus-5` | $0.00537 | — |
+| 73.7% (+50 items) | `claude-sonnet-5` + box → `grok-4.6` | $0.00393 | **−27%** |
+| 80.9% (+100 items) | `qwen3-next-80b` + box → `claude-opus-5` | $0.00358 | **−33%** |
+| 88.2% (+150 items) | `claude-sonnet-5` + `qwen3-next-80b` → box | $0.00309 | −42% |
+
+**So a +14.5 point improvement is worth about a third of the bill at a 90% floor**, and the box stays a
+quorum member throughout rather than taking over — which is consistent with section 2 and is the shape
+the pilot should be designed to produce.
+
+**Two things this changes about section 5.** The prize is bigger than −25.9%, so the pilot is better
+justified than it was. And it is conditional in a way the original registration was not: **the owner's
+operating floor has to be established before the GPU time is bought**, because at 85%, 88% or 92% on
+this pool the answer is that tuning the box is worth nothing at all and the money should not be spent.
+The last row is also a warning about its own method — at a near-perfect box the simulation says "just
+use the box" for $0.00010, which is true and circular, since the simulation hands over correctness for
+free. Read the middle rows.
+
 ## 5. The box-tuning experiment
 
 **The ceiling is known and it is modest.** All-API costs $2.6289 over these items; today's box saves 11.3%; a box
