@@ -486,13 +486,29 @@ do not meet section 6's bar and are not offered as one; what they do is change w
 | `premium-always` | 21 | **61.9%** | $19.36 | $0.922 | 5 |
 | `capacity-first` | 21 | 19.0% | $125.13 | $5.958 | 40 |
 
-**Escalating bought nothing here.** `cheap-then-escalate` resolves 42.9% against `cheap-always`'s
-42.1% — a difference of one episode — and costs **6.7 times as much**. On this evidence the escalation
-tier was called, was paid for, and changed one outcome.
+**On outcomes, almost nothing here is separable.** Paired exact sign tests over the instances where
+both arrangements ran, all ten pairs:
 
-**And the cheap arrangement is the best value by a wide margin**: 68% of the frontier arrangement's
-resolution rate for 13% of its cost. `capacity-first` is dominated outright, costing 48 times
-`cheap-always` to resolve less than half as often.
+| comparison | instances | wins / losses | p | verdict |
+|---|---|---|---|---|
+| `capacity-first` vs `premium-always` | 21 | 0 / 9 | **0.004** | `capacity-first` worse |
+| `capacity-first` vs `role-based` | 21 | 0 / 7 | **0.016** | `capacity-first` worse |
+| `cheap-always` vs `premium-always` | 19 | 0 / 4 | 0.125 | not detectable |
+| `cheap-always` vs `cheap-then-escalate` | 19 | 1 / 1 | 1.000 | not detectable |
+| `cheap-then-escalate` vs `premium-always` | 21 | 0 / 4 | 0.125 | not detectable |
+| the other five pairs | 19–21 | — | 0.06–0.69 | not detectable |
+
+**Two of ten pairs separate, and both of them only say `capacity-first` is worse.** So the headline
+resolution rates above — 42.1% against 61.9% — are point estimates whose difference this sample cannot
+establish. Writing "the cheap arrangement gets 68% of the frontier's resolution rate" would be reading a
+ratio of two numbers that are not distinguishable.
+
+**What is not sampling noise is the cost**, because it is the sum of what was actually paid rather than
+an estimate of anything: `cheap-then-escalate` costs **6.7 times** `cheap-always` and `capacity-first`
+costs **48 times** it. So the only demonstrable statement on this sample is uncomfortable and useful:
+**the arrangements are indistinguishable on outcomes and differ by up to 48-fold in price**, and the
+one arrangement that is separably worse is also the dearest. On evidence of this shape the decision is
+to take the cheapest and spend the difference on a study that can separate the rest.
 
 **Where the money goes, and it rhymes with the knowledge corpus:**
 
