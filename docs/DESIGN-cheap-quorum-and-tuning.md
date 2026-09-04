@@ -184,8 +184,10 @@ says the point should not have been reported:
 | what section 3 recommends: three cheap candidates, escalating to `claude-opus-5` | 89.2% | $0.00441 |
 | **`grok-4.6` answering everything** | **89.7%** | **$0.00333** |
 
-**A single mid-priced candidate is more accurate and 24% cheaper than the whole construction.** It
-dominates on both axes, so no quality floor and no rate card in this family prefers the quorum there.
+**A single mid-priced candidate is more accurate and 24% cheaper than the whole construction** on this
+run. **Section 3d withdraws that specific recommendation**: asked a second time the comparison reverses,
+because the candidate's own output length doubled between collections. The comparison *error* below
+stands; the replacement answer does not.
 
 The reason the earlier sections missed it is worth naming, because it is a comparison error and not a
 measurement error. Every table above fixes `claude-opus-5` as the thing to beat and asks how cheaply
@@ -267,6 +269,90 @@ single candidate below `claude-opus-5` delivers, and it earns it by mostly getti
 against `opus alone` at 92.4% for $0.00593: identical accuracy, dearer by exactly the wasted box
 call, and correctly excluded from the frontier. A pricing bug would have shown up here as the
 degenerate policy winning.
+
+## 3d. The frontier was measured twice, and its recommendation does not reproduce
+
+Added 2026-09-01. Section 3b's correction — that a single mid-priced candidate dominates the quorum
+policy — rested on one run and turned on half a point, which is inside the flip rate these tiers were
+separately measured to have. So the matrix was collected again at the same configuration and the
+frontier recomputed on both. 571 items are complete in both runs across the eight API candidates; the
+self-hosted box is absent because it is not currently served, so this covers the all-API subset.
+Spend: about $18.
+
+**The flip rates reproduce the earlier noise-floor measurement closely, which is the one solid result
+here:**
+
+| candidate | run 1 | run 2 | flip rate | measured separately earlier |
+|---|---|---|---|---|
+| `claude-fable-5` | 94.9% | 94.7% | 0.9% | 2.9% |
+| `claude-opus-5` | 94.6% | 93.9% | 1.8% | 3.6% |
+| `claude-sonnet-5` | 90.4% | 92.5% | 3.2% | 5.1% |
+| `gpt-5.6-sol` | 91.1% | 90.7% | 3.2% | 6.6% |
+| `gpt-5.6-terra` | 88.4% | 89.3% | 4.0% | 5.1% |
+| `grok-4.6` | 92.5% | 93.0% | 3.7% | 9.3% |
+| `qwen3-next-80b` | 72.3% | 75.8% | **10.9%** | 10.2% |
+| `nemotron-super-3-120b` | 61.5% | 64.1% | **24.0%** | 22.3% |
+| pooled | — | — | **6.4%** | 8.0% |
+
+Two independent measurements, months apart in method, agree on the ordering and on the two large
+values. The weak candidates are a fifth of their own answers away from themselves.
+
+**And the frontier's recommendation differs between the runs at half the floors tested:**
+
+| accuracy floor | cheapest policy, run 1 | cheapest policy, run 2 | same? |
+|---|---|---|---|
+| 85% | `nemotron` + `qwen3-next` → `gpt-5.6-terra`, $0.00115 | the same, $0.00122 | yes |
+| 88% | `gpt-5.6-terra` alone, $0.00165 | `nemotron` + `qwen3-next` → `claude-sonnet-5`, $0.00140 | **no** |
+| 90% | `claude-sonnet-5` alone, $0.00170 | `claude-sonnet-5` alone, $0.00169 | same member |
+| 92% | `gpt-5.6-terra` + `qwen3-next` → `grok-4.6`, $0.00291 | `claude-sonnet-5` alone, $0.00169 | **no** |
+
+At 88% and 92% the answer changes materially — a single candidate becomes a two-member quorum, and a
+quorum becomes a single candidate. The mechanism is the same, the prices are the same, and the data is
+the same corpus asked twice. What moves is a candidate whose accuracy sits near the floor crossing it:
+`claude-sonnet-5` reads 90.4% in run 1 and 92.5% in run 2, so it clears a 92% floor in one run and not
+the other, and being the cheapest thing that clears it changes the whole answer.
+
+**So section 3b's specific recommendation is withdrawn.** Asked twice:
+
+| | `grok-4.6` alone | cheapest quorum at or above its accuracy | verdict |
+|---|---|---|---|
+| run 1 | 93.0% at $0.00298 | 93.5% at $0.00358 | the single candidate is cheapest |
+| run 2 | 93.0% at $0.00623 | 93.3% at $0.00365 | **the quorum dominates it** |
+
+Its accuracy is identical in both runs. What doubled is its **cost**, because its median output length
+went from 346 tokens to 698 on the same prompts — so this reversal is not sampling noise but a change in
+the candidate's own behaviour between two collections a few weeks apart. Either way the claim does not
+survive being asked twice, and a recommendation that does not survive that is not a recommendation.
+
+**What stands, and it is less than section 3b claimed.** The comparison error 3b identified is real:
+every table before it fixed the frontier tier as the thing to beat and never asked which single
+candidate was cheapest at a given accuracy. That criticism holds. What does not hold is 3b's
+replacement answer. The correct statement is weaker and more useful: **on this pool no single-run
+frontier point should be quoted as a policy, and the mechanism's most valuable output is the
+disagreement between two runs of it.**
+
+**Three defects this check found in the machinery itself, all now fixed.**
+
+**Ties were being reported as differences.** A policy that never escalates exists once per candidate
+escalation tier, identical in accuracy and cost, differing in a field no request read. `frontier` and
+`cheapest_meeting` now canonicalise, because before they did so two runs of the same data appeared to
+disagree at the 90% floor when they had chosen the same member.
+
+**The collector's bearer token expired mid-run and biased the subset.** 1,366 cells came back HTTP 401.
+Because the pool processes work in submission order, the lost cells were a contiguous block of item ids
+rather than a random sample, so the surviving subset was **biased and not merely smaller** — and the
+first version of this comparison was run on it. The token is now re-read on a 401.
+
+**A verbose candidate was being scored as wrong for being slow.** `grok-4.6`'s long generations exceeded
+the edge's timeout on a non-streamed reply, and 26 of its 181 replies came back as transport errors,
+which — being unparseable — score as wrong answers. Retrying the same shape cannot help, so a timeout
+now goes straight to the streaming path. This is the same gateway limitation filed upstream, and it was
+silently deflating one candidate's measured accuracy.
+
+**Coverage, stated rather than buried.** 571 of 699 items are complete in both runs. The 80 items with a
+remaining gap are scattered across the id range but skew to the last two deciles, so the subset is not
+perfectly representative; 96 cells remain unanswered after retries, mostly `grok-4.6` streams that never
+completed and six `claude-fable-5` content-filter refusals.
 
 ## 4. Abstention: the tail is four different things and only one of them is routing
 

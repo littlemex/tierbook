@@ -354,3 +354,22 @@ def test_a_policy_that_does_escalate_is_never_collapsed():
                                        min_stopped=1) if p.members == ("a", "b")]
     assert len(ps) == 2 and all(p.stopped < p.items for p in ps)
     assert len(canonical(ps)) == 2, "the escalation tier was actually used, so the two differ"
+
+
+def test_cheapest_meeting_does_not_pick_between_identical_decisions_at_random():
+    """Two runs of the same data must not look like they disagree because a tie broke differently.
+
+    A never-escalating policy exists once per candidate escalation tier, all identical in accuracy and
+    cost. Returning any of them makes a reproducibility check report a difference that is not one --
+    which is what happened before `cheapest_meeting` canonicalised.
+    """
+    rows = {f"i{n}": {"a": (SOLVED, "B", 1.0), "x": (SOLVED, "B", 5.0), "y": (SOLVED, "B", 9.0),
+                      "z": (SOLVED, "B", 7.0)} for n in range(40)}
+    t = _table(rows)
+    ps = enumerate_policies(t, candidates=["a"], escalate_to=["x", "y", "z"], min_stopped=1)
+    picks = {(cheapest_meeting(ps, accuracy_floor=0.5).members,
+              cheapest_meeting(ps, accuracy_floor=0.5).escalate_to)}
+    # And the same set in a different enumeration order still gives the same answer.
+    picks.add((cheapest_meeting(list(reversed(ps)), accuracy_floor=0.5).members,
+               cheapest_meeting(list(reversed(ps)), accuracy_floor=0.5).escalate_to))
+    assert len(picks) == 1, f"the tie broke two ways: {picks}"

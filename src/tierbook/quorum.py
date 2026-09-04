@@ -331,5 +331,9 @@ def cheapest_meeting(policies: list[QuorumPolicy], *, accuracy_floor: float) -> 
     This is the operator-facing shape of the question. A floor is a sentence an owner can say -- "I
     will not go below this accuracy" -- where a weight on cost against quality is not.
     """
-    eligible = [p for p in policies if p.priced and p.accuracy >= accuracy_floor]
-    return min(eligible, key=lambda p: p.usd_per_item) if eligible else None
+    # Canonicalised for the same reason `frontier` is: two never-escalating policies that differ only
+    # in an escalation tier no request reached are one decision, and returning either at random makes
+    # two runs of the same data look like they disagree. That false difference showed up in a
+    # reproducibility check before this line existed.
+    eligible = [p for p in canonical(policies) if p.priced and p.accuracy >= accuracy_floor]
+    return min(eligible, key=lambda p: (p.usd_per_item, p.members, p.escalate_to)) if eligible else None
