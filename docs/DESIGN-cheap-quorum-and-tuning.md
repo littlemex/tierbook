@@ -9,6 +9,30 @@ The second question has a sharp answer and it is negative: a terse frontier *dec
 a terse frontier *answer* on fewer items is. The measurement that killed the first half is section 3, and it only
 died on the frozen fold after looking significant on the first one.
 
+## The shape both families ended up in, stated first because it is the finding
+
+Every construction measured here — arbitration, a quorum, a probe threshold, a cascade that learns when to give
+up — costs money and cannot be shown to buy accuracy. On the knowledge corpus the frontier's whole middle band is
+owned by **one mid-priced candidate answering everything** (section 3c). On agentic work **no pair of routing
+arrangements separates on outcomes at all**, while their prices differ by up to 48-fold (section 6b). Two
+independent families, the same shape: machinery adds cost, and the accuracy it is supposed to buy does not appear.
+
+That is the verdict the mechanism was asked to be able to produce, and it produced it. It is worth being precise
+about what it does and does not say:
+
+- **It is a statement about these pools at these prices**, which is why the deliverable is `gain(prices)` and an
+  optimiser rather than a policy. On a pool whose candidates are further apart, or a rate card where the dear tier
+  is dearer, the same code returns a different answer — and sections 3b and 4d are two occasions when it did.
+- **It is not "routing never works".** Routing is on the frontier at both ends: quorums own the cheap band from
+  81% to 87%, and the probe threshold owns one point at 91.4% that nothing else reaches for the money. What is
+  refuted is the assumption that a construction is *better* than the simplest thing, held without measuring the
+  simplest thing.
+- **The reason the assumption survived so long is a comparison error, not a measurement error.** Every table in
+  this document until section 3b fixed the frontier tier as the thing to beat and asked how cheaply its accuracy
+  could be approached. Nobody asked which single candidate was cheapest at a given accuracy, though
+  `optimise.single_tier` had been in the repository the whole time. **Choosing the baseline is choosing the
+  answer.**
+
 ## 1. Terse input and output is not where the saving is
 
 The frontier tiers on this corpus spend most of their bill on *output*, but they do not emit much of it: the
