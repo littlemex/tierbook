@@ -472,6 +472,88 @@ the same shape to fix the flip rate, the degenerate-instance rate and the cost v
   with measured tokens, tool calls and wall-clock per candidate, so the deliverable is a cost curve per quality
   floor rather than one table at today's prices.
 
+## 6b. The agentic episodes that do exist say escalation bought nothing, and 37% were censored
+
+Added 2026-09-01, as the free first step section 6 requires before any re-measurement is commissioned.
+103 scored episodes over 21 SWE-bench instances and five routing arrangements were already on disk. They
+do not meet section 6's bar and are not offered as one; what they do is change what the study should be.
+
+| arrangement | episodes | resolved | total spend | per episode | median steps |
+|---|---|---|---|---|---|
+| `cheap-always` | 19 | **42.1%** | $2.32 | **$0.122** | 12 |
+| `cheap-then-escalate` | 21 | 42.9% | $17.24 | $0.821 | 12 |
+| `role-based` | 21 | 52.4% | $18.50 | $0.881 | 40 |
+| `premium-always` | 21 | **61.9%** | $19.36 | $0.922 | 5 |
+| `capacity-first` | 21 | 19.0% | $125.13 | $5.958 | 40 |
+
+**Escalating bought nothing here.** `cheap-then-escalate` resolves 42.9% against `cheap-always`'s
+42.1% — a difference of one episode — and costs **6.7 times as much**. On this evidence the escalation
+tier was called, was paid for, and changed one outcome.
+
+**And the cheap arrangement is the best value by a wide margin**: 68% of the frontier arrangement's
+resolution rate for 13% of its cost. `capacity-first` is dominated outright, costing 48 times
+`cheap-always` to resolve less than half as often.
+
+**Where the money goes, and it rhymes with the knowledge corpus:**
+
+| instances | count | share of the bill |
+|---|---|---|
+| no arrangement resolved | 6 | **32.1%** |
+| every arrangement resolved | 4 | 8.8% |
+| mixed — the only ones that inform a comparison | 11 | 59.1% |
+
+A third of the agentic bill is spent on instances nobody solves, against 47.8% on the knowledge corpus.
+The abstention question is the same question there, and it is worth more per instance: one episode costs
+$1.77 on average, which is **537 times** a knowledge item at the cheapest arrangement's rate.
+
+**Three facts that a re-measurement has to be designed around, and none of them was in the withdrawn
+analysis.**
+
+**Only 11 of 21 instances inform anything.** Six were resolved by nobody and four by everybody, so
+48% of the sample carries no comparative information. Section 6's stratification has to sample the mixed
+band deliberately rather than hoping for it, and 200 instances drawn at this rate would yield about a
+hundred informative ones.
+
+**37% of episodes were cut off by the step budget, not by finishing.** Thirty-eight of 103 stopped on
+"step budget exhausted" and the binding constraint was `steps` in exactly those. So the comparison is
+partly measuring which arrangement fits inside 40 steps, and the two arrangements at the budget ceiling
+(`role-based` and `capacity-first`, both at a median of 40) are the two whose outcomes are least
+interpretable. Either the budget is raised until it stops binding, or censoring is modelled explicitly —
+and a survival model is what section 6 already proposes, so this is evidence for that shape rather than
+a new problem.
+
+**Seven episodes are unusable and six of them for the same reason.** Six died on "the premium tier could
+not be reached: the provider answered 200 with an empty stream" and one on a 200,000-character cap. The
+empty-stream failure is the gateway defect filed upstream; it is still corrupting agentic measurement,
+and it lands on the premium tier, which biases exactly the arrangement a comparison most needs intact.
+
+## 5b. The tuning pilot's splits are frozen, and the pilot is gated on one number nobody has given
+
+Added 2026-09-01. Section 5 says the hold-out must be frozen before any training, and near-duplicate
+groups must not straddle the split. Both are done, and the manifest is written:
+
+| | |
+|---|---|
+| target: the box misses it, no cheap tier solves it, some dear tier does | **168** items |
+| grouped by normalised question stem | 167 groups |
+| groups whose text also appears on a **non**-target item, so training one copy contaminates the other | 1, excluded |
+| **frozen split** | **105 train / 62 hold-out**, no group straddling |
+| the four evaluation faces | 62 target hold-out, 765 easy centre, 29 nobody-solves, 1,165 all-clean |
+
+The contamination manifest names the 105 training ids and states what they may not be used for: an
+anchor set, calibration, or any reported gain. That obligation runs from the training side back to
+routing, and section 5 already says an interface whose correctness depends on the other side's goodwill
+is a design that fails quietly — so the list exists as a file rather than as a promise.
+
+**Capturing every training target would take the box from 65.7% to 74.7%**, which section 4d prices at
+about a 27% reduction in the cheapest policy meeting a 90% accuracy floor.
+
+**And that is where the pilot stops until someone answers one question.** Section 4d measured the box's
+marginal value as **0.0% at an 85%, 88% or 92% floor** and 9.4% at 90%. Buying GPU time before the
+owner's operating floor is known therefore risks spending it on a change that is worth nothing by
+construction. The precondition is in the manifest's `gates` block, and it is a decision rather than a
+measurement: at what accuracy does this pool actually have to operate?
+
 ## 7. Order of work, and why
 
 1. **Fix the gateway's empty completions.** An upstream zero-token completion is relayed as a success and
