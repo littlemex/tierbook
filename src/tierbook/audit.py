@@ -148,19 +148,16 @@ def audit(table: OutcomeTable, *, stratum_feature: str | None = None, min_stratu
         if t in unstable:
             state = UNDECIDED
             why = (f"this candidate's rank moved more than {rank_tolerance} place(s) between folds, so no fold "
-                   "decides it. Rank instability between a 20-item and a 115-item fold is measured here, and "
-                   "the fold that moved was the one that had been used to choose.")
+                   "decides it.")
         elif on:
             state = ACTIVE
             why = (f"not dominated in {len(on)} stratum/strata ({', '.join(on)}), so an average that dominates "
-                   "it is aggregating over a boundary it is on the right side of. Three tiers dominated on "
-                   "aggregate here returned to the frontier once input length was stratified.")
+                   "it is aggregating over a boundary it is on the right side of.")
         elif ci[0] > practical_difference:
             state = ACTIVE
             why = (f"solves {len(uniq)} items nothing else solves ({rate:.4f}, lower bound {ci[0]:.4f} above "
                    f"the stated practical difference {practical_difference}). Dominated on averages and still "
-                   "worth routing to: the self-hosted tier here is eighteen points worse than the cheapest API "
-                   "and solves four items no API tier solves.")
+                   "worth routing to.")
         elif rate > 0:
             state = UNDECIDED
             why = (f"solves {len(uniq)} items uniquely ({rate:.4f}) but the interval {ci} does not clear the "
