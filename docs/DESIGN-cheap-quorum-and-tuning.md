@@ -354,6 +354,66 @@ remaining gap are scattered across the id range but skew to the last two deciles
 perfectly representative; 96 cells remain unanswered after retries, mostly `grok-4.6` streams that never
 completed and six `claude-fable-5` content-filter refusals.
 
+## 3e. The check is now a module, and the module found my reading of 3d wrong
+
+Added 2026-09-01. Section 3d compared two runs by hand. `tierbook.reproduce` makes it a routine, because
+the hand version was written after three reversals had already shipped as findings, and what caught all
+three was repetition rather than review. Two adversarial rounds were then run on the module itself, and
+they found two defects that **invalidate part of what 3d and the first draft of this section claimed**.
+
+**Defect one: restricting to the shared items changes run 1's own answer, so the comparison was
+confounded.** The module labels each claim "what run 1 said", but run 1 is re-evaluated on the items
+*both* runs completed — 571 of 687 here, 16.9% dropped, a third of the losses in one contiguous block,
+`grok-4.6`'s gaps dominating. Asked whether that restriction alone moves run 1's conclusion, the answer
+is **yes, at all four accuracy floors.** So the differences 3d attributed to run-to-run variation are
+partly the subset, and the two cannot be separated from this data.
+
+The module now computes that check first and reports it first, because every claim after it is about a
+reconstruction rather than a recollection.
+
+**Defect two: the ordering swap I built a story on was never a claim.** The first draft of this section
+said the frontier's instability was "localised, not diffuse" and traced three floor failures to one
+swap: `claude-sonnet-5` against `gpt-5.6-sol`, 90.4% / 91.1% becoming 92.5% / 90.7%. With eight
+candidates there are 28 such pairs, and a paired exact test on run 1's own margin does not clear 0.05 for
+that one. **It was noise reversing, reported as a mechanism.** The module now requires run 1's margin to
+be significant before an ordering is a claim at all, and with that gate the ordering failure disappears
+and the claim count drops from 33 to 28.
+
+**What can still be said, stated precisely because the boundary is the whole point:**
+
+- **Valid.** On the 571 shared items, the two runs disagree about the cheapest policy at three of four
+  floors, and share **6 of run 1's 22 frontier points**. Both runs are read over the same items, so this
+  is a genuine two-run disagreement.
+- **Not valid.** That the recommendations published from run 1 — read over 687 items — failed *because
+  of* run-to-run variation. The subset moves them on its own.
+- **Withdrawn.** That the instability is localised to one candidate near a threshold.
+
+**The flip rates stand**, since they are a paired measurement over the same items in both runs:
+
+| candidate | run 1 | run 2 | flip rate | 95% interval |
+|---|---|---|---|---|
+| `claude-fable-5` | 94.9% | 94.7% | 0.9% | [0.4%, 2.0%] |
+| `claude-opus-5` | 94.6% | 93.9% | 1.8% | [1.0%, 3.2%] |
+| `gpt-5.6-sol` | 91.1% | 90.7% | 3.2% | [2.0%, 4.9%] |
+| `claude-sonnet-5` | 90.4% | 92.5% | 3.2% | [2.0%, 4.9%] |
+| `grok-4.6` | 92.5% | 93.0% | 3.7% | [2.4%, 5.6%] |
+| `gpt-5.6-terra` | 88.4% | 89.3% | 4.0% | [2.7%, 6.0%] |
+| `qwen3-next-80b` | 72.3% | 75.8% | **10.9%** | [8.6%, 13.7%] |
+| `nemotron-super-3-120b` | 61.5% | 64.1% | **24.0%** | [20.7%, 27.7%] |
+| pooled | — | — | 6.4% | [5.8%, 7.2%] |
+
+**And the module refuses to call anything reproducible.** Two runs give a difference, not a variance, so
+a claim that survives one repeat is one that has not yet failed. It also reports how many failures chance
+alone would produce — here 0.0, because after the significance gate none of the surviving claims has a
+null hypothesis, which is itself worth knowing: the five failures are all structural claims about
+policies, and "expected by chance" cannot speak to them.
+
+**The uncomfortable lesson is about the order of operations.** The correction in 3b was written from one
+run. Section 3d's correction of it was written from a confounded comparison. This section's correction of
+3d came from a module that two reviewers then found two defects in. Each layer was more careful than the
+one before and each was still wrong, and the only thing that has consistently worked is building the
+check as code and letting someone else attack the code.
+
 ## 4. Abstention: the tail is four different things and only one of them is routing
 
 The 51 items nobody solves carry 54.8% of the cascade bill. Both reviews independently said not to build a
