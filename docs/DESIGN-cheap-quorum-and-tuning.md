@@ -594,6 +594,53 @@ owner's operating floor is known therefore risks spending it on a change that is
 construction. The precondition is in the manifest's `gates` block, and it is a decision rather than a
 measurement: at what accuracy does this pool actually have to operate?
 
+## 6c. What the existing traces already say about trajectory features
+
+Added 2026-09-01. Section 6 proposes cheap trajectory counters ahead of embeddings. The 103 episodes on
+disk carry per-step traces, so the counters can be checked before the study is commissioned.
+
+**Failing episodes churn, and it is the clearest signal available.** Mean steps of each kind, resolved
+against not:
+
+| step type | resolved | not resolved | ratio |
+|---|---|---|---|
+| `patch` | 2.62 | **6.95** | **0.38** |
+| `read` | 4.40 | 7.72 | 0.57 |
+| `search` | 2.47 | 4.05 | 0.61 |
+| `verify` | 2.73 | 2.60 | 1.05 |
+| `finish` | 2.71 | 1.69 | 1.60 |
+| `handoff` | 2.42 | 1.72 | 1.40 |
+
+An episode that fails writes **2.7 times as many patches** as one that succeeds, and reads and searches
+about 1.7 times as much, while verifying the same amount. That is the edit-churn feature the design
+names, and it is visible at 103 episodes without any embedding.
+
+**The outcome is partly callable from the first step or two, and not from more than that.** Grouping
+episodes by the prefix of `(step type, tier)` pairs and taking the majority label within each group:
+
+| prefix length | distinct prefixes | in-group majority accuracy | prefixes seen once |
+|---|---|---|---|
+| 1 step | 11 | **69.9%** | 1 |
+| 2 steps | 24 | 70.9% | 9 |
+| 3 steps | 39 | 76.7% | 17 |
+| 8 steps | 99 | 98.1% | **95** |
+| 12 steps | 101 | 99.0% | **99** |
+
+**The bottom two rows are memorisation, not prediction, and reporting them as accuracy would be a
+mistake.** At twelve steps there are 101 prefixes over 103 episodes and 99 of them occur once, so the
+"majority" inside each group is that single episode's own label. The readable rows are the top two,
+where groups have several members each: **about 70% against a base rate of 56.3%**, from one or two
+steps. That is a real but modest signal, and it is the honest version of the information-value curve
+section 6 asks for — with the sample size, not the method, as what limits it.
+
+**The triggers that exist already fire on the right episodes.** Fifteen of 103 escalated, at a median of
+step 8, on two counters: `same_action_3x` and `verifier_disagreed`. Both are cheap counters of exactly
+the kind section 6 proposes. The escalated episodes resolved 53.3%, and within `cheap-then-escalate` the
+six that never escalated resolved 1 of 6 — so the triggers were firing on the harder trajectories rather
+than at random. That is a selection effect and not evidence that escalating helps; section 6b already
+shows the outcome difference is not detectable. What it does establish is that the counters are
+informative enough to be worth logging in the larger study.
+
 ## 7. Order of work, and why
 
 1. **Fix the gateway's empty completions.** An upstream zero-token completion is relayed as a success and
