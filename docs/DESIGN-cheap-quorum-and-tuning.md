@@ -459,7 +459,7 @@ result is that a simultaneous interval for the best of eleven policies has a low
 throughout. `cheapest_meeting` does exactly that, over **480 distinct priced policies** on 571 items.
 
 Measured, in `docs/results-selection-cost.md`: the gap between a winner's accuracy and the lower bound
-that survives the search is **6.7 points**, of which 3.4 is the search itself and 3.2 is ordinary sample
+that survives the search is **6.7 points**, of which 3.5 is the search itself and 3.1 is ordinary sample
 size. Across five floors and two runs, **nine of ten recommendations do not clear the floor they were
 quoted at**, and the one that does has seven points of slack.
 
@@ -544,6 +544,28 @@ candidates that can be inferred domestically — the `qwen3.6` configurations pl
 At an 80% floor the API is not needed at all, at a sixth of the 85% policy's cost. At 85% the answer
 matches the figure computed by hand earlier, which is the mechanism reproducing a result rather than a
 new one. 86% is out of reach, which bounds the pool.
+
+**Corrected 2026-09-04: the three rows above are point estimates and none of them certifies its floor.**
+Section 3g's correction applies to this table too, and it lands harder here — the residency pool ranks
+1,282 distinct policies, so the `$0.00048` answer's adjusted lower bound is **71.7%** against the 80%
+floor it was quoted at. The "86% is out of reach" row survives, because it was never a certification.
+
+What can be certified, from `docs/results-residency-floor-certified.md`:
+
+| pool | certifiable floor | policy | point | cost per item |
+|---|---|---|---|---|
+| residency only | **78.2%** | `q36:base` + `q36:tersec1b` + `q36:v2` → `claude-sonnet-4-6` | 85.9% | **$0.00382** |
+| API allowed | **81.6%** | `claude-fable-5` → `claude-sonnet-4-6` | 89.5% | $0.01202 |
+
+So the migration answer is **3.4 points of certifiable accuracy for 3.1x lower cost per item**, and the
+"no API at all" shape does not survive at any certifiable floor: every residency policy that certifies
+anything has `claude-sonnet-4-6` as its escalation tier.
+
+**And measuring more items cannot rescue the $0.00048 policy.** Its point estimate is 80.123%, so the
+bound converges to 0.1 points above the floor: at n = 50,000 the adjusted bound is still 79.4%. That
+makes this a capability limit rather than a sample-size one, and it rules out the third of the three
+remedies 3g lists. Shrinking the search helps but barely — `max_members` 3 → 2 takes 1,282 policies to
+442 and buys 0.6 points, because K enters through its logarithm.
 
 **Two invariants both reviewers named, now pinned by tests.** A policy's score is never derived from a
 product of marginal accuracies — two matrices with identical per-candidate accuracy and different joint
