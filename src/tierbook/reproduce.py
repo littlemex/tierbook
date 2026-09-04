@@ -62,6 +62,7 @@ from tierbook.evidence import EvidenceError, UNOBSERVED
 from tierbook.outcomes import Cell, OutcomeTable
 from tierbook.quorum import (
     QuorumPolicy,
+    canonical,
     cheapest_meeting,
     enumerate_policies,
     frontier,
@@ -74,6 +75,12 @@ def wilson(successes: int, n: int, *, z: float = 1.96) -> tuple[float, float]:
     Used rather than the textbook interval because the rates here are small and the samples are in the
     low hundreds, which is exactly where the normal approximation puts a lower bound below zero and a
     reader stops trusting the number.
+
+    **What the interval is over.** It treats the items as a sample and each item's flip as an independent
+    binary draw, so it is uncertainty about the rate on the population the benchmark stands for. It is
+    *not* uncertainty about the run: two collections give one difference, and no interval computed from
+    them describes how much a third would move. A reader who wants the second thing has to collect a
+    third run.
     """
     if n == 0:
         return (0.0, 1.0)
@@ -88,7 +95,11 @@ def wilson(successes: int, n: int, *, z: float = 1.96) -> tuple[float, float]:
 class Claim:
     """One statement a single run supported, and whether the second run still supports it."""
 
-    kind: str                  # "subset_integrity", "cheapest_at_floor", "frontier_membership", "ordering"
+    #: One of "subset_integrity", "cheapest_at_floor", "cheapest_members_at_floor",
+    #: "frontier_membership" or "ordering". Kept in step with what `compare` actually produces --
+    #: an earlier version listed a "dominance" kind it never made, which described the module as
+    #: checking something it does not.
+    kind: str
     subject: str               # what the claim is about, in words
     first: str                 # what run 1 said
     second: str                # what run 2 said
@@ -163,6 +174,15 @@ class Reproduction:
 
     @property
     def pooled_flip_rate(self) -> tuple[float, float, float]:
+        """Pooled over candidates. **Read the per-candidate rates instead.**
+
+        The interval here treats `items x candidates` as that many independent trials, and they are not:
+        one item correlates across candidates, and a provider incident or a model update inside one run
+        correlates across all of them, so the interval is narrower than the truth. Pooling also hides the
+        heterogeneity that matters -- 0.9% and 24.0% compress into 6.4%, and it is the 24.0% that decides
+        whether a policy built on that candidate can be trusted. Kept because a single figure is asked
+        for; labelled because it should not be the one anyone quotes.
+        """
         k = sum(self.flips.values())
         n = self.items * len(self.candidates)
         low, high = wilson(k, n)
@@ -177,7 +197,12 @@ class Reproduction:
         return [c for c in self.claims if c.survived]
 
     def summary(self) -> str:
-        """Deliberately phrased as 'has not yet failed', because one repeat is not a variance."""
+        """Phrased as 'identical in this one repeat', because one repeat is not a variance.
+
+        Not "reproducible", and not "have not yet failed" either -- a reviewer pointed out that the
+        second still reads as verified stability to anyone skimming. The number of runs and the
+        comparison rule stay in the sentence.
+        """
         rate, low, high = self.pooled_flip_rate
         lines = [
             f"{self.items} items complete in both runs, {len(self.candidates)} candidates.",
@@ -185,8 +210,8 @@ class Reproduction:
             f"clustering {self.dropped_are_clustered:.2f}"
             + (f", limited by {self.limiting_candidate}" if self.limiting_candidate else ""),
             f"pooled flip rate {rate:.1%} [{low:.1%}, {high:.1%}].",
-            f"{len(self.held)} claims have not yet failed; {len(self.failed)} failed "
-            f"({self.expected_failures_by_chance:.1f} expected by chance).",
+            f"{len(self.held)} claims were identical in this one repeat; {len(self.failed)} were not "
+            f"({self.expected_failures_by_chance:.1f} expected by chance). One repeat is not a variance.",
         ]
         lines += [str(c) for c in self.failed]
         return "\n".join(lines)
@@ -224,12 +249,26 @@ def compare(first: OutcomeTable, second: OutcomeTable, *, candidates: list[str],
             escalate_to: list[str] | None = None, floors: tuple[float, ...] = (0.85, 0.90, 0.95),
             max_members: int = 3, min_stopped: int = 30, min_coverage: float = 0.5,
             ordering_alpha: float = 0.05,
-            prices: dict[str, float] | None = None) -> Reproduction:
+            prices: dict[str, float] | tuple[dict[str, float], dict[str, float]] | None = None,
+            ) -> Reproduction:
     """Compare two collections of the same matrix and return the claims that failed.
 
     `first` is the run a conclusion was drawn from and `second` is the repeat, which is why the claim
     strings are asymmetric: the point is to check statements already made, not to average two runs.
     """
+    # The single most load-bearing assumption in the whole comparison: that an item id means the same
+    # question, answer key, grader and serving configuration in both tables. The digest exists precisely
+    # to carry that, so there is no reason not to check it -- and joining on ids alone cannot see a reused
+    # id whose content changed, which is the failure the digest was introduced for.
+    if first.manifest_digest != second.manifest_digest:
+        raise EvidenceError(
+            f"the two tables carry different suite manifest digests "
+            f"({first.manifest_digest!r} and {second.manifest_digest!r}). Comparing them by item id "
+            "would compare different questions under one name."
+        )
+    if first.suite != second.suite:
+        raise EvidenceError(f"the tables are of different suites: {first.suite!r} and {second.suite!r}")
+
     def observed(table: OutcomeTable, cand: str) -> int:
         return sum(1 for i in table.cells
                    if (table.cells[i].get(cand) or Cell(UNOBSERVED, None)).state != UNOBSERVED)
@@ -277,11 +316,19 @@ def compare(first: OutcomeTable, second: OutcomeTable, *, candidates: list[str],
         )
 
     tiers = escalate_to if escalate_to is not None else candidates
+    # One `prices` argument applied to both runs erases any cost change between them -- and a candidate
+    # whose output length doubled between collections, which happened here, is exactly a cost change with
+    # unchanged accuracy. So a pair is accepted, and a single dict is taken to mean "hold prices fixed
+    # deliberately", which makes the comparison a quality-only one.
+    if isinstance(prices, tuple):
+        price_of = {"first": prices[0], "second": prices[1]}
+    else:
+        price_of = {"first": prices, "second": prices}
     policies = {}
     for label, table in (("first", first), ("second", second)):
         policies[label] = enumerate_policies(
             table, candidates=candidates, escalate_to=tiers, max_members=max_members,
-            min_stopped=min_stopped, prices=prices, items=items,
+            min_stopped=min_stopped, prices=price_of[label], items=items,
         )
 
     # Claim 0, computed and reported before everything else: did restricting to the shared items move
@@ -291,7 +338,7 @@ def compare(first: OutcomeTable, second: OutcomeTable, *, candidates: list[str],
     if dropped:
         full_first = enumerate_policies(
             first, candidates=candidates, escalate_to=tiers, max_members=max_members,
-            min_stopped=min_stopped, prices=prices,
+            min_stopped=min_stopped, prices=price_of["first"],
             items=sorted(first.cells, key=_as_int),
         )
         moved = []
@@ -312,26 +359,55 @@ def compare(first: OutcomeTable, second: OutcomeTable, *, candidates: list[str],
             survived=not moved,
         ))
 
-    # Claim 1: the cheapest policy meeting each floor. This is the claim an owner acts on, so it is
-    # checked first and by identity -- the members and the escalation tier -- rather than by cost,
-    # because two policies at the same price are still two different things to operate.
+    def co_minimal(ps, floor):
+        """Every policy tied for cheapest at this floor, not just the one a tie-break returned.
+
+        A single winner makes two runs look like they disagree when both had several policies at the same
+        price and the tie broke differently. The set is what the data supports.
+        """
+        eligible = [p for p in canonical(ps) if p.priced and p.accuracy >= floor]
+        if not eligible:
+            return []
+        cheapest = min(p.usd_per_item for p in eligible)
+        return sorted({(p.members, p.escalate_to) for p in eligible
+                       if p.usd_per_item <= cheapest + 1e-12})
+
+    # Claim 1: the cheapest policy meeting each floor. This is the claim an owner acts on.
     for floor in floors:
+        a_set, b_set = co_minimal(policies["first"], floor), co_minimal(policies["second"], floor)
         a = cheapest_meeting(policies["first"], accuracy_floor=floor)
         b = cheapest_meeting(policies["second"], accuracy_floor=floor)
 
-        def describe(p: QuorumPolicy | None) -> str:
+        def describe(p, tied):
             if p is None:
                 return "no policy reaches this floor"
+            extra = f", {len(tied) - 1} others tied" if len(tied) > 1 else ""
             return (f"{'+'.join(p.members)} -> {p.escalate_to} "
-                    f"({p.accuracy:.1%}, ${p.usd_per_item:.5f})")
+                    f"({p.accuracy:.1%}, ${p.usd_per_item:.5f}{extra})")
 
-        same = (a is not None and b is not None
-                and a.members == b.members and a.escalate_to == b.escalate_to)
+        # Both runs finding the floor unreachable is the SAME conclusion, not a difference. Reporting it
+        # as a failure told a reader two runs disagreed when they had agreed exactly.
+        both_unreachable = a is None and b is None
+        # Compared as sets, so an arbitrary tie-break cannot manufacture a disagreement.
+        survived = both_unreachable or bool(set(a_set) & set(b_set))
         rep.claims.append(Claim(
             kind="cheapest_at_floor",
             subject=f"the cheapest policy meeting a {floor:.0%} accuracy floor",
-            first=describe(a), second=describe(b), survived=same,
+            first=describe(a, a_set), second=describe(b, b_set), survived=survived,
         ))
+
+        # A second, looser layer, because an operator needs to know which half moved. The members are the
+        # routing gate; the escalation tier is the fallback vendor. "The gate held and the fallback did
+        # not" is a different instruction from "both moved", and one `survived` flag cannot say it.
+        if not both_unreachable and a is not None and b is not None:
+            members_same = {m for m, _ in a_set} & {m for m, _ in b_set}
+            rep.claims.append(Claim(
+                kind="cheapest_members_at_floor",
+                subject=f"the members of the cheapest policy at a {floor:.0%} floor",
+                first="+".join(a.members), second="+".join(b.members),
+                survived=bool(members_same),
+            ))
+
 
     # Claim 2: which policies are on the frontier at all. A point that appears in one run and not the
     # other is not a policy anyone should quote, whatever its numbers looked like.
@@ -339,12 +415,17 @@ def compare(first: OutcomeTable, second: OutcomeTable, *, candidates: list[str],
            for label, ps in policies.items()}
     both = ids["first"] & ids["second"]
     only_first = ids["first"] - ids["second"]
+    only_second = ids["second"] - ids["first"]
+    # The claim is deliberately one-directional and now says so: "a policy run 1 put on the frontier is
+    # still on it". A point run 2 *adds* is not a failure of anything run 1 asserted, and folding both
+    # directions into one flag made a strictly larger frontier look like a regression. Both counts are
+    # reported so a reader can see the shape either way.
     rep.claims.append(Claim(
         kind="frontier_membership",
-        subject="the set of policies on the frontier",
+        subject="every policy run 1 put on the frontier is still on it",
         first=f"{len(ids['first'])} points",
-        second=f"{len(ids['second'])} points, {len(both)} of them shared, "
-               f"{len(only_first)} present only in the first run",
+        second=f"{len(ids['second'])} points; {len(both)} shared, {len(only_first)} lost, "
+               f"{len(only_second)} newly present",
         survived=not only_first,
     ))
 

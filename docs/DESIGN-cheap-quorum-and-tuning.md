@@ -379,11 +379,38 @@ that one. **It was noise reversing, reported as a mechanism.** The module now re
 be significant before an ordering is a claim at all, and with that gate the ordering failure disappears
 and the claim count drops from 33 to 28.
 
+**Four more defects the second reviewer found, all now fixed, and two of them changed the output.**
+
+**The two tables were never checked for being the same questions.** `OutcomeTable` carries a suite and a
+manifest digest precisely so that a reused item id whose content changed cannot pass as a match, and the
+comparison joined on ids without looking at either. It now refuses two tables that disagree on them.
+
+**Both runs finding a floor unreachable was reported as a disagreement.** That is the same conclusion,
+and calling it a failure told a reader two runs differed where they had agreed exactly.
+
+**A tie-break could manufacture a disagreement.** Several policies at the same price, with the tie
+breaking differently in the two runs, looked like a changed recommendation. The comparison is now of the
+co-minimal *sets*.
+
+**And the floor claim is now two layers, which changed what the output says.** The members are the
+routing gate; the escalation tier is the fallback vendor. Separating them:
+
+| floor | policy identity | members |
+|---|---|---|
+| 88% | changed | **changed** (`gpt-5.6-terra` alone → `nemotron` + `qwen3-next`) |
+| 90% | changed | **held** — `claude-sonnet-5` in both runs; only the fallback moved |
+| 92% | changed | **changed** (a two-member quorum → `claude-sonnet-5` alone) |
+
+So "three of four floors disagree" was too blunt: at one of them the gate held and only the fallback
+vendor moved, which is a different instruction to an operator. And the frontier claim is now
+one-directional and reports both counts — 16 of run 1's 22 points lost, 6 newly present — because a
+point run 2 *adds* is not a failure of anything run 1 asserted.
+
 **What can still be said, stated precisely because the boundary is the whole point:**
 
 - **Valid.** On the 571 shared items, the two runs disagree about the cheapest policy at three of four
-  floors, and share **6 of run 1's 22 frontier points**. Both runs are read over the same items, so this
-  is a genuine two-run disagreement.
+  floors — at two of them including its members — and share **6 of run 1's 22 frontier points**. Both
+  runs are read over the same items, so this is a genuine two-run disagreement.
 - **Not valid.** That the recommendations published from run 1 — read over 687 items — failed *because
   of* run-to-run variation. The subset moves them on its own.
 - **Withdrawn.** That the instability is localised to one candidate near a threshold.
@@ -402,11 +429,20 @@ and the claim count drops from 33 to 28.
 | `nemotron-super-3-120b` | 61.5% | 64.1% | **24.0%** | [20.7%, 27.7%] |
 | pooled | — | — | 6.4% | [5.8%, 7.2%] |
 
-**And the module refuses to call anything reproducible.** Two runs give a difference, not a variance, so
-a claim that survives one repeat is one that has not yet failed. It also reports how many failures chance
-alone would produce — here 0.0, because after the significance gate none of the surviving claims has a
-null hypothesis, which is itself worth knowing: the five failures are all structural claims about
-policies, and "expected by chance" cannot speak to them.
+**And the module refuses to call anything reproducible.** Its wording is "identical in this one repeat",
+not "reproducible" and not "have not yet failed" — the second was the first attempt and a reviewer
+pointed out it still reads as verified stability to anyone skimming, so the number of runs stays in the
+sentence. It also reports how many failures chance alone would produce, here 0.0, because after the
+significance gate none of the surviving claims has a null hypothesis. That is itself worth knowing: every
+failure is a structural claim about a policy, and "expected by chance" cannot speak to those.
+
+**Two statistical labels were wrong and are now stated rather than implied.** The pooled flip rate treats
+`items x candidates` as that many independent trials, which they are not — one item correlates across
+candidates and a provider incident inside one run correlates across all of them — so its interval is
+narrower than the truth, and pooling compresses 0.9% and 24.0% into 6.4% when it is the 24.0% that
+decides whether a policy built on that candidate can be trusted. And the Wilson interval is uncertainty
+about the rate on the population the benchmark stands for, **not** about the run: two collections give one
+difference, and no interval computed from them says how much a third would move.
 
 **The uncomfortable lesson is about the order of operations.** The correction in 3b was written from one
 run. Section 3d's correction of it was written from a confounded comparison. This section's correction of

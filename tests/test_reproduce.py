@@ -154,11 +154,15 @@ def test_a_tie_in_either_run_makes_no_ordering_claim():
 
 
 def test_the_summary_never_calls_anything_reproducible():
-    """Two runs give a difference, not a variance. A claim that survived one repeat has not yet failed.
+    """Two runs give a difference, not a variance, and the wording has to survive a skim.
+
+    "have not yet failed" was the first attempt and a reviewer pointed out it still reads as verified
+    stability, so the number of runs and the comparison rule stay in the sentence.
     """
     one, two = _pair(60)
     text = compare(one, two, candidates=["cheap", "dear"], floors=(0.60,)).summary()
-    assert "have not yet failed" in text
+    assert "identical in this one repeat" in text
+    assert "One repeat is not a variance" in text
     assert "reproducible" not in text.lower()
 
 
@@ -233,3 +237,86 @@ def test_expected_failures_by_chance_is_reported_next_to_the_count():
     r = compare(one, two, candidates=["cheap", "dear"], floors=(0.60,))
     assert r.expected_failures_by_chance >= 0.0
     assert "expected by chance" in r.summary()
+
+
+def test_two_tables_of_different_suites_or_digests_are_refused():
+    """An item id meaning a different question in the two tables is the failure the digest exists for.
+
+    Joining on ids alone cannot see a reused id whose content changed, and the field is right there.
+    """
+    one, two = _pair(40)
+    two.manifest_digest = "a-different-corpus"
+    with pytest.raises(EvidenceError) as exc:
+        compare(one, two, candidates=["cheap", "dear"], floors=(0.60,))
+    assert "different questions under one name" in str(exc.value)
+
+    one2, two2 = _pair(40)
+    two2.suite = "something-else"
+    with pytest.raises(EvidenceError):
+        compare(one2, two2, candidates=["cheap", "dear"], floors=(0.60,))
+
+
+def test_both_runs_finding_a_floor_unreachable_is_agreement():
+    """It is the same conclusion, and calling it a failure told a reader two runs disagreed when they
+    had agreed exactly.
+    """
+    # Nothing here is right on every item, so no policy can clear the floor in either run.
+    rows = {f"i{n}": {"cheap": (SOLVED if n % 3 else INCORRECT, "B" if n % 3 else "C", 1.0),
+                      "dear": (SOLVED if n % 7 else INCORRECT, "B" if n % 7 else "D", 10.0)}
+            for n in range(40)}
+    one, two = _t(rows), _t(dict(rows))
+    r = compare(one, two, candidates=["cheap", "dear"], floors=(0.999,))
+    floor = [c for c in r.claims if c.kind == "cheapest_at_floor"][0]
+    assert "no policy reaches this floor" in floor.first
+    assert floor.survived
+
+
+def test_a_tie_break_cannot_manufacture_a_disagreement():
+    """Several policies at the same price, and the tie breaking differently, is not a difference.
+
+    The comparison is of the co-minimal sets, so it cannot report one.
+    """
+    rows = {f"i{n}": {"a": (SOLVED, "B", 1.0), "x": (SOLVED, "B", 5.0), "y": (SOLVED, "B", 5.0)}
+            for n in range(40)}
+    one, two = _t(rows), _t(dict(rows))
+    r = compare(one, two, candidates=["a", "x", "y"], floors=(0.5,), min_stopped=1)
+    assert all(c.survived for c in r.claims if c.kind == "cheapest_at_floor")
+
+
+def test_the_frontier_claim_is_one_directional_and_says_so():
+    """A point run 2 adds is not a failure of anything run 1 asserted.
+
+    Folding both directions into one flag made a strictly larger frontier look like a regression.
+    """
+    one, two = _pair(60)
+    r = compare(one, two, candidates=["cheap", "dear"], floors=())
+    fm = [c for c in r.claims if c.kind == "frontier_membership"][0]
+    assert "still on it" in fm.subject
+    assert "newly present" in fm.second
+
+
+def test_the_members_of_the_cheapest_policy_are_a_second_claim():
+    """The members are the routing gate and the escalation tier is the fallback vendor.
+
+    "The gate held and the fallback did not" is a different instruction from "both moved", and one flag
+    cannot carry it.
+    """
+    one, two = _pair(60)
+    r = compare(one, two, candidates=["cheap", "dear"], floors=(0.60,))
+    kinds = {c.kind for c in r.claims}
+    assert "cheapest_members_at_floor" in kinds
+
+
+def test_holding_prices_fixed_across_runs_is_a_deliberate_choice():
+    """One `prices` dict applied to both runs erases a cost change between them, and a candidate whose
+    output length doubled between collections is exactly that. A pair is accepted for the real case.
+    """
+    one, two = _pair(40)
+    fixed = compare(one, two, candidates=["cheap", "dear"], floors=(0.60,),
+                    prices={"cheap": 1.0, "dear": 10.0})
+    moved = compare(one, two, candidates=["cheap", "dear"], floors=(0.60,),
+                    prices=({"cheap": 1.0, "dear": 10.0}, {"cheap": 9.0, "dear": 10.0}))
+    assert fixed.items == moved.items
+    a = [c for c in fixed.claims if c.kind == "cheapest_at_floor"][0]
+    b = [c for c in moved.claims if c.kind == "cheapest_at_floor"][0]
+    assert a.second != b.second, "the second run's prices have to be able to change the answer"
