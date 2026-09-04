@@ -282,13 +282,39 @@ def enumerate_signal_policies(table: OutcomeTable, *, candidates: list[str], esc
     return out
 
 
+def canonical(policies: list[QuorumPolicy]) -> list[QuorumPolicy]:
+    """Collapse policies that differ only in a choice that never took effect.
+
+    A policy that never escalates has an escalation tier in name only: with eight candidates that is
+    eight rows on a frontier, identical in accuracy and cost, differing in a field no request ever
+    read. Left in, they crowd out the rows that represent a real choice and inflate any count of "how
+    many frontier points use mechanism X", which is a statistic this module reports.
+
+    Two policies are the same decision when their members, accuracy and cost agree and neither ever
+    escalated. The one kept is the first by escalation-tier name, so the choice is deterministic and a
+    reader is not invited to read meaning into which survived.
+    """
+    seen: dict[tuple, QuorumPolicy] = {}
+    out: list[QuorumPolicy] = []
+    for p in sorted(policies, key=lambda q: (q.members, q.escalate_to)):
+        if p.stopped != p.items:
+            out.append(p)
+            continue
+        key = (p.members, p.signal_threshold, p.solved, p.usd_per_item)
+        if key not in seen:
+            seen[key] = p
+            out.append(p)
+    return out
+
+
 def frontier(policies: list[QuorumPolicy]) -> list[QuorumPolicy]:
     """The policies nothing else beats on both accuracy and cost.
 
     Unpriced policies are excluded rather than ranked, because a policy whose cost is unknown cannot
-    be said to be dominated or dominating.
+    be said to be dominated or dominating. Policies whose escalation tier never fired are collapsed
+    first, so one real decision appears once.
     """
-    priced = [p for p in policies if p.priced]
+    priced = [p for p in canonical(policies) if p.priced]
     keep: list[QuorumPolicy] = []
     for p in priced:
         if any(q is not p and q.accuracy >= p.accuracy and q.usd_per_item <= p.usd_per_item

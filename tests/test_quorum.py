@@ -319,3 +319,38 @@ def test_all_three_mechanisms_are_ranked_on_one_frontier():
     for p in front:
         assert not any(q is not p and q.accuracy >= p.accuracy and q.usd_per_item < p.usd_per_item
                        for q in front)
+
+
+def test_policies_whose_escalation_never_fired_collapse_to_one():
+    """With eight candidates a never-escalating policy is eight identical frontier rows.
+
+    They differ in a field no request ever read, they crowd out the rows that represent a real choice,
+    and they inflate the count of "how many frontier points use mechanism X" -- which this module
+    reports, so the inflation would be read as a finding.
+    """
+    from tierbook.quorum import canonical
+    rows = {f"i{n}": {"a": (SOLVED, "B", 1.0), "x": (SOLVED, "B", 5.0), "y": (SOLVED, "B", 9.0)}
+            for n in range(40)}
+    t = _table(rows)
+    ps = enumerate_policies(t, candidates=["a"], escalate_to=["x", "y"], min_stopped=1)
+    assert len(ps) == 2, "both escalation tiers are enumerated"
+    assert all(p.stopped == p.items for p in ps), "and neither ever escalates"
+    assert len(canonical(ps)) == 1, "so they are one decision"
+    assert len(frontier(ps)) == 1
+
+
+def test_a_policy_that_does_escalate_is_never_collapsed():
+    from tierbook.quorum import canonical
+    rows = {}
+    for n in range(40):
+        if n % 4:
+            rows[f"i{n}"] = {"a": (SOLVED, "B", 1.0), "b": (SOLVED, "B", 1.0),
+                             "x": (SOLVED, "B", 5.0), "y": (SOLVED, "B", 9.0)}
+        else:
+            rows[f"i{n}"] = {"a": (INCORRECT, "C", 1.0), "b": (INCORRECT, "D", 1.0),
+                             "x": (SOLVED, "B", 5.0), "y": (SOLVED, "B", 9.0)}
+    t = _table(rows)
+    ps = [p for p in enumerate_policies(t, candidates=["a", "b"], escalate_to=["x", "y"],
+                                       min_stopped=1) if p.members == ("a", "b")]
+    assert len(ps) == 2 and all(p.stopped < p.items for p in ps)
+    assert len(canonical(ps)) == 2, "the escalation tier was actually used, so the two differ"
