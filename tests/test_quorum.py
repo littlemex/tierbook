@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -373,3 +375,143 @@ def test_cheapest_meeting_does_not_pick_between_identical_decisions_at_random():
     picks.add((cheapest_meeting(list(reversed(ps)), accuracy_floor=0.5).members,
                cheapest_meeting(list(reversed(ps)), accuracy_floor=0.5).escalate_to))
     assert len(picks) == 1, f"the tie broke two ways: {picks}"
+
+
+# --- is the quorum doing anything, or is it one model wearing two hats? ---------------------------
+
+def test_joint_failure_is_measured_not_inferred_from_shared_weights():
+    """Two candidates sharing weights are not necessarily correlated, and the matrix is what says so.
+
+    Measured on one corpus: pairs sharing weights disagreed on 2.7% to 35.7% of answers and pairs from
+    different families on 9.4% to 46.3%, with identical medians. So the mechanism reads the pair's own
+    numbers rather than any label about provenance.
+    """
+    from tierbook.quorum import joint_failure
+    # `a` and `b` fail together on every item either fails: a perfect echo.
+    echo = _table({f"i{n}": {"a": (SOLVED if n % 3 else INCORRECT, "B", 1.0),
+                             "b": (SOLVED if n % 3 else INCORRECT, "B", 1.0)} for n in range(30)})
+    assert joint_failure(echo, "a", "b", list(echo.items)) == 1.0
+    # `c` and `d` never fail on the same item.
+    apart = _table({f"i{n}": {"c": (SOLVED if n % 2 else INCORRECT, "B", 1.0),
+                              "d": (INCORRECT if n % 2 else SOLVED, "B", 1.0)} for n in range(30)})
+    assert joint_failure(apart, "c", "d", list(apart.items)) == 0.0
+
+
+def test_no_item_wrong_for_either_is_an_absent_measurement_not_a_low_correlation():
+    from tierbook.quorum import joint_failure
+    t = _table({f"i{n}": {"a": (SOLVED, "B", 1.0), "b": (SOLVED, "B", 1.0)} for n in range(10)})
+    assert joint_failure(t, "a", "b", list(t.items)) is None
+
+
+def test_agreement_lift_exposes_a_quorum_that_does_nothing():
+    """A pair of near-duplicates stops on almost everything and adds almost nothing.
+
+    Measured, the worst real pair lifted +0.8% while stopping on 97% of items -- one model wearing two
+    hats. A stop rate cannot tell that from a real quorum, so the lift is carried alongside it.
+    """
+    # Two echoes of one model: they always agree, so the quorum stops everywhere and the agreed answer
+    # is exactly what either member would have said.
+    rows = {f"i{n}": {"a": (SOLVED if n % 4 else INCORRECT, "B" if n % 4 else "C", 1.0),
+                      "b": (SOLVED if n % 4 else INCORRECT, "B" if n % 4 else "C", 1.0),
+                      "dear": (SOLVED, "B", 10.0)}
+            for n in range(80)}
+    echo = evaluate(_table(rows), ("a", "b"), "dear")
+    assert echo.stop_rate == 1.0
+    assert echo.worst_joint_failure == 1.0
+    assert echo.agreement_lift == pytest.approx(0.0, abs=1e-9), (
+        "stopping on everything at the member's own accuracy is not a quorum")
+
+
+def test_agreement_lift_is_positive_where_the_quorum_earns_its_place():
+    """When the members fail on different items, agreement selects the ones both got right."""
+    rows = {}
+    for n in range(80):
+        a_ok, b_ok = n % 3 != 0, n % 4 != 0        # they fail on different items
+        rows[f"i{n}"] = {
+            "a": (SOLVED if a_ok else INCORRECT, "B" if a_ok else "C", 1.0),
+            "b": (SOLVED if b_ok else INCORRECT, "B" if b_ok else "D", 1.0),
+            "dear": (SOLVED, "B", 10.0),
+        }
+    p = evaluate(_table(rows), ("a", "b"), "dear")
+    assert p.worst_joint_failure < 0.5
+    assert p.agreement_lift > 0.05, "agreement selects the items both members got right"
+    assert p.stop_rate < 1.0
+
+
+def test_a_one_member_policy_has_no_pair_so_no_joint_failure():
+    t = _table({f"i{n}": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)} for n in range(30)})
+    p = evaluate(t, ("a",), "dear")
+    assert p.worst_joint_failure is None
+    assert p.agreement_lift == pytest.approx(0.0, abs=1e-9), (
+        "one member agreeing with itself adds nothing by construction")
+
+
+def test_the_wrong_stop_rate_is_what_an_operator_feels():
+    """`stop_rate x (1 - accuracy_when_stopped)`: how often a confident wrong answer goes out.
+
+    Neither figure it is built from says this on its own, and it is the one that decides whether a
+    policy is shippable.
+    """
+    rows = {}
+    for n in range(100):
+        agree = n % 4 != 0                        # they agree on 75%
+        right = n % 8 != 0                        # and are wrong on half of the disagreeing... no:
+        rows[f"i{n}"] = {
+            "a": (SOLVED if right else INCORRECT, "B" if agree else "C", 1.0),
+            "b": (SOLVED if right else INCORRECT, "B" if agree else "D", 1.0),
+            "dear": (SOLVED, "B", 10.0),
+        }
+    p = evaluate(_table(rows), ("a", "b"), "dear")
+    expected = (p.stopped - p.solved_when_stopped) / p.items
+    assert p.wrong_stop_rate == pytest.approx(expected)
+    assert p.wrong_stop_rate == pytest.approx(p.stop_rate * (1 - p.accuracy_when_stopped), abs=1e-9)
+
+
+def test_a_policy_score_is_never_a_product_of_marginals():
+    """Two matrices with identical per-candidate accuracy and different joint structure must score
+    differently, or the implementation is multiplying marginals somewhere.
+
+    Both reviewers named this as the invariant that makes correlation a measured fact rather than a
+    distortion needing correction: if no independence formula appears in the code, there is nothing to
+    correct for.
+    """
+    # Both matrices: `a` right on 50%, `b` right on 50%. In the first they fail together; in the second
+    # they fail on disjoint items.
+    together, apart = {}, {}
+    for n in range(80):
+        half = n % 2 == 0
+        together[f"i{n}"] = {"a": (SOLVED if half else INCORRECT, "B" if half else "C", 1.0),
+                             "b": (SOLVED if half else INCORRECT, "B" if half else "C", 1.0),
+                             "dear": (SOLVED, "B", 10.0)}
+        apart[f"i{n}"] = {"a": (SOLVED if half else INCORRECT, "B" if half else "C", 1.0),
+                          "b": (INCORRECT if half else SOLVED, "C" if half else "B", 1.0),
+                          "dear": (SOLVED, "B", 10.0)}
+    ta, tb = _table(together), _table(apart)
+    for t in (ta, tb):
+        for cand in ("a", "b"):
+            acc = sum(1 for i in t.items if t.cells[i][cand].solved) / len(list(t.items))
+            assert acc == pytest.approx(0.5), "the marginals are identical by construction"
+    pa = evaluate(ta, ("a", "b"), "dear")
+    pb = evaluate(tb, ("a", "b"), "dear")
+    assert pa.stop_rate != pb.stop_rate, "the joint structure has to reach the score"
+    assert pa.worst_joint_failure != pb.worst_joint_failure
+    assert pa.accuracy != pb.accuracy
+
+
+def test_no_candidate_is_pruned_by_its_own_accuracy():
+    """The measured counterexample: a serving configuration 9 points weaker on its own was the best
+    member of the best pair. Pruning on single accuracy would have removed it.
+    """
+    rows = {}
+    for n in range(80):
+        strong = n % 10 != 0                      # 90%
+        weak = n % 2 == 0                         # 50%, and wrong where `strong` is right
+        rows[f"i{n}"] = {
+            "strong": (SOLVED if strong else INCORRECT, "B" if strong else "C", 1.0),
+            "weak": (SOLVED if weak else INCORRECT, "B" if weak else "D", 1.0),
+            "dear": (SOLVED, "B", 10.0),
+        }
+    ps = enumerate_policies(_table(rows), candidates=["strong", "weak"], escalate_to=["dear"],
+                            min_stopped=1)
+    assert any(p.members == ("strong", "weak") for p in ps), (
+        "the weak candidate must still be enumerated as a member")

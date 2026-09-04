@@ -65,6 +65,16 @@ class QuorumPolicy:
     solved: int                           # items the policy got right, over `items`
     solved_when_stopped: int              # of `stopped`, how many the agreed answer got right
     usd_per_item: float | None            # None when any needed cell is unpriced
+    #: The best single member's accuracy over ALL items, which is what the quorum has to beat to be
+    #: worth building. On the stopped set every member gave the same answer, so every member is right or
+    #: wrong together there and a comparison inside it is vacuous -- the honest baseline is what one
+    #: member would have given you on the whole corpus.
+    best_member_accuracy: float = 0.0
+    #: The largest, over member pairs, of P(both wrong | at least one wrong). High values mean agreement
+    #: is a weak certificate: measured over 120 pairs, this correlates -0.791 with the accuracy of the
+    #: agreed answer while the stop rate RISES with it, so a correlated quorum stops more often and
+    #: worse. `None` for a one-member policy, which has no pair.
+    worst_joint_failure: float | None = None
     # Set on a signal-threshold policy, `None` on a quorum. Both shapes live in one dataclass so one
     # frontier can rank them against each other; the field is what tells a reader which mechanism a
     # frontier point came from.
@@ -90,6 +100,28 @@ class QuorumPolicy:
         return self.solved_when_stopped / self.stopped if self.stopped else 0.0
 
     @property
+    def wrong_stop_rate(self) -> float:
+        """The share of ALL items where the policy stopped and the agreed answer was wrong.
+
+        `stop_rate x (1 - accuracy_when_stopped)`, and it is the number an operator actually feels:
+        how often the policy returns a confident wrong answer instead of escalating. A stop rate of 67%
+        at 87.8% accuracy-when-stopped is 8.2% of every request answered wrongly with no second look,
+        and neither of the two figures it is built from says that on its own.
+        """
+        return (self.stopped - self.solved_when_stopped) / self.items if self.items else 0.0
+
+    @property
+    def agreement_lift(self) -> float:
+        """How much better the agreed answer is than the best member would have been anyway.
+
+        This is the number that says whether the quorum does anything. Measured over 120 pairs it runs
+        from +17.3% down to +0.8%, and the bottom of that range is a pair of near-duplicate serving
+        configurations that stop on 97% of items and add nothing -- **one model wearing two hats**. A
+        stop rate cannot tell those apart from a real quorum; this can.
+        """
+        return self.accuracy_when_stopped - self.best_member_accuracy
+
+    @property
     def priced(self) -> bool:
         return self.usd_per_item is not None
 
@@ -112,6 +144,28 @@ def agreement(table: OutcomeTable, members: tuple[str, ...], items: list[str]) -
         else:
             escalated.append(item)
     return stopped, escalated
+
+
+def joint_failure(table: OutcomeTable, a: str, b: str, items: list[str]) -> float | None:
+    """`P(both wrong | at least one wrong)` for a pair, which is what makes agreement worth having.
+
+    Measured over 120 pairs on one corpus, this correlates **-0.791** with the accuracy of the answer a
+    quorum stops on, while the stop rate *rises* with it -- so a correlated pair stops more often and
+    worse, and a stop rate quoted on its own hides that entirely.
+
+    It is deliberately measured rather than inferred from whether the candidates share weights. On the
+    same corpus, pairs sharing weights disagreed on 2.7% to 35.7% of answers and pairs from different
+    model families on 9.4% to 46.3%, with **identical medians** (31.9% and 31.8%) -- two frontier models
+    of one family agreed more closely than two serving configurations of one open-weights model. "Shares
+    weights" predicts nothing; the matrix says what the correlation actually is.
+
+    `None` when no item is wrong for either, which is not a low correlation but an absent measurement.
+    """
+    both = sum(1 for i in items
+               if not _cell(table, i, a).solved and not _cell(table, i, b).solved)
+    either = sum(1 for i in items
+                 if not _cell(table, i, a).solved or not _cell(table, i, b).solved)
+    return both / either if either else None
 
 
 def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
@@ -152,6 +206,11 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
     right_stopped = sum(1 for i in stopped if any(_cell(table, i, m).solved for m in members))
     right_escalated = sum(1 for i in escalated if _cell(table, i, escalate_to).solved)
 
+    best_member = max((sum(1 for i in subject if _cell(table, i, m).solved) for m in members),
+                      default=0) / len(subject) if subject else 0.0
+    pair_jf = [j for a, b in combinations(members, 2)
+               if (j := joint_failure(table, a, b, subject)) is not None]
+
     return QuorumPolicy(
         members=tuple(members),
         escalate_to=escalate_to,
@@ -160,6 +219,8 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
         solved=right_stopped + right_escalated,
         solved_when_stopped=right_stopped,
         usd_per_item=None if unpriced or not subject else total / len(subject),
+        best_member_accuracy=best_member,
+        worst_joint_failure=max(pair_jf) if pair_jf else None,
     )
 
 

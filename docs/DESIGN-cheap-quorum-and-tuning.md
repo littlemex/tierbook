@@ -450,6 +450,93 @@ run. Section 3d's correction of it was written from a confounded comparison. Thi
 one before and each was still wrong, and the only thing that has consistently worked is building the
 check as code and letting someone else attack the code.
 
+## 3f. Folding in a self-hosted model, and what its serving configurations exposed
+
+Added 2026-09-01. A self-hosted `qwen3.6-35b-a3b` was measured on the calibration fold in nine serving
+configurations, alongside seven API candidates including `claude-sonnet-4-6` — 16 candidates over 488
+items, 9,200 policies. Two questions were put to both reviewers first, and the measurement answered one
+of them against my own proposal.
+
+**"Candidates sharing weights are correlated" is false, and the matrix says so.** The plan was a discrete
+correlation group. Measured:
+
+| pair kind | answer disagreement | median |
+|---|---|---|
+| same weights, different serving configuration (36 pairs) | 2.7% – 35.7% | **31.9%** |
+| different model families (84 pairs) | 9.4% – 46.3% | **31.8%** |
+
+Identical medians, and `claude-fable-5` against `claude-opus-5` disagreed on 9.4% — two frontier models
+of one family agreeing far more closely than two configurations of one open-weights model. **Provenance
+predicts nothing about behaviour.** So correlation is measured per pair from the matrix, and provenance
+is kept for the three things a measurement cannot give: invalidating pair statistics when a weight
+version changes, flagging a pair whose disagreement has never been measured, and noting the risks a
+few-hundred-question corpus cannot see at all — a blind spot in the weights, a simultaneous update, a
+shared cluster. That is `tierbook.lineage`, named lineage because "correlation group" promises
+statistics these numbers refuse.
+
+**A stop rate is the most misleading figure available, and two new ones replace it.**
+
+`joint_failure`, the largest `P(both wrong | at least one wrong)` over member pairs, correlates
+**−0.791** with the accuracy of the answer a quorum stops on — while the stop rate *rises* with it. Over
+120 pairs, sorted into quartiles by joint failure:
+
+| joint failure | accuracy when stopped | stop rate |
+|---|---|---|
+| 25.1% | **91.9%** | 65.0% |
+| 35.3% | 89.6% | 68.9% |
+| 42.0% | 88.2% | 71.5% |
+| 64.4% | **80.5%** | **78.4%** |
+
+**A correlated quorum stops more often and worse.** Anyone optimising a stop rate is optimising the
+wrong direction.
+
+`agreement_lift` — accuracy when stopped, minus the best member's accuracy over all items — says whether
+the quorum does anything at all. It runs from **+14.8%** down to **+0.9%**, and the bottom is a pair of
+near-duplicate serving configurations that stop on 97% of items and add nothing: **one model wearing two
+hats**, indistinguishable from a real quorum by stop rate alone. 136 of 8,960 enumerated quorums are in
+that shape.
+
+**And the figure an operator actually feels is `wrong_stop_rate`**, `stop_rate x (1 - accuracy_when_stopped)`:
+how often the policy returns a confident wrong answer with no second look. It reorders the frontier at a
+fixed accuracy floor, which neither of the numbers it is built from can do:
+
+| at an 85% accuracy floor | members | cost per item | wrong-stop rate |
+|---|---|---|---|
+| cheapest | 2 | $0.00306 | 8.2% |
+| **fewest confident errors** | 3 | $0.00385 (1.26x) | **5.3%** |
+
+26% more money buys a 35% reduction in confidently-wrong answers at the same accuracy. And the policy
+that clears a 75% floor has a wrong-stop rate of **21.1%** — one request in five answered wrongly and
+never escalated, from a policy whose accuracy column looks unremarkable.
+
+**The residency-constrained answer now comes out of the optimiser** rather than a script. Restricted to
+candidates that can be inferred domestically — the `qwen3.6` configurations plus `claude-sonnet-4-6`:
+
+| accuracy floor | cheapest policy | accuracy | cost per item | handled locally |
+|---|---|---|---|---|
+| 80% | `q36:v2` + `q36:v3` → `q36:tersec1b`, **no API at all** | 80.1% | **$0.00048** | 80% |
+| 85% | `q36:tersec1b` + `q36:v2` → `claude-sonnet-4-6` | 85.0% | $0.00306 | 67% |
+| 86% | unreachable | — | — | — |
+
+At an 80% floor the API is not needed at all, at a sixth of the 85% policy's cost. At 85% the answer
+matches the figure computed by hand earlier, which is the mechanism reproducing a result rather than a
+new one. 86% is out of reach, which bounds the pool.
+
+**Two invariants both reviewers named, now pinned by tests.** A policy's score is never derived from a
+product of marginal accuracies — two matrices with identical per-candidate accuracy and different joint
+structure must score differently, and they do — because if no independence formula appears in the code
+then correlation is a measured fact rather than a distortion needing a correction factor. And **no
+candidate is ever pruned by its own accuracy**: the best member of the best pair here was a
+configuration 9 points weaker on its own, so single-accuracy pruning would have removed exactly the one
+that mattered. If pruning is ever needed for combinatorics, only proven dominance on joint statistics
+will do.
+
+**What is deliberately not claimed.** Every figure here is one run of the calibration fold, and section
+3d exists because single-run policy recommendations reversed three times. The disagreement rates are
+task-distribution dependent — 31.9% on MMLU-Pro says nothing certain about production traffic — and
+`reproduce.compare` is the tool for both problems, not yet applied to this table because the
+`qwen3.6` configurations have not been collected twice.
+
 ## 4. Abstention: the tail is four different things and only one of them is routing
 
 The 51 items nobody solves carry 54.8% of the cascade bill. Both reviews independently said not to build a
