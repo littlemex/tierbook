@@ -112,3 +112,44 @@ is acted on. A conclusion nobody has published is where the remaining measuremen
 ## この調査が主張しないこと
 
 arXiv の API 検索とアブストラクトだけで、本文は読んでいない。だから「見つからなかった」は「存在しない」ではなく「この検索語では出てこなかった」である。行 5 と行 6 の空白の主張はその弱さを負っている。数字はすべて各論文のアブストラクトからの引用で、我々が再現したものではない。
+
+## 7. 追記 (2026-09-05): 分解の文献。前提は未測定、Dispatcher の代金は既に潰されている
+
+`results-shape-of-the-routing-space.md` の結論「受動的な選択は終わり、残るのは問いを軸の下へ動かすこと」を
+受けて、分解 (decomposition) 側の文献を当たった。**探した問いは 1 つ**: 分解が**部分の難易度を下げる**と
+報告した論文はあるか。これは「分解すると端から端までの精度が上がる」とは**別の主張**で、我々が必要なのは
+後者ではなく前者である。
+
+**前提そのものは未測定に見える。** 系列の代表を読んだが、報告されているのは端から端までの精度である。
+
+- **arXiv:2205.10625 (Zhou et al.) Least-to-Most Prompting** — 「複雑な問題を一連の *simpler subproblems*
+  に割る」と述べるが、測っているのは端から端まで。SCAN で **99% 以上 対 chain-of-thought の 16%**。
+  **部分が個々に易しくなったことは測っていない。**
+- arXiv:2210.02406 (Decomposed Prompting)、arXiv:2305.04091 (Plan-and-Solve) も同じ形。
+- 検索語を変えても、部分の難易度分布を元の問いと比べた報告は出てこなかった。
+
+**一方、Dispatcher の代金を消す道は既に published だった。**
+
+- **arXiv:2402.15000 "Divide-or-Conquer? Which Part Should You Distill Your LLM?"** が我々の問い 4 に
+  正面から答えている。推論を**分解フェーズ**と**解答フェーズ**に分け、「分解は一般的な問題解決戦略を
+  学ぶだけで済むが、解答は大量のドメイン知識を要する」から**分解の方が小さいモデルに蒸留しやすい**と
+  仮説を立て、確認した。結論は *"we can distill the problem decomposition phase and at the same time
+  achieve good generalization across tasks, datasets, and models. However, it is harder to distill the
+  problem solving capability without losing performance"*。
+  → **「Dispatcher を安いモデルに蒸留する」は既知の手法で、しかも効く方の半分である。**
+  我々が「分解の質が落ちて前提が壊れるかもしれない」と留保していた選択肢が、文献では本命だった。
+
+**そして注意すべき否定的結果が 1 本ある。**
+
+- **arXiv:2602.04853 "Decomposed Prompting Does Not Fix Knowledge Gaps"** は Direct / Assistive /
+  Incremental の 3 つの等価な prompting 体制を比べ、**分解による精度利得は frontier モデルでは
+  小さくなる**と報告する。ただし論文の主眼は別で、体制間の**不一致**が誤りの信号になるという話に進む
+  (訓練不要の棄権方策で F1 と AUROC が標準的な不確実性ベースラインを上回る)。
+  → 我々の用途は「弱いモデルに部分をやらせる」方向なので、frontier で利得が縮むこと自体は矛盾しない。
+  だが**「分解は知識の欠落を埋めない」という主張は、`answerability-lives-in-hidden-states` の
+  知識制約 K の側に直接当たる**。分解で動かせるのは推論制約 R の側だけかもしれない。
+
+**ここへの含意。** 実験の設計が変わる。(1) 測るべきは端から端までの精度ではなく**部分の難易度分布**で、
+そこは文献の空白である。(2) Dispatcher の代金は蒸留で下げられ、それは既知なので自分で発明しなくてよい。
+(3) **知識制約の項目では分解が効かない可能性が文献側から来ている**ので、実験は知識と推論で層別する
+必要がある。
