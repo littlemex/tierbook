@@ -450,6 +450,29 @@ run. Section 3d's correction of it was written from a confounded comparison. Thi
 one before and each was still wrong, and the only thing that has consistently worked is building the
 check as code and letting someone else attack the code.
 
+## 3g. A prior-art survey found a third defect, and it is in every floor recommendation above
+
+Added 2026-09-04. A literature survey (`docs/prior-art-routing-and-noise.md`) turned up
+arXiv:2608.08265, which names a flaw this module had and neither adversarial round caught: **choosing the
+best of a family on the same examples that score it invalidates the interval.** Their version of the
+result is that a simultaneous interval for the best of eleven policies has a lower limit of zero
+throughout. `cheapest_meeting` does exactly that, over **480 distinct priced policies** on 571 items.
+
+Measured, in `docs/results-selection-cost.md`: the gap between a winner's accuracy and the lower bound
+that survives the search is **6.7 points**, of which 3.4 is the search itself and 3.2 is ordinary sample
+size. Across five floors and two runs, **nine of ten recommendations do not clear the floor they were
+quoted at**, and the one that does has seven points of slack.
+
+So the recommendations in 3b, 3c and 3d are point estimates and were never certifications. `reproduce`
+now reports `SelectedPolicy` with both bounds, deliberately in a separate field from `claims` — an
+uncertified policy can win in both runs, and eight of the nine did, so reproducing is not the same
+question and must not be able to substitute for it.
+
+The lesson generalises past this defect: 3b, 3d and 3e were each a correction found by *repeating* the
+measurement, and this one could not have been found that way at all. It was found by reading what other
+people had already proved. That is a cheaper instrument than a second collection and it had not been
+used.
+
 ## 3f. Folding in a self-hosted model, and what its serving configurations exposed
 
 Added 2026-09-01. A self-hosted `qwen3.6-35b-a3b` was measured on the calibration fold in nine serving
@@ -656,6 +679,30 @@ measured earlier is why — closely spaced rungs mean early failures cannot iden
 will also fail. It opens exactly one avenue, the one the design already registered: evidence from the
 **item**, through `theta` regressed from cheap features, since that is the only quantity that differs
 between the 3 rescuable items and the 28 hopeless ones at the moment of the decision.
+
+**Added 2026-09-04, and it widens that avenue.** The literature survey found that the 0.5000 is a
+property of the *evidence class* and not of the question, and that the class it excludes is larger than
+this section assumed. arXiv:2607.08456 measures five models across three families and finds that "is this
+answer wrong" and "is this question answerable" are **separate axes**: ordinary answer-confidence tracks
+correctness and is nearly blind to answerability, and the blind spot does not shrink with scale. On
+naturally occurring false-premise questions, answer-confidence, P(IK), P(True) and asking the model
+outright all stay near chance — while **a linear probe on hidden states reaches 0.69 to 0.77 AUROC.**
+Their phrasing is that the model represents a problem it will not report. Instructing a model to check
+premises backfires (57% false challenges); routing the same instruction with the probe roughly triples
+precision.
+
+Three consequences here. First, the sentence "a cascade cannot learn when to give up from its own
+history" stands, but the wider reading — that abandonment is unpredictable — does not: it was measured
+with output-side evidence only. Second, **on the API candidates hidden states are unavailable, so 4c's
+fixed abandonment depth remains the only option there.** Third, and this is a value of the self-hosted
+box that has not been counted anywhere: **the box exposes hidden states.** The logprob margin at AUC
+0.838 in `box-cascade-moe-and-margin-judge` is the shallowest version of this idea and is still
+output-side.
+
+The registered follow-on is therefore: fit a probe on the box's hidden states for the 51-versus-143 split
+(solved by nobody, versus merely needing a dearer tier). One caveat that keeps this a hypothesis rather
+than a substitution — arXiv:2607.08456's "unanswerable" is mostly *no answer exists or the premise is
+false*, while these 51 items have answers that nobody reached. Whether the same axis carries is unknown.
 
 ## 4d. Before spending GPU time: what the box is worth, and at which floor
 

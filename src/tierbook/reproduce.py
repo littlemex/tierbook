@@ -50,11 +50,21 @@ failed" against "about 1.6 expected by chance" reads it differently from "5 fail
 
 **And it will not call anything reproducible.** Two runs give a difference, not a variance. A claim that
 survives one repeat is a claim that has not yet failed, and `Reproduction` says so in those terms.
+
+**And it will not quote the winner of a search as if it had been measured on its own.** `cheapest_meeting`
+picks the best of hundreds of enumerated policies on the same items it scores them with, so the winner's
+accuracy is the maximum of many noisy estimates and sits above the truth by construction. That flaw is
+named in the literature -- arXiv:2608.08265 shows that choosing the best fixed model on the same examples
+invalidates paired inference, and that the simultaneous interval for the best of eleven policies had a
+lower limit of zero throughout -- and it applies to this module's own output. So a floor claim now travels
+with a **selection-adjusted lower bound**, and a separate claim records whether the recommendation ever
+cleared its floor once the size of the search is paid for. See `docs/prior-art-routing-and-noise.md`.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from statistics import NormalDist
 
 from math import comb
 
@@ -89,6 +99,90 @@ def wilson(successes: int, n: int, *, z: float = 1.96) -> tuple[float, float]:
     centre = (p + z * z / (2 * n)) / denom
     half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
     return (max(0.0, centre - half), min(1.0, centre + half))
+
+
+def simultaneous_wilson(successes: int, n: int, *, alpha: float = 0.05,
+                        considered: int = 1) -> tuple[float, float]:
+    """A Wilson interval widened to stay valid after picking the best of `considered` candidates.
+
+    The widening is Bonferroni: the interval is computed at `alpha / considered` so that all `considered`
+    intervals hold at once, which means the one belonging to whichever policy the search returned holds
+    too. That is conservative -- the policies overlap heavily, since they are built from the same handful
+    of candidates on the same items, so the true simultaneous requirement is weaker than treating them as
+    independent. Conservative is the right direction here: the failure this corrects is a recommendation
+    quoted at an accuracy it never had, and a bound that is too low delays a deployment where a bound that
+    is too high authorises one.
+
+    `considered` is the number of *distinct* policies the search ranked, which is why callers pass
+    `canonical()`'s output rather than the raw enumeration: policies that never escalate exist once per
+    escalation tier and are the same policy, so counting them separately would inflate the penalty for no
+    statistical reason.
+    """
+    if considered < 1:
+        raise EvidenceError(f"a search cannot have ranked {considered} policies")
+    z = NormalDist().inv_cdf(1 - alpha / (2 * considered))
+    return wilson(successes, n, z=z)
+
+
+@dataclass(frozen=True)
+class SelectedPolicy:
+    """What a floor search returned, and what survives once the search itself is paid for."""
+
+    policy: QuorumPolicy | None
+    floor: float
+    considered: int                # how many distinct policies the floor was searched over
+    naive_low: float               # 95% lower bound ignoring that this policy won a search
+    adjusted_low: float            # lower bound valid after the search
+    ties: int = 1                  # policies tied at the winning price, the winner included
+
+    @property
+    def clears_floor(self) -> bool:
+        """Whether the point estimate met the floor. This is what `cheapest_meeting` asserts."""
+        return self.policy is not None and self.policy.accuracy >= self.floor
+
+    @property
+    def certified(self) -> bool:
+        """Whether the floor survives the selection.
+
+        A policy can clear the floor on the point estimate and fail here, and that is the normal case
+        rather than an anomaly: with a few hundred items and hundreds of policies ranked, the adjusted
+        bound sits several points below the estimate. Reading `clears_floor` as the answer is how a
+        recommendation gets quoted at an accuracy nothing measured.
+        """
+        return self.policy is not None and self.adjusted_low >= self.floor
+
+    def __str__(self) -> str:
+        if self.policy is None:
+            return f"no policy reaches the {self.floor:.0%} floor"
+        p = self.policy
+        tied = f", {self.ties - 1} tied" if self.ties > 1 else ""
+        return (f"{'+'.join(p.members)} -> {p.escalate_to} {p.accuracy:.1%} "
+                f"(naive low {self.naive_low:.1%}, after selecting from {self.considered}: "
+                f"{self.adjusted_low:.1%}{tied}) -- "
+                f"{'certified' if self.certified else 'NOT certified'} at {self.floor:.0%}")
+
+
+def select_at_floor(policies: list[QuorumPolicy], *, accuracy_floor: float,
+                    alpha: float = 0.05) -> SelectedPolicy:
+    """`cheapest_meeting` plus the honest interval on what it returned.
+
+    Kept here rather than in `quorum` so that the optimiser stays a search and this stays the statistics
+    about the search. A caller that only wants the cheapest policy has no need to pass an `alpha`.
+    """
+    ranked = [p for p in canonical(policies) if p.priced]
+    considered = max(1, len(ranked))
+    chosen = cheapest_meeting(policies, accuracy_floor=accuracy_floor)
+    if chosen is None:
+        return SelectedPolicy(None, accuracy_floor, considered, 0.0, 0.0)
+    eligible = [p for p in ranked if p.accuracy >= accuracy_floor]
+    cheapest = min((p.usd_per_item for p in eligible), default=None)
+    ties = sum(1 for p in eligible
+               if cheapest is not None and p.usd_per_item <= cheapest + 1e-12)
+    naive_low, _ = wilson(chosen.solved, chosen.items)
+    adjusted_low, _ = simultaneous_wilson(chosen.solved, chosen.items, alpha=alpha,
+                                          considered=considered)
+    return SelectedPolicy(chosen, accuracy_floor, considered, naive_low, adjusted_low,
+                          ties=max(1, ties))
 
 
 @dataclass(frozen=True)
@@ -126,6 +220,18 @@ class Reproduction:
     flips: dict[str, int] = field(default_factory=dict)
     accuracy: dict[str, tuple[float, float]] = field(default_factory=dict)
     claims: list[Claim] = field(default_factory=list)
+    #: Run 1's recommendation at each floor, with the interval that survives the search that found it.
+    #: Deliberately **not** a `Claim`: a claim is "run 1 said X and run 2 said Y", and this has no second
+    #: column -- it is a defect in run 1's own reading that a second collection cannot cure or reveal. A
+    #: policy that was never certified can win twice, and folding that into `failed` would let a reader
+    #: count it as a reproduction failure and, worse, let a certified-nowhere recommendation pass by
+    #: reproducing.
+    selection: list[SelectedPolicy] = field(default_factory=list)
+
+    @property
+    def uncertified(self) -> list[SelectedPolicy]:
+        """Floors where run 1's recommendation met the point estimate but not the adjusted bound."""
+        return [s for s in self.selection if s.clears_floor and not s.certified]
 
     @property
     def dropout(self) -> float:
@@ -213,6 +319,13 @@ class Reproduction:
             f"{len(self.held)} claims were identical in this one repeat; {len(self.failed)} were not "
             f"({self.expected_failures_by_chance:.1f} expected by chance). One repeat is not a variance.",
         ]
+        if self.uncertified:
+            lines.append(
+                f"{len(self.uncertified)} of {len(self.selection)} floors: run 1's recommendation met the "
+                f"floor on the point estimate but not after paying for the search that found it. "
+                f"Reproducing does not fix this."
+            )
+            lines += [f"    {s}" for s in self.uncertified]
         lines += [str(c) for c in self.failed]
         return "\n".join(lines)
 
@@ -378,12 +491,19 @@ def compare(first: OutcomeTable, second: OutcomeTable, *, candidates: list[str],
         a = cheapest_meeting(policies["first"], accuracy_floor=floor)
         b = cheapest_meeting(policies["second"], accuracy_floor=floor)
 
-        def describe(p, tied):
+        # Run 1's recommendation with the interval that survives the search. Recorded for every floor,
+        # including unreachable ones, so `selection` and `floors` line up positionally.
+        rep.selection.append(select_at_floor(policies["first"], accuracy_floor=floor))
+
+        def describe(p, tied, table_label):
             if p is None:
                 return "no policy reaches this floor"
             extra = f", {len(tied) - 1} others tied" if len(tied) > 1 else ""
+            # The adjusted bound travels with the price, because the price is what makes the policy
+            # attractive and the bound is what says whether its accuracy was ever established.
+            low = select_at_floor(policies[table_label], accuracy_floor=floor).adjusted_low
             return (f"{'+'.join(p.members)} -> {p.escalate_to} "
-                    f"({p.accuracy:.1%}, ${p.usd_per_item:.5f}{extra})")
+                    f"({p.accuracy:.1%}, adjusted low {low:.1%}, ${p.usd_per_item:.5f}{extra})")
 
         # Both runs finding the floor unreachable is the SAME conclusion, not a difference. Reporting it
         # as a failure told a reader two runs disagreed when they had agreed exactly.
@@ -393,7 +513,7 @@ def compare(first: OutcomeTable, second: OutcomeTable, *, candidates: list[str],
         rep.claims.append(Claim(
             kind="cheapest_at_floor",
             subject=f"the cheapest policy meeting a {floor:.0%} accuracy floor",
-            first=describe(a, a_set), second=describe(b, b_set), survived=survived,
+            first=describe(a, a_set, "first"), second=describe(b, b_set, "second"), survived=survived,
         ))
 
         # A second, looser layer, because an operator needs to know which half moved. The members are the

@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from tierbook.evidence import INCORRECT, SOLVED, UNOBSERVED, EvidenceError  # noqa: E402
 from tierbook.outcomes import Cell, OutcomeTable  # noqa: E402
-from tierbook.reproduce import compare, wilson  # noqa: E402
+from tierbook.reproduce import compare, simultaneous_wilson, wilson  # noqa: E402
 
 
 def _t(rows: dict[str, dict[str, tuple[str, str | None, float | None]]]) -> OutcomeTable:
@@ -320,3 +320,75 @@ def test_holding_prices_fixed_across_runs_is_a_deliberate_choice():
     a = [c for c in fixed.claims if c.kind == "cheapest_at_floor"][0]
     b = [c for c in moved.claims if c.kind == "cheapest_at_floor"][0]
     assert a.second != b.second, "the second run's prices have to be able to change the answer"
+
+
+def test_the_adjusted_bound_is_below_the_naive_one_and_the_gap_grows_with_the_search():
+    """The whole point of the correction: ranking more policies has to cost more certainty.
+
+    A bound that ignored the size of the search would be identical whether three policies were compared
+    or three hundred, which is the flaw arXiv:2608.08265 names -- picking the best on the same examples
+    that score it.
+    """
+    lo_naive, _ = wilson(80, 100)
+    lo_few, _ = simultaneous_wilson(80, 100, considered=3)
+    lo_many, _ = simultaneous_wilson(80, 100, considered=300)
+    assert lo_naive > lo_few > lo_many
+    # `considered=1` is the ordinary interval. Not exactly equal, because `wilson`'s default z is the
+    # rounded 1.96 and this derives the exact quantile; the difference is 2e-6 and belongs to the rounding
+    # rather than to the correction.
+    assert simultaneous_wilson(80, 100, considered=1) == pytest.approx(wilson(80, 100), abs=1e-5)
+
+
+def test_a_search_that_ranked_nothing_is_refused_rather_than_silently_treated_as_one():
+    with pytest.raises(EvidenceError):
+        simultaneous_wilson(80, 100, considered=0)
+
+
+def test_a_recommendation_that_only_just_meets_its_floor_is_not_certified():
+    """`clears_floor` and `certified` are different questions, and the module reports both.
+
+    A policy at 66.7% over 90 items does not establish a 60% floor: even the unadjusted lower bound is
+    below it. Quoting the point estimate as the accuracy is how a recommendation gets deployed at a
+    number nothing measured.
+    """
+    one, two = _pair(90)
+    r = compare(one, two, candidates=["cheap", "dear"], floors=(0.60,))
+    sel = r.selection[0]
+    assert sel.clears_floor
+    assert not sel.certified
+    assert sel.considered > 1
+    assert sel.adjusted_low < sel.naive_low < sel.floor
+    assert r.uncertified == [sel]
+
+
+def test_being_uncertified_is_not_counted_as_a_reproduction_failure():
+    """The two defects are different and a reader has to be able to tell them apart.
+
+    An uncertified recommendation can win in both runs. If that landed in `failed`, a stable matrix would
+    look unreproducible; if `certified` were silently folded into `survived`, a policy certified nowhere
+    would pass by reproducing. So it lives in `selection`, and the summary says reproducing does not fix
+    it.
+    """
+    one, two = _pair(90)
+    r = compare(one, two, candidates=["cheap", "dear"], floors=(0.60,))
+    assert r.uncertified, "this fixture is only interesting if a floor is uncertified"
+    assert r.failed == [], "\n".join(str(c) for c in r.failed)
+    assert "Reproducing does not fix this" in r.summary()
+
+
+def test_an_unreachable_floor_records_a_selection_with_no_policy():
+    """`selection` lines up positionally with `floors`, so an unreachable floor still takes a slot."""
+    one, two = _pair(60)
+    r = compare(one, two, candidates=["cheap", "dear"], floors=(0.60, 1.01))
+    assert len(r.selection) == 2
+    assert r.selection[1].policy is None
+    assert not r.selection[1].clears_floor and not r.selection[1].certified
+    assert r.selection[1] not in r.uncertified
+    assert "no policy reaches" in str(r.selection[1])
+
+
+def test_the_floor_claim_carries_the_adjusted_bound_so_a_reader_cannot_miss_it():
+    one, two = _pair(90)
+    r = compare(one, two, candidates=["cheap", "dear"], floors=(0.60,))
+    claim = [c for c in r.claims if c.kind == "cheapest_at_floor"][0]
+    assert "adjusted low" in claim.first and "adjusted low" in claim.second
