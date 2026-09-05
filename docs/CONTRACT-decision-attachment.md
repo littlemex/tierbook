@@ -233,4 +233,8 @@ the drop-rate curve under load. None of these are guesses dressed as facts — t
 measure before section 9 can be signed off.
 
 **Nothing here has been run.** This contract is a design; the four fields are not implemented on either
-side, and the request in section 8 has not been sent.
+side. The request in section 8 is **drafted but not sent** — its text is
+`/Users/akazawt/tmp/e02/sclv-issues/ISSUES.md`, request A, where the four fields appear with numbered
+acceptance properties and the compatibility question this document leaves open (whether a public export
+schema exists) is raised as Q2. The same file carries four unrelated fixes this project runs as local
+patches against the gateway; those are not part of this contract.
