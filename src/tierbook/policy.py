@@ -130,17 +130,40 @@ class Tier:
     record: dict
     ledger_root: str = "."
 
-    def token_cost(self, fresh_in: int, cached_in: int, out: int) -> float:
+    def token_cost(self, fresh_in: int, cached_in: int, out: int, cache_write: int = 0) -> float:
         """What a call of this size costs at this tier's measured rates.
 
+        Four legs, because that is how many a gateway in front bills: fresh input, a cache read, a cache
+        write, and output. A caller that sums three of them reports a total below what it pays, and the leg
+        it drops is the one that only appears on the threads long enough to be worth caching.
+
         A tier whose `cached_in` is null has its cached tokens charged as fresh. Unmeasured is not free --
-        coercing that null to zero is how a tier with invisible cache economics comes out cheapest.
+        coercing that null to zero is how a tier with invisible cache economics comes out cheapest. A null
+        `cache_write` is charged at the fresh rate rather than at zero for the same reason; that is a lower
+        bound where the provider charges a write premium, and `write_rate_is_a_floor` says so.
         """
         card = self.record["price_card"]
         rate = card["cached_in"]
         if rate is None:
             fresh_in, cached_in, rate = fresh_in + cached_in, 0, 0.0
-        return (fresh_in * card["fresh_in"] + cached_in * rate + out * card["output"]) / 1e6
+        write_rate = card.get("cache_write")
+        if write_rate is None:
+            write_rate = card["fresh_in"]
+        return (
+            fresh_in * card["fresh_in"]
+            + cached_in * rate
+            + cache_write * write_rate
+            + out * card["output"]
+        ) / 1e6
+
+    @property
+    def write_rate_is_a_floor(self) -> bool:
+        """Whether this tier's cache-write leg is charged at a substitute rate.
+
+        True means the card carries no write rate and `token_cost` used the fresh one, so any total
+        involving a cache write is a lower bound on this tier and must be reported as one.
+        """
+        return self.record["price_card"].get("cache_write") is None
 
     def amortised_cost_per_task(self, realised_tasks_per_hour: float | None) -> float:
         """The share of a fixed hourly bill one task carries, zero for a tier without one.

@@ -176,6 +176,13 @@
           ],
           "description": "null when the tier does not report cached tokens. Never coerced to zero: unmeasured is not free."
         },
+        "cache_write": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "The fourth billed leg. Populating a cache entry is charged separately from reading one and from fresh input: Anthropic prices a write at 1.25x fresh, and a gateway in front bills it on its own line. null when the tier does not report the leg, in which case it is charged at the fresh rate -- a lower bound, and labelled as one, on the same principle as cached_in: unmeasured is not free."
+        },
         "output": {
           "type": "number"
         },

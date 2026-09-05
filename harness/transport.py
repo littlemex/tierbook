@@ -75,6 +75,12 @@ class Reply:
     # Set when the cost of this call is an approximation rather than the provider's own
     # figure, which happens when a stream breaks before the usage chunk.
     estimated: bool = False
+    # Which convention the usage block used for the cache legs, read from the key the value
+    # arrived under rather than assumed. `True` means the OpenAI one, where a cache read is a
+    # subset of `prompt_tokens`; `False` means the legs are disjoint from it and add to it;
+    # `None` means no leg was reported and the distinction does not arise. See
+    # `fresh_prompt_tokens` for why one gateway can serve both.
+    legs_are_subset: bool | None = None
     # Structured calls, when the request declared tools. Accumulated from the stream rather
     # than read whole: a tool call arrives as fragments of its own JSON arguments, and taking
     # only the first fragment yields a call whose arguments are half a JSON object.
@@ -84,16 +90,40 @@ class Reply:
     def fresh_prompt_tokens(self) -> int:
         """Prompt tokens re-read at full price, and neither cached nor stored.
 
-        The gateway normalises to the OpenAI convention, where `prompt_tokens` is the
-        whole input: fresh plus cache reads plus what was written to the cache. So both
-        of the other two are subtracted, because `call_cost` charges cache writes on
-        their own line and counting them here as well bills the same token twice — and it
-        would do so only on the long-lived threads, which is the baseline.
+        **Two conventions reach this harness through the same gateway**, and which one
+        applies is decided by the key the value arrived under, not by the endpoint:
+
+        - *Subset* (`prompt_tokens_details.cached_tokens`, OpenAI's own meaning). This is
+          what the OpenAI-compatible pass-through forwards, because it forwards the
+          provider's own usage block. `prompt_tokens` is the whole input, so the other two
+          legs are subtracted — `call_cost` charges them on their own lines and counting
+          them here as well bills the same token twice.
+        - *Disjoint* (top-level `cache_read_input_tokens` /
+          `cache_creation_input_tokens`, the gateway's Converse-backed transports since
+          v1.3.0). `prompt_tokens` is the uncached input **only** and `total_tokens`
+          excludes the cache legs, so subtracting here deletes the fresh leg — the most
+          expensive one, at roughly ten times the cache-read price.
+
+        Subtracting under the disjoint convention is not a rounding error. On the
+        gateway's own measured example (10 fresh, 3,524 read) it yields `max(0, 10 - 3524)
+        = 0` and prices the call as if none of its input were fresh, and it does so
+        hardest on the long-lived cached threads, which is the baseline.
 
         Clamped at zero: a provider that changes its mind about the convention must not
         be able to produce a negative bill.
         """
+        if self.legs_are_subset is False:
+            return max(0, self.prompt_tokens)
         return max(0, self.prompt_tokens - self.cached_prompt_tokens - self.cache_write_tokens)
+
+    @property
+    def billed_input_tokens(self) -> int:
+        """Every input token this call is charged for, across the three input legs.
+
+        The denominator for a cache hit rate. Under the disjoint convention `prompt_tokens`
+        is not that total, so dividing by it reports a hit rate above 1.0 on a warm thread.
+        """
+        return self.fresh_prompt_tokens + self.cached_prompt_tokens + self.cache_write_tokens
 
     @property
     def priced(self) -> bool:
@@ -103,8 +133,17 @@ class Reply:
         nothing — and a call priced at zero is a free step that also slips past the spend
         ceiling. Long streams break more often, which means the arms that think longest
         would be the ones discounted.
+
+        Every leg counts, not just the two standard ones: under the disjoint convention a
+        turn served entirely from cache reports `prompt_tokens: 0`, and a reply that also
+        stopped without output would have been overwritten by an estimate.
         """
-        return self.prompt_tokens > 0 or self.completion_tokens > 0
+        return (
+            self.prompt_tokens > 0
+            or self.completion_tokens > 0
+            or self.cached_prompt_tokens > 0
+            or self.cache_write_tokens > 0
+        )
 
     def estimate_usage(self, request_chars: int, cached_share: float | None = None) -> None:
         """Fill in an approximation when the provider never reported one.
@@ -124,6 +163,10 @@ class Reply:
         self.prompt_tokens = max(1, request_chars // 4)
         if cached_share:
             self.cached_prompt_tokens = int(self.prompt_tokens * min(1.0, cached_share))
+            # An estimate takes a share OF the whole input, so it is the subset convention by
+            # construction. Declared rather than left at `None`, which would price the
+            # cached share as fresh as well as cached.
+            self.legs_are_subset = True
         self.completion_tokens = max(0, len(self.text) // 4)
         self.estimated = True
 
@@ -525,13 +568,31 @@ def _usage(reply: Reply, usage: dict) -> None:
         out_details.get("reasoning_tokens") or reply.reasoning_tokens
     )
     in_details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
+    # The convention comes from where the value was, not from which endpoint answered. A leg
+    # nested in `*_details` is OpenAI's subset of `prompt_tokens`; the same leg at the top
+    # level is the gateway's own key and is disjoint from it. Both shapes reach this harness
+    # through one gateway — the pass-through forwards the provider's block, the
+    # Converse-backed transports build their own — so guessing from the endpoint is wrong on
+    # one of them. `fresh_prompt_tokens` is what reads this.
     for key in ("cached_tokens", "cacheReadInputTokens", "cache_read_input_tokens"):
-        value = in_details.get(key, usage.get(key))
-        if value is not None:
-            reply.cached_prompt_tokens = int(value)
+        if key in in_details:
+            reply.cached_prompt_tokens = int(in_details[key])
+            reply.legs_are_subset = True
+            break
+        if key in usage:
+            reply.cached_prompt_tokens = int(usage[key])
+            reply.legs_are_subset = key == "cached_tokens"
             break
     for key in ("cache_write_tokens", "cacheWriteInputTokens", "cache_creation_input_tokens"):
-        value = in_details.get(key, usage.get(key))
-        if value is not None:
-            reply.cache_write_tokens = int(value)
+        if key in in_details:
+            reply.cache_write_tokens = int(in_details[key])
+            reply.legs_are_subset = True
+            break
+        if key in usage:
+            reply.cache_write_tokens = int(usage[key])
+            # A cache *write* is not part of OpenAI's `cached_tokens` under either
+            # convention, so a top-level write leg only settles the question when a read
+            # leg has not already answered it.
+            if reply.legs_are_subset is None:
+                reply.legs_are_subset = False
             break

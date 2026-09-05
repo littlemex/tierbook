@@ -234,11 +234,26 @@ def load_tiers(path: Path, default_url: str) -> pol.Roster:
                 f"[FAIL] the {tier} tier needs either a pricing_key from the gateway's "
                 "table or an explicit rate with a rate_basis."
             )
+        # `reasoning_effort` is the OpenAI-shaped channel and a model on the gateway's Anthropic
+        # wire has no code that reads it: the string does not appear in the gateway backend, and
+        # extended thinking there travels only as `thinking` inside
+        # `additionalModelRequestFields`, which the gateway did not send at all until v1.3.0. A
+        # config that pairs the two therefore declared a thinking arm and measured a non-thinking
+        # one, silently and at full price. Refused rather than translated: turning it into
+        # `thinking` here would change what an existing tiers.json measures without saying so.
+        effort = entry.get("reasoning_effort")
+        if effort and effort != "none" and pol.speaks_anthropic_wire(entry["model"]):
+            raise SystemExit(
+                f"[FAIL] the {tier} tier sets reasoning_effort={effort!r} on {entry['model']!r}, "
+                "which the gateway serves on its Anthropic wire, where that parameter is accepted "
+                "and never read. Send `thinking` (gateway v1.3.0 or later) to measure a thinking "
+                "arm, or drop reasoning_effort to declare a non-thinking one."
+            )
         return pol.Model(
             tier=tier,
             name=entry["model"],
             pricing_key=entry.get("pricing_key"),
-            effort=entry.get("reasoning_effort"),
+            effort=effort,
             url=entry.get("url") or default_url,
             api_key_env=entry.get("api_key_env", "STRATOCLAVE_API_KEY"),
             rate=rate,
@@ -382,8 +397,14 @@ def _drive(
                 sum(len(str(m.get("content", ""))) for m in messages),
                 cached_share.get(decision.tier),
             )
-        elif reply.prompt_tokens:
-            cached_share[decision.tier] = reply.cached_prompt_tokens / reply.prompt_tokens
+        elif reply.billed_input_tokens:
+            # Over every input leg, not over `prompt_tokens`: under the gateway's disjoint
+            # convention that field is the uncached remainder, so a warm thread would divide
+            # 3,524 cache reads by 10 fresh tokens and carry a "share" of 352.4 into the next
+            # step's estimate.
+            cached_share[decision.tier] = (
+                reply.cached_prompt_tokens / reply.billed_input_tokens
+            )
         # From this turn's own usage block: what it paid over what the same input would
         # have cost warm. An upper bound, since a warm model would still have paid fresh for
         # the turn's new material — stated in `switch_tax_usd`.
@@ -622,7 +643,11 @@ def _step(
         finish_reason=reply.finish_reason,
         latency_ms=reply.latency_ms,
         ttft_ms=reply.ttft_ms,
-        prompt_tokens=reply.prompt_tokens,
+        # Every input leg, which is what `_unreachable_step` already puts in this field and
+        # what `state.tokens_in` is read as. Passing `reply.prompt_tokens` gave the field two
+        # meanings in one episode, and under the gateway's disjoint convention the one here
+        # would have been the uncached remainder rather than the input.
+        prompt_tokens=reply.billed_input_tokens,
         fresh_prompt_tokens=reply.fresh_prompt_tokens,
         cached_prompt_tokens=reply.cached_prompt_tokens,
         cache_write_tokens=reply.cache_write_tokens,

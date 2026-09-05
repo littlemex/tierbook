@@ -176,6 +176,24 @@ class Model:
     rate_basis: str | None = None
 
 
+#: Model-name prefixes the gateway serves on its Anthropic wire (`wire_protocol: "messages"` in
+#: the gateway's own model table), where a reasoning request travels as `thinking` and the
+#: OpenAI-shaped `reasoning_effort` is accepted and never read. A prefix rather than an exact list
+#: because a new Claude alias should inherit the check rather than silently escape it; a model
+#: outside it is assumed to speak the OpenAI wire, which is the case where sending the parameter is
+#: harmless if unsupported.
+_ANTHROPIC_WIRE_PREFIXES = ("claude-", "anthropic.", "us.anthropic.")
+
+
+def speaks_anthropic_wire(model: str) -> bool:
+    """Whether this model reaches the provider over the gateway's Anthropic wire.
+
+    Read from the name because that is all a tiers.json has. The authority is the gateway's model
+    table, so a disagreement is a bug in this list and not in the caller.
+    """
+    return model.startswith(_ANTHROPIC_WIRE_PREFIXES)
+
+
 @dataclass(frozen=True)
 class Roster:
     """The three tiers a policy can choose between."""
