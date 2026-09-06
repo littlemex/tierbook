@@ -11,7 +11,7 @@
     "read, so every run of this arm measured a NON-THINKING fable at full price. The recorded",
     "results stand as measurements of that; they are not measurements of a thinking fable, and",
     "fable's cost figures are a lower bound for one. Corroborating evidence from runs already paid",
-    "for: across 4,067 rows every Claude model reports reasoning_tokens 0 while every OpenAI and xAI",
+    "for: across 4,267 rows every Claude model reports reasoning_tokens 0 while every OpenAI and xAI",
     "model reports 92-99% of output as reasoning. reasoning_effort is removed from premium rather",
     "than translated to `thinking`, because translating it would change what this file measures",
     "without saying so; harness/loop.py now refuses the pairing instead of sending it.",
