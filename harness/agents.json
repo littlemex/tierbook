@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "How to give one task to each coding agent without a branch per agent in the driver.",
+    "",
+    "Every invocation here was verified by running it: the four agents in this cluster have four",
+    "different non-interactive front doors and one of them refuses to run at all without an explicit",
+    "session id. That is the whole reason this file exists as data -- the differences are facts about",
+    "someone else's CLI, and encoding them as code would put four `if agent ==` branches in the middle",
+    "of the measurement.",
+    "",
+    "`argv` is a template. `{prompt}` is the task text and `{session}` is a per-run identifier the",
+    "driver generates. A fresh session per run is not hygiene, it is the experiment: hermes was",
+    "observed sending 258 input tokens on one call and 15,510 on the next because the second inherited",
+    "the first, so a run that reuses a session measures the previous run as well.",
+    "",
+    "`workspace` is where the agent is started. Each run gets its own directory so one agent's leftover",
+    "files cannot become another agent's context.",
+    "",
+    "NOT recorded here: which model to use. The model is the Service alias's business, and an agent that",
+    "names a model in its own invocation would let the driver silently break the one thing this",
+    "comparison holds constant."
+  ],
+  "agents": {
+    "opencode": {
+      "deployment": "opencode",
+      "argv": ["opencode", "run", "{prompt}"],
+      "workspace": "/tmp/run-{session}",
+      "notes": "Reports the model it resolved on stderr, which is worth capturing as a check that the alias took effect."
+    },
+    "qwen-code": {
+      "deployment": "qwen-code",
+      "argv": ["qwen", "-p", "{prompt}"],
+      "workspace": "/tmp/run-{session}",
+      "notes": "A positional query is also one-shot; -p is the documented non-interactive flag."
+    },
+    "hermes": {
+      "deployment": "hermes",
+      "argv": ["hermes", "-z", "{prompt}"],
+      "workspace": "/tmp/run-{session}",
+      "notes": "-z is the non-interactive prompt. Its config is pod-local state (hermes config set), not a ConfigMap, so a pod replacement resets the model and the driver re-checks it."
+    },
+    "openclaw": {
+      "deployment": "openclaw",
+      "argv": ["openclaw", "agent", "-m", "{prompt}", "--session-id", "{session}", "--json"],
+      "workspace": "/tmp/run-{session}",
+      "notes": "Refuses to run without --session-id, --to or --agent. Tries the Gateway first and falls back to an embedded agent; both paths reach the alias."
+    }
+  }
+}

@@ -1,0 +1,183 @@
+"""Give one task to several coding agents under identical conditions, and say which calls were whose.
+
+The comparison this serves holds the model constant -- every agent reaches the same engine through one
+Service alias -- so the agent is the only variable and its contribution is what gets measured. That only
+works if the conditions really are identical, and three of the ways they quietly stop being identical are
+handled here rather than left to a convention.
+
+**A fresh session per run.** Not hygiene: the experiment. One agent was observed sending 258 input tokens
+on a call and 15,510 on the next, because the second inherited the first. A run that reuses a session
+measures the previous run too.
+
+**A fresh workspace per run.** One agent's leftover files are the next agent's context, and an agent that
+finds a half-finished edit behaves differently from one that does not.
+
+**Correlation by time window and address, asking nothing of the agent.** The driver records when a run
+started and ended; the tap records every call with its caller's address. Intersecting the two attributes
+calls to runs without a header the agent would have to be modified to send -- and modifying the agent is
+the one thing this measurement must not do. It is sound because a run is one process in one pod and runs
+are sequential per agent, which the driver enforces rather than assumes.
+
+What this deliberately does not do: score anything, price anything, or interpret the agent's output. It
+produces a run manifest. Scoring belongs to the task's own oracle and pricing to the ledger, and a driver
+that also judged would be a second place that could be wrong about the answer.
+
+Usage:
+    python3 harness/agent_drive.py --task "reply with exactly: OK" --tag smoke
+    python3 harness/agent_drive.py --task-file t.md --agents opencode,hermes --repeat 3
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+
+def kubectl(context: str, namespace: str, *args: str, timeout: int = 600) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["kubectl", "--context", context, "-n", namespace, *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def run_one(spec: dict, agent: str, prompt: str, context: str, namespace: str,
+            timeout: int) -> dict:
+    """One agent, one task, one fresh session and workspace."""
+    session = f"{agent}-{uuid.uuid4().hex[:10]}"
+    workspace = spec["workspace"].format(session=session)
+    argv = [a.format(prompt=prompt, session=session) for a in spec["argv"]]
+
+    # `mkdir` then `cd` then exec, as one shell command, because the workspace must exist before the
+    # agent starts in it and `kubectl exec` has no working-directory option.
+    inner = "mkdir -p {ws} && cd {ws} && exec \"$@\"".format(ws=workspace)
+
+    started_wall = time.time()
+    t0 = time.monotonic()
+    try:
+        proc = kubectl(
+            context, namespace, "exec", f"deploy/{spec['deployment']}", "--",
+            "sh", "-c", inner, "sh", *argv,
+            timeout=timeout,
+        )
+        rc, out, err = proc.returncode, proc.stdout, proc.stderr
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        rc, timed_out = None, True
+        out = (exc.stdout or b"").decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        err = (exc.stderr or b"").decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+    ended_wall = time.time()
+
+    return {
+        "agent": agent,
+        "session": session,
+        "workspace": workspace,
+        "argv": argv,
+        # The window the tap rows are matched against. Wall clock, because that is what the tap
+        # records; the monotonic duration is kept separately because wall clock can step.
+        "started_wall": started_wall,
+        "ended_wall": ended_wall,
+        "wall_s": round(time.monotonic() - t0, 2),
+        "returncode": rc,
+        "timed_out": timed_out,
+        # Truncated: the agent's transcript is not the measurement and a full one would bury the
+        # manifest. Enough to see what it answered and whether it errored.
+        "stdout_tail": out[-4000:],
+        "stderr_tail": err[-2000:],
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--spec", default=str(HERE / "agents.json"))
+    ap.add_argument("--task", help="the task text")
+    ap.add_argument("--task-file", help="read the task text from a file")
+    ap.add_argument("--agents", help="comma-separated subset; default is every agent in the spec")
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="runs per agent. More than one is how run-to-run variation becomes visible "
+                         "instead of being reported as an agent difference.")
+    ap.add_argument("--context", default="distai-eks")
+    ap.add_argument("--namespace", default="qwen-trial")
+    ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--order", choices=["rotate", "fixed", "shuffle"], default="rotate",
+                    help="agent order per iteration. The engine's prefix cache survives a run and "
+                         "cannot be flushed -- it exposes no reset endpoint -- so under a fixed order "
+                         "the same agent always runs into the same warmth and the advantage is "
+                         "systematic. `rotate` counterbalances it; `fixed` is for reproducing one "
+                         "specific sequence.")
+    ap.add_argument("--tag", default="untagged")
+    ap.add_argument("--out", help="manifest path; default ~/tmp/e02/tap/runs-<tag>-<ts>.json")
+    args = ap.parse_args()
+
+    if not args.task and not args.task_file:
+        ap.error("one of --task or --task-file is required")
+    prompt = args.task or Path(args.task_file).read_text()
+
+    spec = json.loads(Path(args.spec).read_text())["agents"]
+    names = args.agents.split(",") if args.agents else sorted(spec)
+    missing = [n for n in names if n not in spec]
+    if missing:
+        # Refused rather than skipped: a run that silently omits an agent produces a comparison
+        # missing an arm, and the manifest would look complete.
+        print(f"[FAIL] not in the spec: {', '.join(missing)}", file=sys.stderr)
+        return 2
+
+    out_path = Path(args.out) if args.out else (
+        Path.home() / "tmp" / "e02" / "tap" / f"runs-{args.tag}-{int(time.time())}.json"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    runs: list[dict] = []
+    manifest = {
+        "tag": args.tag,
+        "prompt": prompt,
+        "context": args.context,
+        "namespace": args.namespace,
+        "repeat": args.repeat,
+        "order": args.order,
+        # Warmth is a condition of the experiment and not a nuisance: the engine's prefix cache
+        # survives a run, so iteration 0 is nearly cold and later ones are not. Recorded per run so a
+        # reader can separate the two rather than average across them.
+        "cache_flushable": False,
+        "runs": runs,
+    }
+
+    # Sequential, and sequential is load-bearing. Two agents running at once share the engine, so each
+    # would queue behind the other and the time-to-first-byte being recorded would be a measurement of
+    # the driver's concurrency rather than of the agent. It also keeps the correlation window
+    # unambiguous per address.
+    for i in range(args.repeat):
+        if args.order == "rotate":
+            # Rotate by one each iteration, so over `repeat` iterations no agent keeps the same
+            # position and the cache advantage is spread rather than assigned.
+            order = names[i % len(names):] + names[:i % len(names)]
+        elif args.order == "shuffle":
+            import random  # noqa: PLC0415
+            order = random.sample(names, len(names))
+        else:
+            order = names
+        for name in order:
+            print(f"[{i + 1}/{args.repeat}] {name} ... ", end="", flush=True)
+            row = run_one(spec[name], name, prompt, args.context, args.namespace, args.timeout)
+            row["iteration"] = i
+            row["position"] = order.index(name)
+            runs.append(row)
+            state = "timeout" if row["timed_out"] else f"rc={row['returncode']}"
+            print(f"{state} in {row['wall_s']}s")
+            out_path.write_text(json.dumps(manifest, indent=1))
+
+    print(f"\nmanifest: {out_path}")
+    print("Pair it with the tap log to attribute calls:")
+    print(f"  kubectl --context {args.context} -n {args.namespace} exec deploy/agent-tap -- "
+          "sh -c 'cat /data/agent-tap/*.jsonl' > tap.jsonl")
+    print(f"  python3 harness/agent_tap_join.py {out_path} tap.jsonl")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
