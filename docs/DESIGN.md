@@ -1,11 +1,12 @@
 # What the router should be, from six independent designs against the measured record
 
 > **Scope, before anything else: [`SCOPE.md`](../SCOPE.md).** This is a routing mechanism that collects its
-> own data and decides under a moving environment — volume, prices, availability and capacity all change.
-> The decision it owes is *"at this concurrency, against these prices, this request belongs on the API"*,
-> with the threshold **derived, never configured**. It is **not** a tuning guide for one cluster, not a
-> standing verdict about which tier wins, and not a benchmark. Numbers about a particular GPU, engine flag
-> or agent are **parameter readings**, not results.
+> own data and decides while its environment moves. The decision is a **function from observed state to an
+> assignment** — volume, prices, availability, capacity, request shape, floors and SLOs are all inputs, and
+> every threshold in it is **derived, never configured**. *"At this concurrency the next request belongs on
+> the API"* is **one example of the output shape, not the mechanism.* It is **not** a tuning guide for one
+> cluster, not a standing verdict about which tier wins, and not a benchmark: numbers about a particular
+> GPU, engine flag or agent are **parameter readings**, not results.
 
 *Imported into `tierbook` from `distributed-ai` at commit `ebc5621a0b596ffd8f3ebc0b01811a7f9966d2af`, where the measurements it cites live. The record stays there; this is the design.*
 

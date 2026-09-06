@@ -1,11 +1,12 @@
 # Tuning the cheap tier is a separate responsibility, and the interface that makes it separable is not one-directional
 
 > **Scope, before anything else: [`SCOPE.md`](../SCOPE.md).** This is a routing mechanism that collects its
-> own data and decides under a moving environment — volume, prices, availability and capacity all change.
-> The decision it owes is *"at this concurrency, against these prices, this request belongs on the API"*,
-> with the threshold **derived, never configured**. It is **not** a tuning guide for one cluster, not a
-> standing verdict about which tier wins, and not a benchmark. Numbers about a particular GPU, engine flag
-> or agent are **parameter readings**, not results.
+> own data and decides while its environment moves. The decision is a **function from observed state to an
+> assignment** — volume, prices, availability, capacity, request shape, floors and SLOs are all inputs, and
+> every threshold in it is **derived, never configured**. *"At this concurrency the next request belongs on
+> the API"* is **one example of the output shape, not the mechanism.* It is **not** a tuning guide for one
+> cluster, not a standing verdict about which tier wins, and not a benchmark: numbers about a particular
+> GPU, engine flag or agent are **parameter readings**, not results.
 
 **Written 2026-09-01.** The question was whether "make the box stronger" belongs to routing. It does not — but
 the separation is bought with an interface, and the interface costs more than "the prompt, the output, a label

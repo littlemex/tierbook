@@ -1,11 +1,12 @@
 # The box's capacity, measured on the traffic it would actually serve: the economics clear, and only the judge is left
 
 > **Scope, before anything else: [`SCOPE.md`](../SCOPE.md).** This is a routing mechanism that collects its
-> own data and decides under a moving environment — volume, prices, availability and capacity all change.
-> The decision it owes is *"at this concurrency, against these prices, this request belongs on the API"*,
-> with the threshold **derived, never configured**. It is **not** a tuning guide for one cluster, not a
-> standing verdict about which tier wins, and not a benchmark. Numbers about a particular GPU, engine flag
-> or agent are **parameter readings**, not results.
+> own data and decides while its environment moves. The decision is a **function from observed state to an
+> assignment** — volume, prices, availability, capacity, request shape, floors and SLOs are all inputs, and
+> every threshold in it is **derived, never configured**. *"At this concurrency the next request belongs on
+> the API"* is **one example of the output shape, not the mechanism.* It is **not** a tuning guide for one
+> cluster, not a standing verdict about which tier wins, and not a benchmark: numbers about a particular
+> GPU, engine flag or agent are **parameter readings**, not results.
 
 **Measured 2026-08-31** on the redeployed `Qwen3.8-27B` (131k window, throughput tune, TP=2 across two replicas
 on one `g6e.12xlarge` at $15.2174/hour), driven from inside the cluster so the load generator is not the thing
