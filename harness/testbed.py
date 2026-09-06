@@ -29,6 +29,12 @@ Usage:
     python3 harness/testbed.py export  --instance django__django-11880
     python3 harness/testbed.py score   --instance django__django-11880 --workspace /work/runs/<session>
     python3 harness/testbed.py down    --instance django__django-11880
+
+SCOPE (see ../SCOPE.md, which governs this file): this is an INSTRUMENT that supplies parameters to a
+routing mechanism, not the mechanism and not a conclusion. Every environment-specific number it prints --
+a seat count, a KV capacity, a break-even concurrency, an agent's token appetite -- is a parameter reading
+for one moment in one cluster. The mechanism's job is to re-read them live and decide from them; turning
+any of them into advice about a particular deployment is the error this project has made three times.
 """
 from __future__ import annotations
 

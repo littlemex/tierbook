@@ -11,6 +11,12 @@ Without it the report groups by address, which is correct but unreadable: on EKS
 to an IP-derived host name and never to the pod, so the address is the identity and the name has to come
 from the cluster. The mapping is done here rather than in the tap, which has no reason to hold cluster API
 access, and a pod replaced mid-experiment changes address -- a fact the log should keep rather than hide.
+
+SCOPE (see ../SCOPE.md, which governs this file): this is an INSTRUMENT that supplies parameters to a
+routing mechanism, not the mechanism and not a conclusion. Every environment-specific number it prints --
+a seat count, a KV capacity, a break-even concurrency, an agent's token appetite -- is a parameter reading
+for one moment in one cluster. The mechanism's job is to re-read them live and decide from them; turning
+any of them into advice about a particular deployment is the error this project has made three times.
 """
 from __future__ import annotations
 

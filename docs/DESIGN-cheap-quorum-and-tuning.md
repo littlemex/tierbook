@@ -1,5 +1,12 @@
 # Agreement among cheap candidates is a better escalation signal than the box's own doubt, and it is the only part of the terse-decision idea that survived
 
+> **Scope, before anything else: [`SCOPE.md`](../SCOPE.md).** This is a routing mechanism that collects its
+> own data and decides under a moving environment — volume, prices, availability and capacity all change.
+> The decision it owes is *"at this concurrency, against these prices, this request belongs on the API"*,
+> with the threshold **derived, never configured**. It is **not** a tuning guide for one cluster, not a
+> standing verdict about which tier wins, and not a benchmark. Numbers about a particular GPU, engine flag
+> or agent are **parameter readings**, not results.
+
 **Written 2026-09-01**, after two reviews and five measurements taken the same day on the existing matrix at no
 cost. It answers two questions that were asked together: how to strengthen the cheap tier as a measured
 experiment, and whether the frontier model can be reserved for genuinely-high-intelligence decisions with terse

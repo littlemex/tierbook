@@ -1,5 +1,12 @@
 # tierbook
 
+> **Scope, before anything else: [`SCOPE.md`](SCOPE.md).** This is a routing mechanism that collects its
+> own data and decides under a moving environment — volume, prices, availability and capacity all change.
+> The decision it owes is *"at this concurrency, against these prices, this request belongs on the API"*,
+> with the threshold **derived, never configured**. It is **not** a tuning guide for one cluster, not a
+> standing verdict about which tier wins, and not a benchmark. Numbers about a particular GPU, engine flag
+> or agent are **parameter readings**, not results.
+
 **A ledger of what your tiers were measured to do, and a router that refuses to act beyond it.**
 
 It does not route your traffic out of the box. It measures first, and until a held-out fold supports a choice

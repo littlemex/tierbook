@@ -1,5 +1,12 @@
 # What can actually be measured, by task family
 
+> **Scope, before anything else: [`SCOPE.md`](../SCOPE.md).** This is a routing mechanism that collects its
+> own data and decides under a moving environment — volume, prices, availability and capacity all change.
+> The decision it owes is *"at this concurrency, against these prices, this request belongs on the API"*,
+> with the threshold **derived, never configured**. It is **not** a tuning guide for one cluster, not a
+> standing verdict about which tier wins, and not a benchmark. Numbers about a particular GPU, engine flag
+> or agent are **parameter readings**, not results.
+
 Surveyed 2026-08-30. The question was not "which benchmarks exist" but "for which task families can I get **per-item
 pass or fail for several models, offline, without a model judging another model's output**". That is the only
 kind of evidence this project lets assign a routing decision, because a model's judgement of another model's

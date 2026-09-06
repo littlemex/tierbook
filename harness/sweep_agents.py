@@ -19,6 +19,12 @@ engine that is already serving.
 Usage:
     python3 harness/sweep_agents.py --state ~/tmp/e02/tap/sweep.json
     python3 harness/sweep_agents.py --state ... --instances django__django-11880,astropy__astropy-14365
+
+SCOPE (see ../SCOPE.md, which governs this file): this is an INSTRUMENT that supplies parameters to a
+routing mechanism, not the mechanism and not a conclusion. Every environment-specific number it prints --
+a seat count, a KV capacity, a break-even concurrency, an agent's token appetite -- is a parameter reading
+for one moment in one cluster. The mechanism's job is to re-read them live and decide from them; turning
+any of them into advice about a particular deployment is the error this project has made three times.
 """
 from __future__ import annotations
 
