@@ -1,0 +1,90 @@
+# A recording pass-through between the agents and the engine.
+#
+# The agents already point at a Service alias and none of them needs to change: the alias's selector is
+# moved onto this Deployment, and this Deployment forwards to the engine's own Service. So the switch is
+# one `kubectl patch` on a Service and is reversible with the same command. No agent restarts, no config
+# edits, and therefore nothing about the agents' behaviour is altered by being observed -- which is the
+# point, since their behaviour is the measurement.
+#
+# Two replicas, because the alias fronts a two-replica engine and a single-pod tap would serialise the
+# concurrency the engine is there to provide. Each replica writes its own log file (see `agent_tap.py`
+# on why: two writers appending to one file over NFS interleave partial lines).
+#
+# Deliberately NOT an init container, a sidecar or a mutating webhook. Each of those edits the agent
+# pods, and an agent that was restarted to be measured is an agent whose caches, sessions and warm state
+# were discarded by the measurement.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-tap
+  labels:
+    app.kubernetes.io/name: agent-tap
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-tap
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-tap
+    spec:
+      containers:
+        - name: tap
+          # Stdlib only, so a plain python base is the whole image and there is nothing to build.
+          image: python:3.12-slim
+          command: ["python", "/app/agent_tap.py"]
+          env:
+            # The engine's OWN Service, never the alias: pointing the tap at the alias whose selector
+            # now names the tap is an infinite loop that presents as a hang under load.
+            - { name: AGENT_TAP_UPSTREAM, value: "vllm-qwen-qwen3-6-35b-a3b-fp8:8000" }
+            - { name: AGENT_TAP_LOG_DIR, value: "/data/agent-tap" }
+            - { name: AGENT_TAP_PORT, value: "8000" }
+            - { name: HOSTNAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+          ports:
+            - { name: http, containerPort: 8000 }
+          volumeMounts:
+            - { name: app, mountPath: /app }
+            - { name: tap-log, mountPath: /data/agent-tap }
+          resources:
+            # A relay, not a worker: the cost is one thread per in-flight stream. Requests are set so
+            # the tap cannot be evicted out from under the agents mid-experiment.
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits: { cpu: "2", memory: "1Gi" }
+          readinessProbe:
+            # The upstream path, so a tap that cannot reach the engine never receives the alias.
+            httpGet: { path: /v1/models, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: app
+          configMap:
+            name: agent-tap-src
+        - name: tap-log
+          persistentVolumeClaim:
+            claimName: agent-tap-log
+---
+# The observations have to outlive the pod: what an agent sent last week is the evidence for a claim
+# made this week. RWX because both replicas mount it and a reader pod reads it while they write.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-tap-log
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 20Gi
+---
+# The tap's own Service. The agents do NOT use this one -- they keep using the alias. This exists so the
+# tap can be exercised directly before the alias is moved onto it, which is the difference between
+# testing a change and discovering it in production traffic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-tap
+spec:
+  selector:
+    app.kubernetes.io/name: agent-tap
+  ports:
+    - { name: http, port: 8000, targetPort: http }
