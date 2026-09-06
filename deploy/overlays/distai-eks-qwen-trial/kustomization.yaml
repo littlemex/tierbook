@@ -1,0 +1,24 @@
+# This cluster's overlay for the tap.
+#
+# `efs-shared` because the log volume is ReadWriteMany: two tap replicas write it while a reader reads
+# it. `gp2` on this cluster is EBS and cannot be RWX, and neither class is the default here, so a PVC
+# with no class named would stay Pending rather than bind to something wrong.
+#
+# The proxy's source is NOT generated into a ConfigMap here. kustomize refuses to read a file outside
+# its own root, and the alternative -- a copy of `harness/agent_tap.py` under this directory -- would be
+# a second copy of the thing under test. The ConfigMap is created directly from `harness/` instead; see
+# ../../agent-tap/README.md. One source file, one place it lives.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: qwen-trial
+
+resources:
+  - ../../agent-tap
+
+patches:
+  - target: { kind: PersistentVolumeClaim, name: agent-tap-log }
+    patch: |
+      - op: add
+        path: /spec/storageClassName
+        value: efs-shared

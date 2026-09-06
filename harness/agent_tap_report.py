@@ -4,7 +4,13 @@ The report is deliberately narrow. It answers the three questions the tap exists
 which request fields each agent sets, how prefill-heavy it is, and how its prompt grows across a session.
 Anything else invites reading a cost or a quality claim off a proxy log, and costing belongs to the ledger.
 
-Usage:  python3 harness/agent_tap_report.py tap.jsonl [...]
+Usage:  python3 harness/agent_tap_report.py tap.jsonl [...] [--pods pods.json]
+
+`--pods` takes the output of `kubectl get pods -o json` and maps the recorded peer address to a pod name.
+Without it the report groups by address, which is correct but unreadable: on EKS a pod IP reverse-resolves
+to an IP-derived host name and never to the pod, so the address is the identity and the name has to come
+from the cluster. The mapping is done here rather than in the tap, which has no reason to hold cluster API
+access, and a pod replaced mid-experiment changes address -- a fact the log should keep rather than hide.
 """
 from __future__ import annotations
 
@@ -38,7 +44,26 @@ def load(paths: list[str]) -> list[dict]:
     return rows
 
 
+POD_BY_IP: dict[str, str] = {}
+
+
+def load_pod_map(path: str) -> None:
+    """Address -> deployment-ish name, from `kubectl get pods -o json`."""
+    with open(path) as fh:
+        doc = json.load(fh)
+    for item in doc.get("items", []):
+        ip = (item.get("status") or {}).get("podIP")
+        name = (item.get("metadata") or {}).get("name", "")
+        if not ip or not name:
+            continue
+        parts = name.split("-")
+        POD_BY_IP[ip] = "-".join(parts[:-2]) if len(parts) > 2 else name
+
+
 def agent_of(row: dict) -> str:
+    mapped = POD_BY_IP.get(row.get("peer_ip", ""))
+    if mapped:
+        return mapped
     label = row.get("agent") or "?"
     # A pod DNS name is `<pod>.<ns>.pod.cluster.local` and the pod name carries the deployment; the
     # replica hash is noise for a per-agent census.
@@ -48,10 +73,15 @@ def agent_of(row: dict) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    if "--pods" in args:
+        i = args.index("--pods")
+        load_pod_map(args[i + 1])
+        args = args[:i] + args[i + 2:]
+    if not args:
         print(__doc__)
         return 2
-    rows = [r for r in load(sys.argv[1:]) if r.get("request")]
+    rows = [r for r in load(args) if r.get("request")]
     if not rows:
         print("no rows with a recorded request body")
         return 1

@@ -37,7 +37,11 @@ class Upstream(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         raw = self.rfile.read(int(self.headers["Content-Length"]))
-        SEEN.append({"raw": raw, "headers": dict(self.headers), "path": self.path})
+        # `get_all`, not `dict(...)`: a duplicated header collapses in a dict and that is precisely the
+        # defect this fake failed to catch. BaseHTTPRequestHandler accepts two Content-Length headers
+        # and reads the first; uvicorn answers `400 Invalid HTTP request received`.
+        SEEN.append({"raw": raw, "headers": dict(self.headers), "path": self.path,
+                     "content_lengths": self.headers.get_all("Content-Length") or []})
         if b'"stream": true' in raw or b'"stream":true' in raw:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -186,3 +190,17 @@ def test_recording_failure_does_not_break_the_traffic(tap, monkeypatch):
         agent_tap._record({})          # the fault is real
     out = _post(base, {"model": "m", "messages": [{"role": "user", "content": "x"}]})
     assert json.loads(out)["choices"][0]["finish_reason"] == "stop"
+
+
+def test_exactly_one_content_length_reaches_upstream(tap):
+    """The bug a permissive fake upstream hid.
+
+    The tap copies the caller's headers and then sets `Content-Length` from the body it is actually
+    sending. Copying the caller's as well sends the header twice, which Python's own
+    `BaseHTTPRequestHandler` tolerates by reading the first value and uvicorn rejects outright -- vLLM
+    behind it answered every POST with `400 Invalid HTTP request received` while this suite was green.
+    """
+    SEEN.clear()
+    base, _ = tap
+    _post(base, {"model": "m", "messages": [{"role": "user", "content": "x"}]})
+    assert SEEN[0]["content_lengths"] == [str(len(SEEN[0]["raw"]))], SEEN[0]["content_lengths"]

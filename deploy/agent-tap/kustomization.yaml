@@ -1,0 +1,10 @@
+# The tap is its own component, not part of the ledger base: it is deployed and removed on its own
+# schedule, and pulling in the ledger's Job and CronJob to get a proxy would be surprising.
+#
+# No namespace and no storage class here on purpose -- both belong to whoever owns the cluster. See
+# `overlays/` for one that is filled in.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - agent-tap.yaml

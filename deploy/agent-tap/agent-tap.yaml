@@ -52,8 +52,12 @@ spec:
             requests: { cpu: "200m", memory: "256Mi" }
             limits: { cpu: "2", memory: "1Gi" }
           readinessProbe:
-            # The upstream path, so a tap that cannot reach the engine never receives the alias.
-            httpGet: { path: /v1/models, port: http }
+            # Forwarded to the engine, so readiness means "the engine is reachable through the tap" and
+            # not "the proxy started". `/health` rather than `/v1/models` because the tap does not record
+            # this path: at one probe per ten seconds per replica, `/v1/models` filled the log with 8,600
+            # rows a day of a robot checking a pulse, which is real traffic to the engine and no
+            # observation of any agent.
+            httpGet: { path: /health, port: http }
             initialDelaySeconds: 3
             periodSeconds: 10
       volumes:

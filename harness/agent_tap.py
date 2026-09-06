@@ -49,6 +49,14 @@ LOG_DIR = Path(os.environ.get("AGENT_TAP_LOG_DIR", "/data/agent-tap"))
 # because "the agent sent this and got that" is the only way to check a decoding claim later.
 SAMPLE_RESPONSE_EVERY = int(os.environ.get("AGENT_TAP_SAMPLE_RESPONSE_EVERY", "50"))
 MAX_BODY_BYTES = int(os.environ.get("AGENT_TAP_MAX_BODY_BYTES", str(8 * 1024 * 1024)))
+# The readiness probe goes through the tap on purpose -- that is what makes readiness mean "the engine is
+# reachable" rather than "the proxy started" -- but it carries no agent behaviour, and at one probe per
+# ten seconds per replica it would be 8,600 rows a day of a robot checking a pulse. Forwarded, not
+# recorded. A dedicated path rather than a source-IP heuristic: the probe's origin is the node, which is
+# also a plausible origin for real traffic on a host-networked caller.
+UNRECORDED_PATHS = frozenset(
+    p for p in os.environ.get("AGENT_TAP_UNRECORDED_PATHS", "/health,/ping").split(",") if p
+)
 # Hop-by-hop headers are per-connection by definition and forwarding them corrupts the next hop.
 HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -61,12 +69,18 @@ _peer_names: dict[str, str] = {}
 
 
 def _peer_label(ip: str) -> str:
-    """Which agent this was, resolved from the pod IP and cached.
+    """A name for the caller, resolved from its address and cached.
 
-    Reverse DNS on a cluster IP gives the pod's own name, which is the cheapest identity available: it
-    needs no header the agent would have to be modified to send, and modifying the agent is exactly what
-    this measurement must not do. Cached because a lookup per request would put a DNS round trip inside
-    the latency being measured, and unresolvable stays unresolvable rather than being retried forever.
+    **The address is the identity; this label is a convenience.** On EKS with the VPC CNI a pod IP is a
+    VPC address, so reverse DNS returns an IP-derived host name (`ip-10-0-19-68.<region>.compute.internal`)
+    and never the pod's name -- assuming otherwise was a mistake in the first version of this file, found
+    the moment it ran. The row therefore records `peer_ip` as well, and the reporter maps address to pod
+    with one `kubectl get pods -o wide`. That mapping belongs outside the tap: it needs cluster API access
+    the tap has no reason to hold, and a pod that is replaced mid-experiment changes IP, which is a fact
+    the log should preserve rather than paper over with a stale name.
+
+    Cached because a lookup per request would put a DNS round trip inside the latency being measured, and
+    unresolvable stays unresolvable rather than being retried forever.
     """
     if ip in _peer_names:
         return _peer_names[ip]
@@ -81,6 +95,8 @@ def _peer_label(ip: str) -> str:
 
 def _record(row: dict) -> None:
     """Append one observation. Never raises: see the module docstring."""
+    if row.get("path", "").split("?")[0] in UNRECORDED_PATHS:
+        return
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         # One file per day per pod. Per pod because two replicas appending to one file over NFS
@@ -120,7 +136,8 @@ class Tap(BaseHTTPRequestHandler):
             body = self._read_chunked()
 
         request_id = uuid.uuid4().hex[:16]
-        peer = _peer_label(self.client_address[0])
+        peer_ip = self.client_address[0]
+        peer = _peer_label(peer_ip)
         t0 = time.monotonic()
 
         # Parsed only to pull out the few fields a reader wants indexed. The forwarded bytes are `body`,
@@ -132,7 +149,16 @@ class Tap(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 parsed = None
 
-        headers = [(k, v) for k, v in self.headers.items() if k.lower() not in HOP_BY_HOP]
+        # `content-length` is excluded from the copy and re-set below from the body actually being sent.
+        # Copying the caller's and then adding our own puts TWO Content-Length headers on the upstream
+        # request, which a strict parser rejects outright: vLLM behind uvicorn answered every POST with
+        # `400 Invalid HTTP request received`, while Python's own BaseHTTPRequestHandler -- what the
+        # tests use as a fake upstream -- takes the first value and never noticed. The fake was more
+        # permissive than the real thing, so a test now asserts the header appears exactly once.
+        headers = [
+            (k, v) for k, v in self.headers.items()
+            if k.lower() not in HOP_BY_HOP and k.lower() != "content-length"
+        ]
         try:
             conn = HTTPConnection(UPSTREAM, timeout=1800)
             conn.putrequest(method, self.path, skip_host=True, skip_accept_encoding=True)
@@ -146,7 +172,8 @@ class Tap(BaseHTTPRequestHandler):
             upstream = conn.getresponse()
         except Exception as exc:  # noqa: BLE001
             _record({
-                "id": request_id, "ts": time.time(), "agent": peer, "method": method,
+                "id": request_id, "ts": time.time(), "agent": peer, "peer_ip": peer_ip,
+                "method": method,
                 "path": self.path, "request": parsed, "request_bytes": len(body),
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             })
@@ -199,8 +226,8 @@ class Tap(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 # The agent stopped reading. That is an observation -- an abandoned stream is billed
                 # upstream all the same -- so it is recorded rather than treated as an error.
-                _record(self._row(request_id, peer, method, parsed, len(body), upstream.status,
-                                  ttfb, total, t0, tail, streaming, sampled,
+                _record(self._row(request_id, peer, peer_ip, method, parsed, len(body),
+                                  upstream.status, ttfb, total, t0, tail, streaming, sampled,
                                   note="client disconnected mid-stream"))
                 conn.close()
                 return
@@ -210,15 +237,17 @@ class Tap(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         conn.close()
-        _record(self._row(request_id, peer, method, parsed, len(body), upstream.status,
+        _record(self._row(request_id, peer, peer_ip, method, parsed, len(body), upstream.status,
                           ttfb, total, t0, tail, streaming, sampled))
 
-    def _row(self, request_id, peer, method, parsed, req_bytes, status, ttfb, total, t0,
+    def _row(self, request_id, peer, peer_ip, method, parsed, req_bytes, status, ttfb, total, t0,
              tail, streaming, sampled, note=None) -> dict:
         row = {
             "id": request_id,
             "ts": time.time(),
             "agent": peer,
+            # The identity that actually resolves to a pod. See `_peer_label`.
+            "peer_ip": peer_ip,
             "method": method,
             "path": self.path,
             "status": status,
