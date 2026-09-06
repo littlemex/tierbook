@@ -1,0 +1,123 @@
+# Where the agents' telemetry lands, and why this project runs a collector rather than a store.
+#
+# The agent emits OTLP; a plugin does that already and this project does not reimplement it. What this
+# project owns is the receiving endpoint and the join to the charge, so the collector's job is narrow:
+# accept OTLP, write it somewhere durable that a later join can read, and nothing else. No sampling, no
+# transformation, no aggregation -- a collector that summarises has thrown away the per-turn detail that
+# the whole capture exists for.
+#
+# The file exporter is deliberate for the first version. A hosted backend would mean prompts and repository
+# contents leaving the cluster before the rule about that is implemented, and the join is easier to get
+# right against a file than against a query API. Swapping in an OTLP backend later is one exporter entry.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      # Bounded so a burst cannot take the collector down and lose the run it was recording.
+      memory_limiter:
+        check_interval: 2s
+        limit_mib: 512
+        spike_limit_mib: 128
+      batch:
+        timeout: 5s
+        send_batch_size: 512
+
+    exporters:
+      # One file per signal. Durable because it is on the shared volume, and readable by the join without
+      # a query language: a JSONL-shaped artifact is what the ledger's evidence loader already understands.
+      file/traces:
+        path: /data/otel/traces.jsonl
+      file/metrics:
+        path: /data/otel/metrics.jsonl
+      file/logs:
+        path: /data/otel/logs.jsonl
+      # Kept because a collector that cannot say what it received is a collector nobody can debug.
+      debug:
+        verbosity: basic
+
+    service:
+      telemetry:
+        logs:
+          level: info
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [file/traces, debug]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [file/metrics]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [file/logs]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/name: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+    spec:
+      # The file exporter opens its path and does not create the parent directory, so the collector fails
+      # to start with "no such file or directory" on a fresh volume. Created here rather than by hand,
+      # because a step a person has to remember is a step that is missing on the next cluster.
+      initContainers:
+        - name: mkdir
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /data/otel && ls -la /data/otel"]
+          volumeMounts:
+            - { name: work, mountPath: /data }
+      containers:
+        - name: collector
+          # contrib, because the file exporter is not in the core distribution.
+          image: otel/opentelemetry-collector-contrib:latest
+          args: ["--config=/conf/config.yaml"]
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+          volumeMounts:
+            - { name: conf, mountPath: /conf }
+            - { name: work, mountPath: /data }
+          resources:
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+      volumes:
+        - name: conf
+          configMap:
+            name: otel-collector-config
+        - name: work
+          persistentVolumeClaim:
+            claimName: agent-workspace
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+    - { name: otlp-http, port: 4318, targetPort: otlp-http }
