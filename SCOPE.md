@@ -4,12 +4,27 @@
 normative: a requirement here is one a reviewer can hold an implementation to, and a sentence that cannot
 be held to has no business being here.
 
-## 1. What is being built
+## 1. The purpose, and what is instrumental to it
 
-A routing layer over a **mixed fleet** — self-hosted fixed-cost serving plus several paid APIs, with new
-models and new coding agents arriving over time. It discovers its own parameters in whatever environment it
-is placed in, keeps re-estimating from live traffic, and decides where each request goes. **Every request is
-assigned somewhere**, and each assignment says whether the evidence licensed it.
+**The purpose is to lower cost while giving up as little accuracy as possible.** Everything else in this
+document is a means to that, and anything that stops serving it should be cut.
+
+Two consequences that are easy to lose sight of, and were lost sight of repeatedly:
+
+- **The self-hosted engine is a means, not a subject.** It exists because it was one way to buy accuracy
+  more cheaply, and it earns its place per request like any other candidate. It is a candidate with an
+  unusual cost structure — a bill that arrives whether or not it is used — and that is the *only* thing
+  special about it. A section of this document written about how to fill it would be the original error in a
+  new costume.
+- **Latency and throughput are mostly consequences, not objectives.** They largely fall out of the choices
+  the objective already makes. An operator may impose a latency constraint, and this document supports that,
+  but performance is not what is being optimised and its treatment is **explicitly unsettled** — see
+  section 3.
+
+What is built to serve that purpose: a routing layer over a mixed fleet — self-hosted serving plus several
+paid APIs, with new models and new coding agents arriving over time — which discovers its own parameters in
+whatever environment it is placed in, keeps re-estimating from live traffic, and decides where each request
+goes. **Every request is assigned somewhere**, and each assignment says whether the evidence licensed it.
 
 ## 2. Definitions
 
@@ -35,11 +50,12 @@ labeller are declared, versioned, and part of the decision record; "similar traf
 conditioned on, but not selecting, the **agent / harness and version** that produced the request. See
 section 4 for why the agent is a conditioning variable here and a selectable one only at task admission.
 
-**Admissible** for a request means all three, jointly:
+**Admissible** for a request means, jointly:
 
 1. the candidate's corrected lower bound on success clears the family's floor (section 6),
 2. the gateway authorises the spend (section 3), and
-3. the SLO is feasible at current occupancy (section 5).
+3. any latency constraint the operator has set is feasible at current occupancy — and where none is set,
+   this condition is simply absent rather than invented.
 
 **Certified assignment** — an admissible candidate was chosen. The floor is claimed for this request.
 
@@ -59,11 +75,25 @@ older than this document and stays. It happens where claims are made, not where 
 route(request, state) -> assign(candidate, evidence, certified: bool)
 ```
 
-**The objective, stated as a formula because prose was ambiguous:** minimise the **expected total gateway
-charge to complete one task under the declared retry policy**, subject to (a) a lower confidence bound on
-task success clearing the family's floor, (b) the SLO expressed as a bound on `P(latency > L)`, and (c)
-gateway authorisation. Not `E[charge | success]`, and not `E[charge] / P(success)` — those are different
-quantities and two implementations optimising different ones would both have claimed compliance.
+### The objective is a trade-off, and the exchange rate is part of the deliverable
+
+The purpose in section 1 is a trade, so the mechanism owes more than a single point on it. It owes **the
+exchange rate**: for this family, on current evidence, how much accuracy is given up per unit of charge
+saved, and which candidates lie on the frontier of that trade rather than inside it. An operator who cannot
+see the rate cannot choose a floor, and a floor chosen without seeing the rate is a guess wearing a policy's
+clothes.
+
+**Given a chosen floor, the per-request decision is stated as a formula because prose was ambiguous:**
+minimise the **expected total gateway charge to complete one task under the declared retry policy**, subject
+to (a) a lower confidence bound on task success clearing the family's floor and (b) gateway authorisation.
+Not `E[charge | success]`, and not `E[charge] / P(success)` — those are different quantities and two
+implementations optimising different ones would both have claimed compliance.
+
+**Latency is a constraint the operator may add, not a term in the objective.** Where one is set, it is a
+bound on `P(latency > L)` and it narrows admissibility (section 2). **This is the least settled part of this
+document**: performance largely follows from the choices the objective already makes, and treating it as a
+co-equal objective would invent a preference nobody stated. Recorded as unsettled rather than resolved by
+assertion.
 
 Every occasion in section 5 is that one objective re-evaluated on changed inputs.
 
@@ -136,7 +166,7 @@ empirical estimate.
 | the input that moved | what the objective then says | derived from |
 |---|---|---|
 | concurrency, queue depth | the marginal request on the fixed tier costs delay, and delay is constrained | seats, KV, saturation throughput, live queue |
-| arrival rate over the accounting horizon | the fixed cost amortises or does not | gateway quote for the fixed tier, realised tasks/h |
+| arrival rate over the accounting horizon | a candidate whose bill arrives regardless becomes cheaper or dearer per task | gateway quote for that candidate, realised tasks/h |
 | a vendor price changes | the cheapest admissible candidate changes | gateway quotes |
 | an API rate-limits, errors or slows | its SLO feasibility falls | observed per-tuple error and latency |
 | a cheaper or stronger model appears | it enters on evidence, not on release notes | section 6's pipeline |
@@ -145,11 +175,13 @@ empirical estimate.
 | a new agent or agent version | a different conditioning context, with its own estimates | per-tuple estimates |
 | floor or SLO changes | the admissible set shrinks or grows, possibly to empty | policy inputs |
 | the gateway's authorisation runs down | the admissible set shrinks to what it will authorise | the gateway |
-| off-peak, fixed cost already sunk | deferable work may have a cheaper place, if capacity has no option value for imminent interactive work | clock, deferability, forecast occupancy |
+| a sunk bill and idle capacity | deferable work may have a cheaper place, if that capacity has no option value for imminent work | clock, deferability, forecast occupancy |
 
-"Fill the fixed tier while the SLO holds" and "batch belongs on the engine that is paid for anyway" are
-**not** rules here. Both are wrong in reachable cases — capacity has option value when interactive work is
-about to arrive, batch deadlines differ, and the fixed tier may not clear the floor at all.
+"Fill the self-hosted engine while the SLO holds" and "batch belongs on the engine that is paid for
+anyway" are **not** rules here. Both are wrong in reachable cases — capacity has option value when
+interactive work is about to arrive, batch deadlines differ, and that engine may not clear the floor at all.
+They are also the shape of the mistake this document exists to prevent: a conclusion about one candidate,
+promoted to a rule.
 
 ## 6. The evidence contract
 
@@ -172,8 +204,9 @@ as samples arrive, admitted when it clears, retired when it stops clearing.
 
 ## 7. Multi-tenancy
 
-The fixed tier is shared and scarce, and one agent measured at 13.2× another's tokens can occupy it alone.
-Admission to it is subject to a fairness or priority policy (section 5).
+A candidate with finite capacity is a shared resource, and one agent measured at 13.2× another's tokens can
+occupy it alone. Admission to any capacity-bounded candidate is subject to a fairness or priority policy
+(section 5); the self-hosted engine is the case where this bites first, not a special case in the rules.
 
 Per-tenant evidence at `n` samples per tenant per family per tuple within `W` **cannot** be sustained by a
 bounded exploration budget as the fleet grows. So the resolution is stated rather than improvised: when the

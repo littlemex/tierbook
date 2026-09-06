@@ -156,8 +156,19 @@ done
 for i in 1 2 3; do rm -rf {base}/.trash-* 2>/dev/null && break; sleep 2; done
 cd /testbed
 git status --porcelain >/dev/null 2>&1 || {{ echo "[FAIL] /testbed is not a git checkout"; exit 1; }}
-# Refuse to export a dirty testbed: a diff taken later would attribute someone else's edits to the agent.
-if [ -n "$(git status --porcelain)" ]; then echo "[FAIL] /testbed has uncommitted changes"; exit 1; fi
+# Refuse on MODIFIED TRACKED files only. A diff taken later would attribute someone else's edits to the
+# agent, which is the thing to prevent -- but an evaluation image legitimately ships untracked build
+# artifacts from its own install step (`?? build/` on one instance), and refusing those cost two instances
+# of a 24-instance sweep for no reason.
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "[FAIL] /testbed has modified tracked files:"; git status --porcelain --untracked-files=no | head -5
+  exit 1
+fi
+# The untracked paths that were here BEFORE the agent ran. Not ignored: an untracked file the agent creates
+# is its work and must appear in the diff, so the baseline set is recorded and subtracted at scoring time
+# rather than excluded by a pattern.
+git status --porcelain --untracked-files=all | awk '/^\?\? /{{print substr($0,4)}}' > {base}/pre-untracked.txt
+echo "pre-existing untracked paths: $(wc -l < {base}/pre-untracked.txt)"
 echo "base_commit: $(git rev-parse HEAD)"
 tar cf {base}/staged.tar --exclude=.git .
 tar cf {base}/pristine.tar .
@@ -207,6 +218,13 @@ tar xf {base}/pristine.tar --no-same-owner -C "$LOCAL/pristine" ./.git
 rm -rf "$LOCAL/tree/.git"
 cp -a "$LOCAL/pristine/.git" "$LOCAL/tree/.git"
 cd "$LOCAL/tree"
+# Subtract what was already untracked before the agent ran, so an image's own build artifacts are not
+# attributed to the agent. Anything untracked that is NOT in that list is the agent's and stays.
+if [ -s {base}/pre-untracked.txt ]; then
+  while IFS= read -r pre; do
+    [ -n "$pre" ] && rm -rf "./$pre"
+  done < {base}/pre-untracked.txt
+fi
 git add -A
 git diff --cached > {out_dir}/diff.patch
 echo "diff bytes: $(wc -c < {out_dir}/diff.patch)"
