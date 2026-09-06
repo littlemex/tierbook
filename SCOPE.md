@@ -8,8 +8,8 @@ be held to has no business being here.
 
 A routing layer over a **mixed fleet** — self-hosted fixed-cost serving plus several paid APIs, with new
 models and new coding agents arriving over time. It discovers its own parameters in whatever environment it
-is placed in, keeps re-estimating from live traffic, and decides where each request goes, **refusing when
-the evidence does not support a choice.**
+is placed in, keeps re-estimating from live traffic, and decides where each request goes. **Every request is
+assigned somewhere**, and each assignment says whether the evidence licensed it.
 
 ## 2. Definitions
 
@@ -41,15 +41,22 @@ section 4 for why the agent is a conditioning variable here and a selectable one
 2. the gateway authorises the spend (section 3), and
 3. the SLO is feasible at current occupancy (section 5).
 
-Section 12 judges refusals against *this* definition, not against the floor alone.
+**Certified assignment** — an admissible candidate was chosen. The floor is claimed for this request.
 
-**Refuse** — the decision that no candidate is admissible. It is a normal outcome with a defined
-representation in the caller's contract (section 3), not an error and not "pick the least bad".
+**Uncertified assignment** — no candidate was admissible, so the request goes to the family's **declared
+default candidate** and the record says the floor is **not** claimed for it.
+
+**There is no "choose nothing".** An earlier draft of this document made refusal a runtime outcome, and
+that was incoherent: the request is served either way, so declining to choose only means the default
+chooses while the mechanism disclaims the consequence — worse than choosing, because the choice is then
+unrecorded. What legitimately refuses is **certification**, which is a statement about a claim: the ledger
+declines to say a tier beats another for a family when a held-out fold does not support it. That refusal is
+older than this document and stays. It happens where claims are made, not where traffic is served.
 
 ## 3. The decision, and the objective
 
 ```
-route(request, state) -> assign(candidate, evidence) | refuse(reason, evidence)
+route(request, state) -> assign(candidate, evidence, certified: bool)
 ```
 
 **The objective, stated as a formula because prose was ambiguous:** minimise the **expected total gateway
@@ -65,7 +72,7 @@ Every occasion in section 5 is that one objective re-evaluated on changed inputs
 | concern | authority | this project's part |
 |---|---|---|
 | what a call cost, what remains authorised, cutting off anomalous spend | **the billing gateway** | reads its quotes and authorisation; **never reconstructs charge, never implements its own cutoff** |
-| how a caller reaches a decision at all | **the vLLM semantic router contract**, community-owned and unchangeable here | expressible within it, invoked through a synthetic model name; **`refuse` must have a representation in that contract, and if it does not, this project cannot ship inside it** |
+| how a caller reaches a decision at all | **the vLLM semantic router contract**, community-owned and unchangeable here | expressible within it, invoked through a synthetic model name. An uncertified assignment uses the contract's own declared default, which `export_vsr.py` already configures; no new representation is needed |
 | which candidate, and whether any is admissible | this project | all of it |
 
 **The gateway quotes every candidate in the objective's unit, including the fixed-cost tier.** That is a
@@ -109,12 +116,12 @@ concurrency > 7", "off-peak after 22:00" — into config and call it policy.
 | confidence level, multiplicity family, and the significance `s` used to test coverage | risk tolerances |
 | evidence window `W`, minimum effective samples `n` | how much staleness and how little data is tolerable |
 | exploration budget: share of traffic and spend per day | how much money may be spent learning |
-| **bootstrap candidate per family** | day one has no evidence; see section 8 |
+| **default candidate per family** | day one has no evidence, and an uncertified assignment has to go somewhere; deliberately not "the cheapest" |
 | default evidence-transfer model across tenants | fairness and validity, not observation |
 | reservation price of the fixed-cost tier | a contract; supplied to the gateway so it can quote it |
 | deferability of a request class | a classification of caller intent |
 | tenant shares, priority classes, exploration eligibility | fairness is a decision |
-| acceptance tolerances: regret, SLO violation, adaptation window, off-policy error | what counts as good enough |
+| acceptance tolerances: regret, SLO violation, adaptation window, off-policy error, maximum uncertified share | what counts as good enough |
 
 **Derived continuously:** arrival rate and concurrency; seats, KV capacity and saturation throughput;
 prefix-reuse rate per family; per-tuple request shape and context lifetime; per-tuple error and latency
@@ -172,7 +179,8 @@ Per-tenant evidence at `n` samples per tenant per family per tuple within `W` **
 bounded exploration budget as the fleet grows. So the resolution is stated rather than improvised: when the
 budget cannot sustain per-tenant evidence, **the declared default transfer model applies** — pooling across
 tenants while holding per-tenant floors — and where even that does not license a bound, the admissible set
-shrinks and the mechanism refuses. Pooling is a declared policy input, not an emergency measure.
+shrinks and the tenant's traffic becomes an uncertified assignment to its declared default. Pooling is a
+declared policy input, not an emergency measure.
 
 ## 8. Exploration, and day one
 
@@ -180,15 +188,15 @@ Re-estimating a candidate you are not using means sending it traffic you believe
 real money, real accuracy risk.
 
 - Exploration has a **spend and capacity budget** (policy input) and is authorised through the gateway.
-- Floor-critical traffic is **not** routed to an unadmitted candidate. Shadow instead, or explore only on
-  traffic whose class permits it.
+- Floor-critical traffic is not *silently* routed to an unadmitted candidate: it may be assigned there, but
+  only as an uncertified assignment that says so. Shadow evaluation is the alternative where the class
+  cannot tolerate that.
 - **Every decision records whether it was exploration and with what probability.** Without logged
   propensities no later counterfactual is identified.
-- **Day one, stated concretely because an earlier draft made it impossible:** before any candidate is
-  admitted for a family, live traffic for that family is **refused, or served by that family's declared
-  bootstrap candidate**, while evidence accrues through shadow evaluation funded by the exploration budget
-  until the first admission. The bootstrap candidate is a policy input; the mechanism does not claim a floor
-  it has no bound for, and says which of the two it is doing.
+- **Day one:** before any candidate is admitted for a family, traffic goes to that family's declared default
+  candidate as an **uncertified assignment**, while evidence accrues through shadow evaluation funded by the
+  exploration budget. Nothing is blocked and no floor is claimed. An earlier draft made day one impossible by
+  requiring refusal instead; with a declared default the contradiction does not arise.
 - **Staleness is tracked per estimate and reported.** Routing away from a candidate starves its evidence, so
   a minimum measurement rate is maintained or the estimate is declared expired.
 
@@ -208,8 +216,8 @@ Comparing the chosen arm against a guess is not one.
 ## 10. Behaviour when estimates are wrong
 
 Decisions are uncertainty-aware rather than point-driven. Estimates carry freshness limits after which they
-stop being usable. Drift raises an alarm. The conservative response is refusal or the bootstrap candidate,
-never the least-bad guess. Updates are rate-limited and reversible.
+stop being usable. Drift raises an alarm. The conservative response is the declared default as an uncertified
+assignment, never a certified claim built on a guess. Updates are rate-limited and reversible.
 
 ## 11. What this may not become
 
@@ -242,19 +250,19 @@ Pre-registered, reported rather than asserted, and computed only from what secti
 |---|---|---|
 | floor compliance | realised success rate on routed traffic, per family, against that family's floor | it falls below the floor beyond sampling error at significance `s` |
 | bound calibration | the confidence procedure on pre-registered resampling or simulation where the estimand is known | a pre-declared test rejects the claimed coverage at significance `s` |
-| no inadmissible choice | over the log, against section 2's three-part definition | any decision assigned a candidate that was not admissible |
-| refusal correctness | over the log, against the same definition | a refusal occurred while an admissible candidate existed |
+| no false certification | over the log, against section 2's three-part definition | any decision marked certified whose candidate was not admissible |
+| default is not a hiding place | over the log | an uncertified assignment was made while an admissible candidate existed, or the uncertified share exceeds its stated tolerance |
 | SLO | realised `P(latency > L)` per traffic class | it exceeds the stated tolerance |
 | spend regret | **estimated** by section 9's declared off-policy method, with an interval | the interval's lower edge exceeds the stated tolerance |
 | exploration cost | from the log | it exceeds the budgeted share |
 | adaptation | inject a price change, a model release, an agent swap, a capacity loss | the new candidate does not enter shadow evaluation within the adaptation window, or is not admitted once its bound clears, **or either requires a code change** |
-| genericity, and usefulness | a held-out environment and a candidate introduced after implementation freeze; the held-out run reuses the incumbent policy file except genuinely environment-owned rows (floors, SLOs, prices, budgets, bootstrap candidates) | routing logic must be edited; **or any other policy value must be changed**; **or non-refusal coverage falls below its stated minimum while the acceptance oracle identifies a feasible admissible candidate** |
+| genericity, and usefulness | a held-out environment and a candidate introduced after implementation freeze; the held-out run reuses the incumbent policy file except genuinely environment-owned rows (floors, SLOs, prices, budgets, default candidates) | routing logic must be edited; **or any other policy value must be changed**; **or the certified share falls below its stated minimum while the acceptance oracle identifies a feasible admissible candidate** |
 
-That last row's second half exists because "generic by refusing everywhere" would otherwise pass every
-other criterion.
+That last row's second half exists because "generic by sending everything to the default" would otherwise
+pass every other criterion.
 
-**The falsifier:** the mechanism is broken — not mistuned — if it assigns a candidate that was not
-admissible under section 2, or if its confidence procedure fails the calibration test.
+**The falsifier:** the mechanism is broken — not mistuned — if it marks an assignment certified when the
+candidate was not admissible under section 2, or if its confidence procedure fails the calibration test.
 
 ## 13. The test a sentence in this repository has to pass
 
