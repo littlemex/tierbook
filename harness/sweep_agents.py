@@ -103,9 +103,21 @@ def sweep_one(a, instance: str) -> dict:
         for line in out.splitlines():
             if '"resolved"' in line:
                 verdict = "true" in line
+        # Promoted out of the log tail and into the record, because these two are what separate "tried
+        # and was wrong" from "did nothing" -- and three of four agents were silently doing nothing until
+        # a flag was found. A tail truncated to the last few hundred characters loses them, which is
+        # exactly the information needed to know whether an unresolved run is a capability result.
+        diff_bytes = files_touched = None
+        for line in out.splitlines():
+            if line.startswith("diff bytes: "):
+                diff_bytes = int(line.split(": ", 1)[1])
+            elif line.startswith("files touched: "):
+                files_touched = int(line.split(": ", 1)[1])
         rec["runs"][f"{r['agent']}#{r['iteration']}"] = {
             "rc": rc,
             "resolved": verdict,
+            "diff_bytes": diff_bytes,
+            "files_touched": files_touched,
             "wall_s": r["wall_s"],
             "timed_out": r["timed_out"],
             "returned": r["returned"],
