@@ -8,3 +8,4 @@ kind: Kustomization
 
 resources:
   - agent-tap.yaml
+  - shared-workspace.yaml

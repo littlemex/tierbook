@@ -1,0 +1,21 @@
+# The path a testbed travels on, between the evaluation image that owns it and the agent that edits it.
+#
+# Why a shared volume rather than `kubectl cp`: a SWE-bench checkout is hundreds of megabytes and it has
+# to move twice per run, in and out. Streaming that through `kubectl exec` puts every byte through the
+# operator's laptop, twice, per agent, per repeat -- which is slow, and makes the measurement depend on
+# whose machine started it. On a shared volume the bytes never leave the cluster.
+#
+# Why not install the agents into the evaluation image instead: the episode's result is attributed to that
+# image's environment, and adding an npm tree and a Node runtime to it changes the environment the result
+# is attributed to. The agents stay in their own pods and the checkout comes to them.
+#
+# ReadWriteMany because the evaluation pod writes what the agent pod reads, and the reverse afterwards.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-workspace
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 100Gi

@@ -22,3 +22,8 @@ patches:
       - op: add
         path: /spec/storageClassName
         value: efs-shared
+  - target: { kind: PersistentVolumeClaim, name: agent-workspace }
+    patch: |
+      - op: add
+        path: /spec/storageClassName
+        value: efs-shared

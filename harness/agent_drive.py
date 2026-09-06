@@ -46,16 +46,49 @@ def kubectl(context: str, namespace: str, *args: str, timeout: int = 600) -> sub
     )
 
 
-def run_one(spec: dict, agent: str, prompt: str, context: str, namespace: str,
-            timeout: int) -> dict:
+def _fill(template: list[str], **kw) -> list[str]:
+    return [a.format(**kw) for a in template]
+
+
+def preflight(spec: dict, agent: str, model: str, context: str, namespace: str,
+              timeout: int) -> tuple[bool, str]:
+    """Prove the agent reaches the alias and resolves the model, before anything is measured.
+
+    A manifest full of 404s looks like a result, and this is not hypothetical: one agent keeps its model
+    in pod-local state on the node's ephemeral disk, so a pod restart silently reverted it to a model the
+    alias does not serve. Every agent in this cluster was in that state for days and nothing said so.
+    """
+    session = f"pf-{uuid.uuid4().hex[:8]}"
+    argv = _fill(spec["preflight"], model=model, session=session, workspace=f"/tmp/{session}",
+                 prompt="reply with exactly: PREFLIGHT_OK")
+    try:
+        proc = kubectl(context, namespace, "exec", f"deploy/{spec['deployment']}", "--", *argv,
+                       timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, "preflight timed out"
+    blob = (proc.stdout or "") + (proc.stderr or "")
+    if "PREFLIGHT_OK" in proc.stdout:
+        return True, "ok"
+    for marker in ("does not exist", "NotFoundError", "404"):
+        if marker in blob:
+            return False, f"the agent reached the endpoint and the model was refused: {marker}"
+    return False, f"rc={proc.returncode}, no PREFLIGHT_OK in output: {blob.strip()[-200:]}"
+
+
+def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, namespace: str,
+            timeout: int, stage_from: str | None = None) -> dict:
     """One agent, one task, one fresh session and workspace."""
     session = f"{agent}-{uuid.uuid4().hex[:10]}"
     workspace = spec["workspace"].format(session=session)
-    argv = [a.format(prompt=prompt, session=session) for a in spec["argv"]]
+    argv = _fill(spec["argv"], prompt=prompt, session=session, workspace=workspace, model=model)
 
     # `mkdir` then `cd` then exec, as one shell command, because the workspace must exist before the
     # agent starts in it and `kubectl exec` has no working-directory option.
-    inner = "mkdir -p {ws} && cd {ws} && exec \"$@\"".format(ws=workspace)
+    # Stage the task's starting state INTO the workspace when one is given. `cp -a` from the shared
+    # volume rather than a stream through the operator's machine: a checkout is hundreds of megabytes and
+    # moves twice per run, so streaming it would make the measurement depend on whose laptop began it.
+    stage = f"cp -a {stage_from}/. {workspace}/ && " if stage_from else ""
+    inner = "mkdir -p {ws} && {stage}cd {ws} && exec \"$@\"".format(ws=workspace, stage=stage)
 
     started_wall = time.time()
     t0 = time.monotonic()
@@ -78,6 +111,7 @@ def run_one(spec: dict, agent: str, prompt: str, context: str, namespace: str,
         "session": session,
         "workspace": workspace,
         "argv": argv,
+        "staged_from": stage_from,
         # The window the tap rows are matched against. Wall clock, because that is what the tap
         # records; the monotonic duration is kept separately because wall clock can step.
         "started_wall": started_wall,
@@ -110,6 +144,11 @@ def main() -> int:
                          "the same agent always runs into the same warmth and the advantage is "
                          "systematic. `rotate` counterbalances it; `fixed` is for reproducing one "
                          "specific sequence.")
+    ap.add_argument("--stage-from", help="a directory on the shared volume copied into each run's "
+                                        "workspace before the agent starts, e.g. a testbed checkout")
+    ap.add_argument("--skip-preflight", action="store_true",
+                    help="measure without proving the agents work first. For debugging the driver only: "
+                         "the preflight exists because every agent here was silently 404ing for days.")
     ap.add_argument("--tag", default="untagged")
     ap.add_argument("--out", help="manifest path; default ~/tmp/e02/tap/runs-<tag>-<ts>.json")
     args = ap.parse_args()
@@ -118,7 +157,8 @@ def main() -> int:
         ap.error("one of --task or --task-file is required")
     prompt = args.task or Path(args.task_file).read_text()
 
-    spec = json.loads(Path(args.spec).read_text())["agents"]
+    doc = json.loads(Path(args.spec).read_text())
+    spec, model = doc["agents"], doc["model"]
     names = args.agents.split(",") if args.agents else sorted(spec)
     missing = [n for n in names if n not in spec]
     if missing:
@@ -126,6 +166,21 @@ def main() -> int:
         # missing an arm, and the manifest would look complete.
         print(f"[FAIL] not in the spec: {', '.join(missing)}", file=sys.stderr)
         return 2
+
+    if not args.skip_preflight:
+        failed = []
+        for name in names:
+            ok, why = preflight(spec[name], name, model, args.context, args.namespace, 300)
+            print(f"preflight {name}: {'ok' if ok else 'FAIL -- ' + why}")
+            if not ok:
+                failed.append(name)
+        if failed:
+            # Refused rather than reported per-run: a partial comparison is worse than none, because it
+            # is the shape a reader trusts.
+            print(f"\n[FAIL] {len(failed)} agent(s) cannot resolve {model!r}: {', '.join(failed)}",
+                  file=sys.stderr)
+            return 3
+        print()
 
     out_path = Path(args.out) if args.out else (
         Path.home() / "tmp" / "e02" / "tap" / f"runs-{args.tag}-{int(time.time())}.json"
@@ -140,6 +195,8 @@ def main() -> int:
         "namespace": args.namespace,
         "repeat": args.repeat,
         "order": args.order,
+        "model": model,
+        "stage_from": args.stage_from,
         # Warmth is a condition of the experiment and not a nuisance: the engine's prefix cache
         # survives a run, so iteration 0 is nearly cold and later ones are not. Recorded per run so a
         # reader can separate the two rather than average across them.
@@ -163,7 +220,8 @@ def main() -> int:
             order = names
         for name in order:
             print(f"[{i + 1}/{args.repeat}] {name} ... ", end="", flush=True)
-            row = run_one(spec[name], name, prompt, args.context, args.namespace, args.timeout)
+            row = run_one(spec[name], name, prompt, model, args.context, args.namespace,
+                          args.timeout, args.stage_from)
             row["iteration"] = i
             row["position"] = order.index(name)
             runs.append(row)

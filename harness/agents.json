@@ -8,42 +8,94 @@
     "someone else's CLI, and encoding them as code would put four `if agent ==` branches in the middle",
     "of the measurement.",
     "",
-    "`argv` is a template. `{prompt}` is the task text and `{session}` is a per-run identifier the",
-    "driver generates. A fresh session per run is not hygiene, it is the experiment: hermes was",
-    "observed sending 258 input tokens on one call and 15,510 on the next because the second inherited",
-    "the first, so a run that reuses a session measures the previous run as well.",
+    "`argv` is a template. `{prompt}` is the task text, `{session}` a per-run identifier, `{workspace}`",
+    "the run's directory and `{model}` the single model below. A fresh session per run is not hygiene, it",
+    "is the experiment: hermes was observed sending 258 input tokens on one call and 15,510 on the next",
+    "because the second inherited the first, so a run that reuses a session measures the previous run.",
     "",
-    "`workspace` is where the agent is started. Each run gets its own directory so one agent's leftover",
-    "files cannot become another agent's context.",
+    "MODEL: one value, at the top, referenced only by the agents that need to be told. It used to be",
+    "absent here on the reasoning that the Service alias owns the model and an agent naming its own would",
+    "let the driver break the one thing this comparison holds constant. That reasoning was right about the",
+    "goal and wrong about the mechanism: hermes keeps its model in pod-local state under /opt/data, which",
+    "is the node's ephemeral disk, so every pod restart silently reverted it to a model the alias does not",
+    "serve and every call would have 404ed. Depending on invisible per-pod state is worse than one",
+    "explicit value used by all of them.",
     "",
-    "NOT recorded here: which model to use. The model is the Service alias's business, and an agent that",
-    "names a model in its own invocation would let the driver silently break the one thing this",
-    "comparison holds constant."
+    "`preflight` proves the agent can reach the alias and resolve that model. The driver runs it before any",
+    "measurement and refuses to continue if it fails, because a manifest full of 404s looks like a result."
   ],
   "agents": {
     "opencode": {
       "deployment": "opencode",
-      "argv": ["opencode", "run", "{prompt}"],
+      "argv": [
+        "opencode",
+        "run",
+        "{prompt}"
+      ],
       "workspace": "/tmp/run-{session}",
-      "notes": "Reports the model it resolved on stderr, which is worth capturing as a check that the alias took effect."
+      "notes": "Reports the model it resolved on stderr, which is worth capturing as a check that the alias took effect.",
+      "preflight": [
+        "opencode",
+        "run",
+        "reply with exactly: PREFLIGHT_OK"
+      ]
     },
     "qwen-code": {
       "deployment": "qwen-code",
-      "argv": ["qwen", "-p", "{prompt}"],
+      "argv": [
+        "qwen",
+        "-p",
+        "{prompt}"
+      ],
       "workspace": "/tmp/run-{session}",
-      "notes": "A positional query is also one-shot; -p is the documented non-interactive flag."
+      "notes": "A positional query is also one-shot; -p is the documented non-interactive flag.",
+      "preflight": [
+        "qwen",
+        "-p",
+        "reply with exactly: PREFLIGHT_OK"
+      ]
     },
     "hermes": {
       "deployment": "hermes",
-      "argv": ["hermes", "-z", "{prompt}"],
+      "argv": [
+        "hermes",
+        "-m",
+        "{model}",
+        "-z",
+        "{prompt}"
+      ],
       "workspace": "/tmp/run-{session}",
-      "notes": "-z is the non-interactive prompt. Its config is pod-local state (hermes config set), not a ConfigMap, so a pod replacement resets the model and the driver re-checks it."
+      "notes": "-z is the non-interactive prompt. -m is passed on every call because its persisted config lives on the node's ephemeral disk and resets to a model the alias does not serve on every pod restart.",
+      "preflight": [
+        "hermes",
+        "-m",
+        "{model}",
+        "-z",
+        "reply with exactly: PREFLIGHT_OK"
+      ]
     },
     "openclaw": {
       "deployment": "openclaw",
-      "argv": ["openclaw", "agent", "-m", "{prompt}", "--session-id", "{session}", "--json"],
+      "argv": [
+        "openclaw",
+        "agent",
+        "-m",
+        "{prompt}",
+        "--session-id",
+        "{session}",
+        "--json"
+      ],
       "workspace": "/tmp/run-{session}",
-      "notes": "Refuses to run without --session-id, --to or --agent. Tries the Gateway first and falls back to an embedded agent; both paths reach the alias."
+      "notes": "Refuses to run without --session-id, --to or --agent. Tries the Gateway first and falls back to an embedded agent; both paths reach the alias.",
+      "preflight": [
+        "openclaw",
+        "agent",
+        "-m",
+        "reply with exactly: PREFLIGHT_OK",
+        "--session-id",
+        "{session}"
+      ]
     }
-  }
+  },
+  "model": "Qwen/Qwen3.6-35B-A3B"
 }
