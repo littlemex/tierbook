@@ -50,6 +50,12 @@ def _fill(template: list[str], **kw) -> list[str]:
     return [a.format(**kw) for a in template]
 
 
+def _shq(s: str) -> str:
+    """Single-quote for `sh`. `pre` commands are composed into a shell line, so a value with a space in
+    it would otherwise become two arguments."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
 def preflight(spec: dict, agent: str, model: str, context: str, namespace: str,
               timeout: int) -> tuple[bool, str]:
     """Prove the agent reaches the alias and resolves the model, before anything is measured.
@@ -84,11 +90,24 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
 
     # `mkdir` then `cd` then exec, as one shell command, because the workspace must exist before the
     # agent starts in it and `kubectl exec` has no working-directory option.
-    # Stage the task's starting state INTO the workspace when one is given. `cp -a` from the shared
-    # volume rather than a stream through the operator's machine: a checkout is hundreds of megabytes and
-    # moves twice per run, so streaming it would make the measurement depend on whose laptop began it.
-    stage = f"cp -a {stage_from}/. {workspace}/ && " if stage_from else ""
-    inner = "mkdir -p {ws} && {stage}cd {ws} && exec \"$@\"".format(ws=workspace, stage=stage)
+    # Stage the task's starting state INTO the workspace when one is given, and hand the result back the
+    # same way. The shared volume carries ONE archive in each direction and the pod expands it onto its
+    # own local disk: expanded on the volume, a six-thousand-file checkout is six thousand EFS round
+    # trips and the copy does not finish. Streaming through the operator's machine is worse still -- it
+    # would put hundreds of megabytes through one laptop twice per agent per repeat.
+    # Per-run setup for an agent that cannot be told on the command line where to work. Run inside the
+    # same shell as the task so it cannot be skipped, and before the archive is expanded is fine: it
+    # configures a path, it does not read one.
+    pre = "".join(
+        " ".join(_shq(x) for x in _fill(c, prompt=prompt, session=session, workspace=workspace,
+                                       model=model)) + " >/dev/null 2>&1 && "
+        for c in spec.get("pre", [])
+    )
+    stage = f"tar xf {stage_from} --no-same-owner -C {workspace} && " if stage_from else ""
+    ret = f"/work/returned/{session}.tar"
+    give_back = (f" ; mkdir -p /work/returned && tar cf {ret} -C {workspace} ." if stage_from else "")
+    inner = ("mkdir -p {ws} && {pre}{stage}cd {ws} && {{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}; "
+             "exit ${{exec_rc:-0}}").format(ws=workspace, pre=pre, stage=stage, back=give_back)
 
     started_wall = time.time()
     t0 = time.monotonic()
@@ -112,6 +131,10 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
         "workspace": workspace,
         "argv": argv,
         "staged_from": stage_from,
+        "pre": spec.get("pre", []),
+        # Where the edited tree was left, for the scorer. Named even when the run failed: an agent that
+        # crashed halfway still edited files, and whether those files score is a fact about the agent.
+        "returned": (f"/work/returned/{session}.tar" if stage_from else None),
         # The window the tap rows are matched against. Wall clock, because that is what the tap
         # records; the monotonic duration is kept separately because wall clock can step.
         "started_wall": started_wall,
