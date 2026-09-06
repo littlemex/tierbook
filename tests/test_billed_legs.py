@@ -185,3 +185,19 @@ def test_the_shipped_tier_configs_load():
     for name in ("tiers.example.json", "tiers.function-calling.json"):
         path = Path(__file__).resolve().parents[1] / "harness" / name
         assert hl.load_tiers(path, "https://gateway.example/v1").premium.effort is None, name
+
+
+def test_the_self_hosted_engine_write_leg_is_read():
+    """vLLM's own spelling, observed on the cluster.
+
+    It reports `prompt_tokens_details: {"cached_tokens": 0, "created_cache_tokens": 7392}` -- the subset
+    convention for the read leg and a FOURTH name for the write leg. Missing it counted the box's cache
+    writes as nothing, and the box is the tier whose write rate equals its fresh rate, so the leg
+    silently dropped was the expensive one.
+    """
+    reply = _read({"prompt_tokens": 7495, "completion_tokens": 2, "total_tokens": 7497,
+                   "prompt_tokens_details": {"cached_tokens": 0, "created_cache_tokens": 7392}})
+    assert reply.cache_write_tokens == 7392
+    assert reply.legs_are_subset is True
+    assert reply.fresh_prompt_tokens == 103
+    assert reply.billed_input_tokens == 7495

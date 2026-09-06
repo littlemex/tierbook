@@ -583,7 +583,13 @@ def _usage(reply: Reply, usage: dict) -> None:
             reply.cached_prompt_tokens = int(usage[key])
             reply.legs_are_subset = key == "cached_tokens"
             break
-    for key in ("cache_write_tokens", "cacheWriteInputTokens", "cache_creation_input_tokens"):
+    # `created_cache_tokens` is vLLM's spelling, observed on the self-hosted engine: it reports
+    # `prompt_tokens_details: {"cached_tokens": 0, "created_cache_tokens": 7392}` -- the subset
+    # convention for the read leg and a fourth name for the write leg. Without it the box's cache
+    # writes were counted as nothing, on the tier whose write rate equals its fresh rate, so the leg
+    # that was lost is the expensive one. Found by recording what an agent actually got back.
+    for key in ("cache_write_tokens", "cacheWriteInputTokens", "cache_creation_input_tokens",
+                "created_cache_tokens"):
         if key in in_details:
             reply.cache_write_tokens = int(in_details[key])
             reply.legs_are_subset = True

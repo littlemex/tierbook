@@ -42,7 +42,9 @@ def _legs(u):
 
     det = getattr(u, "prompt_tokens_details", None)
     cached = (getattr(det, "cached_tokens", 0) or 0) if det is not None else 0
-    return max(0, prompt - cached), cached, (u.completion_tokens or 0), 0
+    # vLLM puts its write leg here as `created_cache_tokens`, alongside a subset-convention read leg.
+    written = (getattr(det, "created_cache_tokens", 0) or 0) if det is not None else 0
+    return max(0, prompt - cached - written), cached, (u.completion_tokens or 0), written
 
 
 def _counting(*a, **kw):
