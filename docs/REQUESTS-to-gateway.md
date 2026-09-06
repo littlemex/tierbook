@@ -1,5 +1,30 @@
 # Requests from a routing layer: four opaque attachment fields, and the fixes we run as local patches
 
+> **Resolved 2026-09-06. This file is kept as filed; the outcomes are below and the sections are not
+> rewritten**, because the reasoning that was overturned is the useful part.
+>
+> | request | outcome | what it cost us to be wrong |
+> |---|---|---|
+> | **B** | Accepted. Shipped in gateway **v1.3.0**, and the defect was **worse than filed**: `main` reported *no* cache field at all, so a request that billed 3,538 tokens answered `total_tokens: 14`. Our symptom 2 was written as a report when it was a rationale, which is what made the owner read it as a claim about our own build | our patch is dropped |
+> | **C** | Accepted, **condition corrected**. As filed it would have fired on every tool-use turn, which trains an operator to ignore the one line the request exists to produce | our patch is dropped |
+> | **E** | Accepted, **fix reshaped**. Our recursive value-walk would still have leaked by two routes we missed: a dict key that is an address, and a leaf stringified by `default=str` *after* the walk. Scrubbing the serialised line once covers both | our patch is dropped |
+> | **D** | **Already on `main`** before we filed | our patch is dropped |
+> | **A** | **Declined as specified**, counter-proposed as one header. The counter-proposal is better and is now `CONTRACT-decision-attachment.md` §8; §8.1 records the two prerequisites that block building it, both of which are the gateway's work | four fields → one |
+> | **Q1 / Q2 / Q3** | All answered, and Q1 required a change on the gateway's side. Q2's answer — that no public export schema exists — closes the only compatibility risk the attachment contract left open | — |
+>
+> **Two things learned that were not in any request.** First, `thinking` never reached Bedrock on either
+> route: the gateway accepted it and never sent `additionalModelRequestFields`. Both of us fixed the
+> forwarding of reasoning *out* and neither had noticed nothing could turn it *on*. That is what made us
+> re-read our own arms and find that our premium tier had been sending `reasoning_effort` — the
+> OpenAI-shaped parameter — to a model on the Anthropic wire, where nothing reads it. Second, the owner's
+> own sweep found 28 log lines carrying addresses and **zero** of them from the audit writer this request
+> was about: they were botocore's DEBUG wire dumps, which no sweep of either project's writers can see.
+>
+> **One correction back to the gateway, on request:** its answer states our patch put a disjoint count in
+> `prompt_tokens_details.cached_tokens`. It did not — it emitted the top-level keys, with a test asserting
+> `"prompt_tokens_details" not in usage`, which is the same shape v1.3.0 shipped. The shipped changelog is
+> correct; only the reply to us is not.
+
 This file bundles **five requests (A–E)** and **three confirmation-only questions (Q1–Q3)**.
 
 **Every section is self-contained and can be split into its own issue.** Splitting is welcome — the

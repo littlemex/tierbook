@@ -1,5 +1,6 @@
 <!-- Last updated: 2026-09-06 -->
-<!-- Applies to: tierbook main. Gateway side: stratoclave main (requests not yet filed) -->
+<!-- Applies to: tierbook main. Gateway side: stratoclave v1.4.0 (request filed and answered; section 8 is
+     the agreed shape, section 8.1 is what blocks building it) -->
 
 # Contract: how a routing decision's detail is recorded, and what that record proves
 
@@ -52,8 +53,19 @@ tamper-*proof*: the key is derived from the digest, so a different body cannot o
 store that permits overwrite it is tamper-*evident*: the mismatch is detected on read. **The degradation is
 part of the contract, not a caveat** — a backend that cannot offer write-once is still usable, and says so.
 
-**G4. Separability.** "There was no attachment" and "the attachment is gone" are distinguishable, because
-the digest's presence in the gateway record answers the first question without touching the store.
+**G4. Separability, per record only where the ledger row is.** "There was no attachment" and "the attachment
+is gone" are distinguishable when a decision record exists, because the digest's presence in it answers the
+first question without touching the store.
+
+**Corrected 2026-09-06, on a finding from the gateway's owner against this document.** An earlier version
+claimed G4 unconditionally, and it does not hold that way: the decision write is fire-and-forget, so a
+dropped write leaves no record and the two states collapse into one. The coverage rate in N1 bounds this
+*statistically* and cannot resolve a single request, which is what an audit needs.
+
+There is a better signal and it was ours to find: **the ledger row is not fire-and-forget.** "A ledger row
+exists for this span and a decision record does not" identifies a dropped write for one specific request.
+That is per-record separability, restored, and it costs nothing extra to record — but it is unusable until
+the read surface in section 8.1 exists, so G4 is **conditional on that** and section 7 carries the state.
 
 ## 2. What this contract does not guarantee
 
@@ -74,8 +86,12 @@ is offered is a narrowed path, not a closed one. **Do not write "structurally pr
 **N4. Not a gateway-side analytics surface.** The gateway does not dereference. Aggregations that need the
 detail read the attachment store, which this project owns; see section 6.
 
-**N5. Not an agreement with the gateway.** This is a tierbook document. The gateway's side is a request
-(section 8) and is **not yet filed**; until it is, every gateway-side statement here is a design intent.
+**N5. Not an agreement with the gateway — but no longer only an intent.** This is a tierbook document. The
+request in section 8 has now been **filed and answered**: the gateway declined the four-field form, agreed
+the surface should be headers, and counter-proposed one field, which section 8 adopts. What is agreed is the
+*shape*; what is not built is the shape, because both prerequisites in 8.1 are the gateway's work and are
+scheduled as a separate change. Every statement here about gateway behaviour that is not marked verified in
+section 10 remains a design intent.
 
 ## 3. The digest is over stored bytes, and is not canonicalised
 
@@ -138,8 +154,10 @@ statistic.
 one the corresponding intent attachment enumerated. A verdict naming something outside that set is
 detectable and is excluded from audited statistics.
 
-**I5. No detail on the gateway.** The four fields of section 8 are the entire gateway-side footprint. A
-future field carrying producer-specific meaning is a contract violation regardless of how convenient it is.
+**I5. No detail on the gateway.** The one header of section 8 is the entire gateway-side footprint. A future
+field carrying producer-specific meaning is a contract violation regardless of how convenient it is — and
+the one-field form is what makes this an invariant rather than a vigilance: an opaque commitment leaves no
+place for a vocabulary to accumulate, so the gateway cannot take a tierbook shape by accident.
 
 **I6. One writer per digest.** Two producers must not write different bytes claiming one digest; with
 content addressing this is automatic, and without it, it is I2's problem to detect.
@@ -172,27 +190,72 @@ derived, and the audit object is the bytes.
 | `digest-mismatch` | fetch succeeds, hash differs | tampering or a broken store. Excluded from audit, alerted |
 | `orphan` | attachment exists, no gateway record | usable for tuning, **never for audit** — it has no pre-registration attestation |
 | `absent` | record exists, no digest field | the producer wrote none |
+| `record-dropped` | **ledger row exists for the span, no decision record** | nothing about the attachment. Distinguishes a lost write from `absent`, which the digest's presence alone cannot — see the G4 correction. Requires the read surface of 8.1 |
+| `record-never-attempted` | ledger row exists, no decision record, **and the request was a hard pin** | nothing about the attachment, and nothing is wrong. The gateway does not emit a record on a path with no multi-candidate decision facts, so this is the expected state for our own access pattern and must not be counted as a drop |
 
-## 8. What the gateway is asked for (four fields, and no vocabulary)
+The last two are the states an earlier version of this table did not have, and their absence is what made
+G4 look unconditional. Note that they are told apart by **the request shape, not by the record**: an audit
+that cannot see whether the span was a hard pin cannot separate them, which is why 8.1 lists emitting the
+record on a pinned path as a prerequisite rather than a nicety.
 
-The request is deliberately small, and the earlier version of this section was much larger. That version
-asked for a namespaced reason registry so this project's reasons could live beside the gateway's five.
-**The owner rejected it**: adding namespaces to a billing gateway is the wrong shape, and the gateway's
-posture toward routing layers is that they should not need it to change. Externalising the detail removes
-the request entirely — there is no place for producer-specific vocabulary, so the gateway cannot acquire a
-tierbook shape even by accident.
+## 8. What the gateway is asked for (one header, and no vocabulary)
 
-| field | type | why every routing layer can fill it |
-|---|---|---|
-| `ext_uri` | bounded string, ASCII, ≤512 | any layer with somewhere to put detail can name it. The gateway never dereferences |
-| `ext_digest` | sha256 hex, exactly 64 | a hash exists for any byte string, independent of meaning |
-| `ext_media_type` | bounded string, ≤128 | an opaque label; the gateway does not interpret it |
-| `ext_producer` | safe key token | every layer knows who it is |
+The request is deliberately small, and it has been made smaller twice. The first version asked for a
+namespaced reason registry so this project's reasons could live beside the gateway's five. **The owner
+rejected it**: adding namespaces to a billing gateway is the wrong shape, and the gateway's posture toward
+routing layers is that they should not need it to change. Externalising the detail removed the request
+entirely — there is no place for producer-specific vocabulary, so the gateway cannot acquire a tierbook
+shape even by accident.
+
+The second version asked for four fields. **The gateway declined it and counter-proposed one, and the
+counter-proposal is better**; this section is now that shape.
+
+```
+x-sc-ext-commitment: sha256:<64 lower-case hex>
+```
+
+Algorithm-qualified, validated for syntax only, never interpreted, never dereferenced, attached to a
+reserve-time record whose timestamp the gateway writes.
+
+| what changed | why the one-field form wins |
+|---|---|
+| `ext_digest` → the header's value | the only one of the four that is already a digest, so the only one that does not collide with the gateway's own stated policy on caller-supplied text |
+| `ext_uri`, `ext_media_type`, `ext_producer` → dropped | recoverable from the object this project owns. Our store is indexed by digest, so a hash lookup returns the pointer, the type and the producer. Asking the gateway to hold them is asking it to keep a second, verbatim, TTL-less copy of our index to save us one lookup |
+| body fields → **HTTP headers** | settled in our favour, and for a reason rather than a preference: the request body is forwarded to the provider, so body fields either fail its validation or force field-stripping on the way out, which is a second place that knows the wire shape. Verified on the deployed gateway — 715 bytes of `x-sc-ext-*` traverse CloudFront and the load balancer, and a malformed correlation header alongside them returns `400` before any money is written |
+| `sha256:` prefix added | `ext_digest` as we specified it pinned sha256 and lower-case hex without naming either, so a producer using a different digest would have been silently locked out of a field that looked generic |
+
+**The cost of the one-field form, stated rather than buried:** after our retention passes the commitment
+survives and the description of *what kind of thing* was committed does not, unless we keep it ourselves.
+Section 2's N2 already separates the digest's lifetime from the bytes', so this is the same trade one field
+earlier.
+
+**Two corrections we accepted against our own filing.** `P-A1` asked for byte-identity on read and export;
+transparency has to be defined over the **validated parsed value**, because the gateway's correlation-header
+validator strips surrounding whitespace and intermediaries may normalise optional whitespace before
+application code sees it. And a raw `ext_uri` would have contradicted a policy the gateway's decision store
+states about itself — it already hashes caller-chosen session identifiers, on the reasoning that a tenant
+may embed meaningful text in them and the log is a durable audit store. That sentence was about our case.
 
 **Not requested:** any extension to the reject-reason enum, any per-producer field, any dereferencing, any
-new table, any change to the money write path. Syntax validation of `ext_uri` (length, character class) is
-in scope for the gateway; **semantic no-leak is not**, because the gateway cannot check it — that is I5 and
-N3 on this side.
+new table, any change to the money write path, any gateway-side attempt to verify that caller-supplied text
+carries no secret. **Semantic no-leak stays on this side** — the gateway cannot check it; that is I5 and N3
+here.
+
+### 8.1 Why this is not yet buildable, and what blocks it
+
+The gateway named two prerequisites and they are real, so this section is a contract and not a scheduled
+change.
+
+1. **There is no way to read the record back.** No read route, no export subcommand; the record's partition
+   key appears in one module and its own unit test. All of A's value is realised at verification time, when
+   someone fetches the gateway's record and compares its digest and timestamp against ours. Shipping the
+   write path first is not a partial delivery, it is the defect.
+2. **The record is not written on our own access pattern.** The decision record is emitted only when the
+   gateway's routing produced candidate facts or a policy override acted. A caller that decides externally
+   and pins a concrete model — which is exactly what a routing layer in front of it does — takes a path
+   whose own comment says a hard pin normally has no multi-candidate decision facts. We would receive a
+   `200` and no record. **This is a third collapse state that section 7's table does not model**, and it is
+   not a dropped write a coverage rate would catch; it is a write never attempted.
 
 ## 9. Preconditions before this is turned on
 
@@ -232,9 +295,23 @@ gateway's writer sizing survives quorum-multiplied writes; whether an alternativ
 the drop-rate curve under load. None of these are guesses dressed as facts — they are the list of things to
 measure before section 9 can be signed off.
 
-**Nothing here has been run.** This contract is a design; the four fields are not implemented on either
-side. The request in section 8 is **drafted but not sent** — its text is
-`/Users/akazawt/tmp/e02/sclv-issues/ISSUES.md`, request A, where the four fields appear with numbered
-acceptance properties and the compatibility question this document leaves open (whether a public export
-schema exists) is raised as Q2. The same file carries four unrelated fixes this project runs as local
-patches against the gateway; those are not part of this contract.
+**Answered by the gateway's owner, 2026-09-06.** The request was filed as
+`/Users/akazawt/tmp/e02/sclv-issues/ISSUES.md` and answered in full. Three things it settled that this
+document now rests on:
+
+- **Q2 — there is no public schema for the ledger or its export.** No export route, no export subcommand, no
+  `additionalProperties` declaration anywhere in the gateway repository. So no third-party consumer can hold
+  a strict schema against these records, and the one compatibility risk this document left open **does not
+  exist**. Its absence is load-bearing, which is why it is recorded here rather than left as a question.
+- **Q3 — the `reasoningContent` leg set is open, so the unknown-member warning is not dead code.** Two
+  members arrived unannounced while the answer was being written, one of them a usage key that was present on
+  one call and absent from the next in the same script run. The check is a set difference against a declared
+  known set, not an inference from "we emitted nothing".
+- **Q1 — a client-side timeout or disconnect bounds neither the provider's work nor the charge**, and the
+  gateway issues no cancellation on any transport. But the exposure *is* bounded, by the reservation rather
+  than by our timeout: admission is priced from a byte-count bound over the payload, the provider cannot
+  exceed the output cap in it, and an unobservable outcome keeps its reservation instead of being refunded.
+
+**Nothing in section 8 has been run.** The one field is not implemented on either side, and 8.1 says what
+blocks it. Of the four local patches the same file carried, **all four are now upstream** in the gateway's
+v1.3.0 and v1.4.0 and this project carries none of them; they were never part of this contract.
