@@ -42,11 +42,16 @@ Then move the alias. Record what it was first, because that is the rollback:
 
 ```bash
 kubectl -n qwen-trial get svc qwen-serving -o jsonpath='{.spec.selector}'
-kubectl -n qwen-trial patch svc qwen-serving \
-  -p '{"spec":{"selector":{"app.kubernetes.io/name":"agent-tap"}}}'
+kubectl -n qwen-trial patch svc qwen-serving --type=json \
+  -p '[{"op":"replace","path":"/spec/selector","value":{"app.kubernetes.io/name":"agent-tap"}}]'
 ```
 
-Rolling back is the same command with the selector that was printed.
+**A JSON `replace`, not the default strategic merge.** `spec.selector` is a map and a merge patch unions
+it, so the default form leaves the alias demanding both the engine's label and the tap's, which selects
+nothing: the endpoint list empties and every agent gets a connection error until it is corrected. This is
+worth knowing before doing it rather than after.
+
+Rolling back is the same command with the selector that was printed — which is why it is printed first.
 
 ## Read the observations
 
