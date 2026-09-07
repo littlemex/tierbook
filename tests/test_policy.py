@@ -640,13 +640,14 @@ def test_an_unmeasured_occupancy_makes_the_slot_value_unknown_not_zero():
     assert v["usd_per_slot_second"] is None and "service curve supplies it" in v["reason"]
 
 
-def test_an_alternative_with_no_gateway_charge_leaves_the_saving_unquantified():
-    """The same authority rule one level out: a saving computed from a rate card is not a saving."""
+def test_an_alternative_nobody_metered_leaves_the_saving_unquantified():
     tiers = registry()
-    del tiers["api-strong-a"].outcome("agentic-coding")["bill_usd"]
+    o = tiers["api-strong-a"].outcome("agentic-coding")
+    del o["bill_usd"]
+    o.pop("tokens", None)
     v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=tiers["api-strong-a"],
                           seconds_per_task=8.19)
-    assert v["usd_per_slot_second"] is None and "no gateway charge" in v["reason"]
+    assert v["usd_per_slot_second"] is None and "no priceable spend" in v["reason"]
 
 
 def test_the_admission_order_puts_the_larger_saving_first():
@@ -657,8 +658,9 @@ def test_the_admission_order_puts_the_larger_saving_first():
                       "tool-agent-user-retail": tiers["api-cheap-a"]},
         seconds_per_task=8.19)
     per = {x["family"]: x["usd_per_slot_second"] for x in order["scored"]}
-    assert order["order"][0] == max(per, key=per.get)
     assert len(order["scored"]) == 2 and order["unranked"] == []
+    if order["comparable"]:
+        assert order["order"][0] == max(per, key=per.get)
 
 
 def test_an_unrankable_family_goes_last_and_says_why_rather_than_being_ranked_on_an_absence():
@@ -667,7 +669,9 @@ def test_an_unrankable_family_goes_last_and_says_why_rather_than_being_ranked_on
         tiers["self-hosted-a"], {"agentic-coding": None, "tool-agent-user-retail": None},
         alternatives={"agentic-coding": tiers["api-strong-a"]},
         seconds_per_task=8.19)
-    assert order["order"][-1] == "tool-agent-user-retail"
+    # Listed apart from the order, not at the end of it: appending it to a list a scheduler would read is
+    # ranking it on an absence.
+    assert "tool-agent-user-retail" not in order["order"]
     assert order["unranked"][0]["family"] == "tool-agent-user-retail"
     assert "not the same as their being worth least" in order["note"]
 
@@ -680,6 +684,7 @@ def test_occupancy_is_taken_per_family_where_it_was_measured():
     box = tiers["self-hosted-a"]
     box.outcome("agentic-coding")["latency"] = {"unit": "seconds_per_task", "mean": 40.0,
                                                "concurrency_when_measured": 1}
+    # Both families measured on their own traffic at the same concurrency, so these ARE comparable.
     order = policy.capacity_priority(
         box, {"agentic-coding": None, "tool-agent-user-retail": None},
         alternatives={"agentic-coding": tiers["api-strong-a"],
@@ -687,12 +692,28 @@ def test_occupancy_is_taken_per_family_where_it_was_measured():
         seconds_per_task=8.19)
     by = {x["family"]: x for x in order["scored"]}
     assert by["agentic-coding"]["seconds_per_task"] == 40.0
-    assert "own measured latency" in by["agentic-coding"]["occupancy_source"]
+    assert by["agentic-coding"]["occupancy_source"] == "own_measurement"
     # The retail family has its own recorded latency too, so it uses that rather than the probe's.
     assert by["tool-agent-user-retail"]["seconds_per_task"] == pytest.approx(16.5)
-    assert "own measured latency" in by["tool-agent-user-retail"]["occupancy_source"]
+    assert by["tool-agent-user-retail"]["occupancy_source"] == "own_measurement"
+    assert order["comparable"] is True
     # And the slower family ranks lower, because it buys the same saving with more occupancy.
     assert order["order"][0] == "tool-agent-user-retail"
+
+
+def test_own_measurements_at_different_concurrencies_are_not_comparable_either():
+    """A second measured at concurrency 1 and a second measured at concurrency 8 are not the same second: on a
+    batching engine one request changes another's latency."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    box.outcome("agentic-coding")["latency"] = {"unit": "seconds_per_task", "mean": 40.0,
+                                               "concurrency_when_measured": 8}
+    order = policy.capacity_priority(
+        box, {"agentic-coding": None, "tool-agent-user-retail": None},
+        alternatives={"agentic-coding": tiers["api-strong-a"],
+                      "tool-agent-user-retail": tiers["api-strong-a"]},
+        seconds_per_task=8.19)
+    assert order["comparable"] is False and "at concurrencies" in order["not_comparable_because"]
 
 
 def test_the_probes_occupancy_is_borrowed_only_where_a_family_has_none_and_says_so():
@@ -706,5 +727,68 @@ def test_the_probes_occupancy_is_borrowed_only_where_a_family_has_none_and_says_
         alternatives={"agentic-coding": tiers["api-strong-a"]}, seconds_per_task=8.19)
     x = order["scored"][0]
     assert x["seconds_per_task"] == 8.19
-    assert "borrowed from the load probe" in x["occupancy_source"]
-    assert "over-ranked by this" in x["occupancy_source"]
+    assert x["occupancy_source"] == "borrowed_from_probe"
+
+
+def test_the_saving_is_incremental_not_the_alternatives_gross_cost():
+    """A reserved candidate on a minimum-plus-meter contract charges for its own traffic, so what using it SAVES
+    is the difference. Taking the alternative's gross cost overstates it by exactly the box's own meter."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    box.outcome("agentic-coding")["reserved_charge_kind"] = "reservation_plus_metered"
+    v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=8.19)
+    alt = tiers["api-strong-a"].outcome("agentic-coding")
+    own = box.outcome("agentic-coding")
+    expected = alt["bill_usd"] / alt["attempted"] - own["bill_usd"] / own["attempted"]
+    assert v["avoided_usd_per_request"] == pytest.approx(round(expected, 6))
+    assert v["reserved_own_usd_per_request"] > 0
+    assert v["usd_per_slot_second"] == pytest.approx(expected / 8.19, rel=1e-6)
+
+
+def test_a_negative_saving_is_a_real_answer():
+    """The box being dearer for a family is a finding, not an error, and clamping it at zero would hide it."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    box.outcome("agentic-coding")["reserved_charge_kind"] = "reservation_plus_metered"
+    box.outcome("agentic-coding")["bill_usd"] = 99.0
+    v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=8.19)
+    assert v["usd_per_slot_second"] < 0
+
+
+def test_without_the_charge_declaration_only_the_alternatives_cost_is_knowable_and_that_is_refused():
+    tiers = registry()
+    del tiers["self-hosted-a"].outcome("agentic-coding")["reserved_charge_kind"]
+    v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=tiers["api-strong-a"],
+                          seconds_per_task=8.19)
+    assert v["usd_per_slot_second"] is None
+    assert "which is not the same number" in v["reason"]
+
+
+def test_a_mixed_set_of_occupancy_sources_is_returned_unranked():
+    """On the first real pair the numbers were $0.089 against $0.025 per slot-second, one borrowing the probe's
+    8.19s and the other using its own 16.5s. The order reverses if the borrowed family in fact occupies the
+    engine for more than about 29 seconds, which nobody measured -- so labelling the borrowing does not make the
+    ratio a ranking."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    assert "latency" not in box.outcome("agentic-coding")          # borrows the probe
+    assert "latency" in box.outcome("tool-agent-user-retail")      # has its own
+    order = policy.capacity_priority(
+        box, {"agentic-coding": None, "tool-agent-user-retail": None},
+        alternatives={"agentic-coding": tiers["api-strong-a"],
+                      "tool-agent-user-retail": tiers["api-strong-a"]},
+        seconds_per_task=8.19)
+    assert order["comparable"] is False and order["order"] == []
+    assert "measure each family on the reserved candidate at one operating point" in \
+        order["not_comparable_because"]
+
+
+def test_the_order_says_it_is_not_wired_into_decide():
+    """Emitting an order while `decide` still assigns first-come is a separation only if it is stated. Several
+    callers can each observe occupancy below the bound and each be sent to the box."""
+    tiers = registry()
+    order = policy.capacity_priority(
+        tiers["self-hosted-a"], {"agentic-coding": None},
+        alternatives={"agentic-coding": tiers["api-strong-a"]}, seconds_per_task=8.19)
+    assert "not consulted by `decide`" in order["not_wired_into_decide"]
+    assert "atomic decision" in order["not_wired_into_decide"]

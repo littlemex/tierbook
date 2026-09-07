@@ -700,10 +700,12 @@ def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
     that avoids a tenth of a cent displaces one that would have avoided a dollar. Both reviews raised it and
     neither the cost objective nor the guards addressed it.
 
-    The quantity that does is derivable rather than invented: **the metered charge this family avoids by using
-    the box, divided by the occupancy it consumes to do so.** The numerator is the alternative's gateway charge
-    per request; the denominator is the box's seconds per task at the concurrency it is being run at, which the
-    service curve measures. Neither is a constant anybody chose.
+    The quantity that does is derivable rather than invented: **the charge this family avoids by using the box,
+    divided by the occupancy it consumes to do so.** The numerator is *incremental*, not the alternative's gross
+    cost: a reserved candidate declared `reservation_plus_metered` charges for its own traffic, so what is saved
+    is the difference. Getting that wrong overstates the saving by exactly the box's own meter, and it is
+    positive only when the box is in fact cheaper -- a negative saving is a real answer and is returned as one.
+    The denominator is seconds per task, which the service curve measures.
 
     What this is and is not. It prices the SAVING, not the delay a queued request suffers -- that is a latency
     constraint and belongs where the other constraints are. It is a greedy index, which is exactly optimal when
@@ -728,20 +730,45 @@ def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
     n = o.get("attempted") or 0
     if spend is None or not n:
         return {"usd_per_slot_second": None,
-                "reason": f"the alternative {alternative.id!r} has no gateway charge for {family!r}, so the "
+                "reason": f"the alternative {alternative.id!r} has no priceable spend for {family!r}, so the "
                           f"saving is unquantified: {why if spend is None else 'it attempted nothing'}"}
-    avoided = spend / n
+    # What the box itself charges for the same traffic. Zero for `reservation_only`; real for a
+    # minimum-plus-meter contract, and subtracting it is the difference between a saving and a gross cost.
+    own = 0.0
+    kind = reserved.reserved_charge_kind(family)
+    if kind is None:
+        return {"usd_per_slot_second": None,
+                "reason": f"{reserved.id!r} does not declare whether it also charges per request for "
+                          f"{family!r}, so what using it SAVES cannot be computed -- only what the alternative "
+                          "costs, which is not the same number"}
+    if kind == "reservation_plus_metered":
+        own_spend, own_why = _family_spend(reserved, family)
+        ro = reserved.outcome(family) or {}
+        rn = ro.get("attempted") or 0
+        if own_spend is None or not rn:
+            return {"usd_per_slot_second": None,
+                    "reason": f"{reserved.id!r} charges per request for {family!r} but that charge is not "
+                              f"priceable: {own_why if own_spend is None else 'it attempted nothing'}. The "
+                              "saving is the difference, so it cannot be computed without both sides"}
+        own = own_spend / rn
+    avoided = spend / n - own
     return {
         "usd_per_slot_second": avoided / seconds_per_task,
         "avoided_usd_per_request": round(avoided, 6),
+        "alternative_usd_per_request": round(spend / n, 6),
+        "reserved_own_usd_per_request": round(own, 6),
         "alternative": alternative.id,
         "seconds_per_task": seconds_per_task,
-        "reason": (f"using {reserved.id!r} for {family!r} avoids ${avoided:.6f} a request at "
-                   f"{alternative.id!r}, and occupies it for {seconds_per_task:.2f} s to do so. Both are "
-                   "measurements at one operating point, so this moves when either does"),
+        "reason": (f"using {reserved.id!r} for {family!r} saves ${avoided:.6f} a request -- ${spend / n:.6f} at "
+                   f"{alternative.id!r} less ${own:.6f} the reserved candidate charges for the same traffic -- "
+                   f"and occupies it for {seconds_per_task:.2f} s to do so. Both are measurements at one "
+                   "operating point, so this moves when either does"),
         "assumes": [
             "the saving is the alternative's charge for the SAME traffic, which holds only where that "
             "candidate was measured on this family",
+            "that occupancy is an independent quantity of capacity consumed. On a batching engine it is not: "
+            "one request changes another's latency and the batch's efficiency, so this is a heuristic for a "
+            "measured stationary mix rather than a property of the engine",
             "occupancy costs what it costs at the concurrency the curve was measured at; the figure changes "
             "with the operating point",
             "a greedy order, which is exactly optimal when slots divide and near-optimal when they do not",
@@ -767,24 +794,46 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
     """
     scored, unranked = [], []
     for family in sorted(families):
-        own, _ = _family_latency_seconds(reserved.outcome(family) or {})
+        own, conc = _family_latency_seconds(reserved.outcome(family) or {})
         secs = own if own is not None else seconds_per_task
         v = slot_value(reserved, family, alternative=alternatives.get(family), seconds_per_task=secs)
-        v["occupancy_source"] = ("this family's own measured latency on the reserved candidate" if own is not None
-                                else "borrowed from the load probe, which replayed a different request shape; a "
-                                     "family that occupies the engine for longer is over-ranked by this")
+        v["occupancy_source"] = "own_measurement" if own is not None else "borrowed_from_probe"
+        v["occupancy_concurrency"] = conc if own is not None else "the probe's"
         if v["usd_per_slot_second"] is None:
             unranked.append({"family": family, "reason": v["reason"]})
         else:
             scored.append({"family": family, **v})
-    scored.sort(key=lambda x: -x["usd_per_slot_second"])
+
+    # Comparable only if every denominator came from the same place. One family measured on its own traffic and
+    # another borrowing the probe's figure are two different quantities, and labelling the borrowing does not
+    # make the ratio between them a ranking: on the first real pair the numbers were $0.089 against $0.025 per
+    # slot-second, and the order reverses if the borrowed family in fact occupies the engine for more than about
+    # 29 seconds -- which nobody measured. So an incomparable set is returned UNRANKED rather than sorted.
+    sources = {x["occupancy_source"] for x in scored}
+    concs = {str(x["occupancy_concurrency"]) for x in scored}
+    comparable = len(scored) <= 1 or (len(sources) == 1 and len(concs) == 1)
+    if comparable:
+        scored.sort(key=lambda x: -x["usd_per_slot_second"])
     return {
         "reserved": reserved.id,
-        "order": [x["family"] for x in scored] + [x["family"] for x in unranked],
+        "comparable": comparable,
+        # A partial order, not an operational one: unrankable families are listed separately rather than appended,
+        # because appending them to a list a scheduler would read is ranking them on an absence.
+        "order": [x["family"] for x in scored] if comparable else [],
         "scored": scored,
         "unranked": unranked,
-        "note": ("highest saving per second of occupancy first. Unranked families come last because nothing "
+        "not_comparable_because": (None if comparable else
+                                   f"occupancy for these families came from {sorted(sources)} at concurrencies "
+                                   f"{sorted(concs)}. A saving per second is only a ranking when every second "
+                                   "was measured the same way; measure each family on the reserved candidate at "
+                                   "one operating point"),
+        "note": ("highest saving per second of occupancy first, when the denominators are comparable. Families "
+                 "with no computable slot value are listed apart from the order, not at the end of it: nothing "
                  "here can rank them, which is not the same as their being worth least"),
+        "not_wired_into_decide": ("this order is not consulted by `decide`, which assigns per request without "
+                                  "seeing other families. Admitting the last free slot is an atomic decision "
+                                  "among contenders and needs shared state -- several callers can each observe "
+                                  "occupancy below the bound and each be sent to the box"),
     }
 
 

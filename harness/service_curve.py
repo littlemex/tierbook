@@ -15,9 +15,17 @@ prefill-heavy agent turn and a short chat turn saturate a batching engine at dif
 replays a captured request rather than generating a synthetic one, and refuses to run without it -- a curve
 measured on the wrong shape is a threshold for a workload nobody has.
 
-What this does NOT establish: any statement about a different model, a different request shape, or a different
-serving configuration. Those need their own curve, which is the point of the curve being data rather than a
-constant.
+What this does NOT establish, stated because a curve invites more confidence than it earns:
+
+- Any statement about a different model, request shape, or serving configuration. Those need their own curve,
+  which is the point of the curve being data rather than a constant.
+- A steady state. Each point is a closed batch: startup and drain are inside the window, so a small `--rounds`
+  measures the transient as much as the plateau. Points run once, in increasing order, with no warm-up and no
+  interval -- so a bound read off one run is a reading, not an estimate with a confidence.
+- Correctness. An HTTP 200 counts as completed work here; whether the reply was right, or truncated at the
+  token cap, is the oracle's question and this does not ask it.
+- Independence between families. Replaying one request encourages prefix caching and homogeneous batching, and a
+  production mix does neither.
 """
 from __future__ import annotations
 
@@ -119,7 +127,9 @@ def main() -> int:
               f"{r['tasks_per_hour']} tasks/hour  mean {r['mean_latency_s']}s"
               + (f"  FAILED {r['failed']}" if r["failed"] else ""))
 
-    curve = {str(p["concurrency"]): p["tasks_per_hour"] for p in points if p["tasks_per_hour"]}
+    # Every point, including one that completed nothing. Dropping zero-throughput points removes total overload
+    # from the data the compiler reads, so the curve would show a candidate that never fails.
+    curve = {str(p["concurrency"]): p["tasks_per_hour"] for p in points}
     Path(a.out).write_text(json.dumps({
         "endpoint": a.endpoint, "model": a.model, "request": a.request,
         "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -129,6 +139,11 @@ def main() -> int:
                          "on THIS serving configuration and nothing else. A different shape saturates a "
                          "batching engine at a different concurrency",
     }, indent=1) + "\n")
+    failed_points = [p["concurrency"] for p in points if p["failed"]]
+    if failed_points:
+        print(f"\n[WARN] calls failed at concurrencies {failed_points}. A point with failures is not a clean "
+              "capacity reading, and the bound derivation excludes it rather than treating a partial batch as a "
+              "throughput")
     print(f"\ncurve: {curve}")
     print(f"wrote {a.out}")
     rising = [c for c, _ in sorted(((int(k), v) for k, v in curve.items()))]
