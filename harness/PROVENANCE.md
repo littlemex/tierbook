@@ -38,3 +38,23 @@ tests/        the decisions that would produce a plausible wrong number if they 
 `../routing/policy.py`, which decides which tier an attempt goes to in the first place. The two never
 import each other, and that separation is the point: the harness measures a tier, the router reads the
 measurement.
+
+## The scorer was checked against an unmodified tree (2026-09-08)
+
+A review raised the right alarm: a run whose model received 3-token prompts reported 11 solved of 24, which is
+prima facie evidence that the solve metric is generous or broken -- and a broken metric invalidates every arm, not
+just that one.
+
+Checked directly. The staged (unmodified) tree for `django__django-11880` was submitted to the scorer:
+
+    python3 harness/testbed.py score --instance django__django-11880 \
+        --workspace /work/returned/pristine-check.tar --context distai-eks --namespace qwen-trial
+
+It returned `"resolved": false` with 111 tests passing and the FAIL_TO_PASS set unmet. So the metric does
+discriminate: a tree with no fix in it does not score as solved, and the instance's own tests are what decide.
+
+What that leaves open, and what it does not. It does not explain how a degraded run fixed 11 of 24 -- the solves
+carried real diffs of 428 to 1,572 bytes across one or two files, so they were not empty. And it does not make
+10 against 11 a difference: with 24 items and one run per arm, binomial noise is worth two or three tasks, so
+those two numbers are indistinguishable whatever else is true. Any claim of a difference between arms needs
+repetition, not a cleaner pipeline.
