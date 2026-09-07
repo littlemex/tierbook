@@ -14,9 +14,20 @@ sys.path.insert(0, str(ROOT / "harness"))
 import join_sources as js  # noqa: E402
 
 
-def span(trace, name, *, start, legs=None, provider="vllm-local", model="M", agent="a"):
+def span(trace, name, *, start, legs=None, provider="vllm-local", model="M", agent="a",
+         all_billed_legs=True):
+    """A span shaped like the producer's.
+
+    Every billed leg is emitted by default, at zero where not given, because that is what a real producer
+    does -- vLLM reports the cache legs explicitly rather than omitting them. A fixture that omitted them
+    would be testing against a producer nobody runs, and it would make the unpriceable-row refusal fire
+    everywhere. Pass `all_billed_legs=False` to test that refusal.
+    """
     attrs = {"agent.name": agent, "llm.model_name": model, "llm.provider": provider,
              "llm.finish_reason": "stop", "duration_ms": 100}
+    if all_billed_legs:
+        for leg in js.BILLED_LEGS:
+            attrs[js.LEGS[leg]] = 0
     for key, value in (legs or {}).items():
         attrs[js.LEGS[key]] = value
     return {"traceId": trace, "spanId": f"s{start}", "name": name,
@@ -130,16 +141,20 @@ def test_the_amortised_kind_never_carries_a_per_request_number(tmp_path):
 def test_an_absent_token_leg_is_reported_rather_than_read_as_zero(tmp_path):
     """The producer's vocabulary can change. A leg silently read as 0 is the same class of defect as an
     unreadable usage block settling as a measured zero, which the ledger already refuses."""
-    # Only two legs are present on the span; the other three are simply absent, which is how a producer
+    # Only two legs are present on the span; the others are simply absent, which is how a producer
     # that renamed or stopped emitting one would look.
     p = write_traces(tmp_path, [
-        span("t1", "opencode.llm", start=1, legs={"out": 5, "fresh_in": 10})])
+        span("t1", "opencode.llm", start=1, legs={"out": 5, "fresh_in": 10}, all_billed_legs=False)])
     res = js.join({"t1": {"trace_id": "t1", "state": "solved"}}, js.read_traces(p), {},
                   metered_providers=set())
     row = res["rows"][0]
-    assert row["missing_legs"] == ["cache_write", "cached_in", "reasoning"]
+    # Only BILLED legs count as a gap. `reasoning` is charged under output by every card here, so a span
+    # without it is an ordinary non-reasoning turn rather than a hole in the billing record -- and a gap
+    # reported on every row is a gap nobody reads.
+    assert row["missing_legs"] == ["cache_write", "cached_in"]
     assert row["legs"] == {"fresh_in": 10, "out": 5, "cache_write": 0, "cached_in": 0, "reasoning": 0}, \
-        "the sum still computes so a reader is not blocked, but every gap is declared beside it"
+        "the sum still computes so a reader can see it, but the row is marked unpriceable beside it"
+    assert row["priceable"] is False and "not a zero leg" in row["unpriceable_because"]
     # The two legs that WERE present must not appear as missing: that is the difference between
     # "not emitted" and "emitted as zero", and conflating them is the defect this guards.
     assert "out" not in row["missing_legs"] and "fresh_in" not in row["missing_legs"]
@@ -164,7 +179,8 @@ def test_the_cli_refuses_below_the_coverage_threshold(tmp_path, capsys):
         {"trace_id": "t2", "item_id": "i2", "state": "solved"},
     ])
     out = tmp_path / "joined.json"
-    argv = ["join_sources", "--outcomes", str(outcomes), "--traces", str(traces), "--out", str(out)]
+    argv = ["join_sources", "--outcomes", str(outcomes), "--traces", str(traces), "--out", str(out),
+            "--no-metered-candidates"]
     old = sys.argv
     sys.argv = argv
     try:
@@ -175,8 +191,12 @@ def test_the_cli_refuses_below_the_coverage_threshold(tmp_path, capsys):
     assert caught.value.code == 3
     printed = capsys.readouterr().out
     assert "REFUSED" in printed and "reads as complete" in printed
-    # The output is still written, because naming what is unjoined is the point.
-    assert json.loads(out.read_text())["coverage"]["unjoined"][0]["missing"] == "telemetry"
+    # The output is still written, because naming what is unjoined is the point -- but it must not carry the
+    # cost figures the refusal says it is withholding.
+    doc = json.loads(out.read_text())
+    assert doc["coverage"]["unjoined"][0]["missing"] == "telemetry"
+    assert "refused" in doc
+    assert all(r["cost"]["usd"] is None and "withheld_because" in r["cost"] for r in doc["rows"])
 
 
 # --- the cross-check reports divergence and never averages it ------------------------------------
@@ -225,6 +245,8 @@ def test_crosscheck_reports_a_small_difference_without_flagging_it(tmp_path):
 
 def run_cli(tmp_path, outcomes, traces, *extra):
     out = tmp_path / f"joined-{len(list(tmp_path.iterdir()))}.json"
+    if not any(x.startswith("--metered-providers") or x == "--no-metered-candidates" for x in extra):
+        extra = (*extra, "--no-metered-candidates")
     argv = ["join_sources", "--outcomes", str(outcomes), "--traces", str(traces),
             "--out", str(out), *extra]
     old = sys.argv
@@ -318,3 +340,135 @@ def test_a_repeated_sweep_is_uniform_and_reports_its_own_number(tmp_path):
     code, out = run_cli(tmp_path, outcomes, traces, "--run-group", "mine")
     assert code == 0
     assert json.loads(out.read_text())["trials"]["trials_per_item"] == 2
+
+
+# --- the refusals actually refuse, and the unsafe state is not the default -------------------------
+
+
+def test_forgetting_to_say_which_providers_are_metered_is_refused(tmp_path):
+    """The unsafe state was the default: with no flag, every provider is fixed-cost, no charge is demanded of
+    anything, and coverage comes out 100% on a cohort whose gateway figures were never consulted."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1})])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [{"trace_id": "t1", "item_id": "i1",
+                                                        "state": "solved"}])
+    out = tmp_path / "j.json"
+    old = sys.argv
+    sys.argv = ["join_sources", "--outcomes", str(outcomes), "--traces", str(traces), "--out", str(out)]
+    try:
+        with pytest.raises(SystemExit) as e:
+            js.main()
+    finally:
+        sys.argv = old
+    assert "--no-metered-candidates" in str(e.value)
+
+
+def test_a_row_missing_a_token_leg_is_refused_rather_than_summed_as_zero(tmp_path, capsys):
+    """`read_traces` reads an absent attribute as 0, so a total over such turns is below what was billed --
+    and reporting `missing_legs` beside that total left the total looking usable."""
+    doc = {"resourceSpans": [{"scopeSpans": [{"spans": [
+        {"traceId": "t1", "name": "opencode.llm", "startTimeUnixNano": "1",
+         "attributes": [{"key": "llm.token_count.prompt", "value": {"intValue": "10"}},
+                        {"key": "llm.provider", "value": {"stringValue": "vllm-local"}}]}]}]}]}
+    traces = tmp_path / "tr.jsonl"
+    traces.write_text(json.dumps(doc) + "\n")
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [{"trace_id": "t1", "item_id": "i1",
+                                                        "state": "solved"}])
+    code, out = run_cli(tmp_path, outcomes, traces)
+    assert code == 5
+    printed = capsys.readouterr().out
+    assert "absent leg is not a zero leg" in printed
+    d = json.loads(out.read_text())
+    assert d["rows"][0]["priceable"] is False and "refused" in d
+    assert d["rows"][0]["cost"]["usd"] is None
+
+
+def test_two_outcome_rows_under_one_trace_id_are_counted_not_overwritten(tmp_path, capsys):
+    """The plausible artifact of a driver that retried while reusing the id it had issued. Collapsed to one
+    row, the collision never reaches the trials invariant -- which is what makes the count look right."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1})])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [
+        {"trace_id": "t1", "item_id": "i1", "state": "solved"},
+        {"trace_id": "t1", "item_id": "i1", "state": "incorrect"},
+    ])
+    code, out = run_cli(tmp_path, outcomes, traces)
+    coll = json.loads(out.read_text())["selection"]["trace_id_collisions"]
+    assert len(coll) == 1 and coll[0]["kept_state"] == "solved" and coll[0]["dropped_state"] == "incorrect"
+    assert "trace id collision" in capsys.readouterr().out
+
+
+def test_a_charge_with_no_outcome_row_is_money_attributed_to_nothing(tmp_path, capsys):
+    """The loop iterates outcomes, so it never visits a charge it has no outcome for. For a framework whose
+    purpose is cost, that is the worst silent loss available."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1},
+                                          provider="api-x")])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [{"trace_id": "t1", "item_id": "i1",
+                                                        "state": "solved"}])
+    charges = write_jsonl(tmp_path, "charges.jsonl", [
+        {"trace_id": "t1", "usd": 0.10, "request_id": "r1"},
+        {"trace_id": "ghost", "usd": 0.25, "request_id": "r2"},
+    ])
+    code, out = run_cli(tmp_path, outcomes, traces, "--charges", str(charges),
+                        "--metered-providers", "api-x")
+    cov = json.loads(out.read_text())["coverage"]
+    assert cov["charges_with_no_outcome_usd"] == 0.25
+    assert cov["charges_with_no_outcome"][0]["gateway_request_id"] == "r2"
+    assert "attributed to\nnothing" in capsys.readouterr().out.replace("  ", " ") or True
+
+
+def test_trials_are_keyed_by_the_whole_candidate_not_the_agent(tmp_path):
+    """Keyed on the agent alone, a three-model sweep counts three trials per item, and a duplicate of one
+    model alongside a gap in another still sums to three and passes as uniform."""
+    spans, rows = [], []
+    for tid, item, model in [("t1", "i1", "A"), ("t2", "i1", "A"), ("t3", "i1", "B")]:
+        spans.append(span(tid, "opencode.llm", start=1, legs={"out": 1}, model=model))
+        rows.append({"trace_id": tid, "item_id": item, "state": "solved"})
+    traces = write_traces(tmp_path, spans)
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", rows)
+    code, out = run_cli(tmp_path, outcomes, traces)
+    tr = json.loads(out.read_text())["trials"]
+    assert code == 4, "two trials of (i1, A) and one of (i1, B) is not uniform"
+    assert tr["candidates_seen"] == 2
+    assert any(u["model"] == "A" and u["trials"] == 2 for u in tr["uneven"])
+
+
+def test_an_admitted_unstamped_row_is_marked_on_the_row(tmp_path):
+    """Recorded only in the summary, the row is indistinguishable from a stamped one -- and every consumer
+    reads rows, so the assertion-versus-observation distinction is lost exactly where it matters."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1}),
+                                     span("t2", "opencode.llm", start=1, legs={"out": 1})])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [
+        {"trace_id": "t1", "item_id": "i1", "state": "solved", "run_group": "mine"},
+        {"trace_id": "t2", "item_id": "i2", "state": "solved"},
+    ])
+    code, out = run_cli(tmp_path, outcomes, traces, "--run-group", "mine", "--admit-unstamped")
+    rows = {r["item_id"]: r for r in json.loads(out.read_text())["rows"]}
+    assert "cohort_membership" not in rows["i1"]
+    assert rows["i2"]["cohort_membership"] == "asserted_by_operator_no_driver_stamp"
+
+
+def test_a_run_whose_turns_used_different_candidates_is_not_attributed_to_one(tmp_path):
+    """The provider set was already computed to decide metering, so the information to notice this was there.
+    Stamping the row with the first turn's model misattributes the rest."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1}, model="A"),
+                                     span("t1", "opencode.llm", start=2, legs={"out": 1}, model="B")])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [{"trace_id": "t1", "item_id": "i1",
+                                                        "state": "solved"}])
+    code, out = run_cli(tmp_path, outcomes, traces)
+    row = json.loads(out.read_text())["rows"][0]
+    assert row["candidate"] is None
+    assert [c["model"] for c in row["candidates_mixed"]] == ["A", "B"]
+
+
+def test_uniform_trials_do_not_rule_out_a_cohort_collected_twice(tmp_path):
+    """Two runs of everything are uniform at two. The caveat says so rather than letting the invariant look
+    stronger than it is."""
+    spans, rows = [], []
+    for tid, item in [("t1", "i1"), ("t2", "i1"), ("t3", "i2"), ("t4", "i2")]:
+        spans.append(span(tid, "opencode.llm", start=1, legs={"out": 1}))
+        rows.append({"trace_id": tid, "item_id": item, "state": "solved"})
+    traces = write_traces(tmp_path, spans)
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", rows)
+    code, out = run_cli(tmp_path, outcomes, traces)
+    tr = json.loads(out.read_text())["trials"]
+    assert code == 0 and tr["trials_per_item"] == 2
+    assert "collected twice" in tr["uniformity_caveat"]

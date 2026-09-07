@@ -105,14 +105,15 @@ def test_on_the_frontier_but_not_chosen_is_usable_and_says_what_would_change_it(
     assert "moves along the frontier" in ans["detail"]
 
 
-def test_uncertified_says_more_evidence_rather_than_a_different_threshold():
-    """A "no" that cannot be acted on is not an answer. The useful form names what would change it, and
-    widening a margin is not that."""
+def test_uncertified_names_both_things_that_would_change_the_answer():
+    """A "no" that cannot be acted on is not an answer, so it names what would change it. Both things: more
+    evidence, and a wider margin -- because certification is `lcb >= -margin` and pretending the margin is
+    not a threshold would be denying what the code does."""
     e = entry(["dear"], ranked=[ranked("box", -0.30, 0.01, certified=False),
                                 ranked("dear", 0.00, 0.50)])
     ans = report.self_hosted_answer(e, report.frontier_for(e), self_hosted_ids={"box"})
     assert ans["usable"] is False and ans["reason"] == "not_certified"
-    assert "more evidence, not a different threshold" in ans["detail"]
+    assert "more evidence" in ans["detail"] and "wider non-inferiority margin" in ans["detail"]
 
 
 def test_an_uncertified_point_on_the_frontier_is_still_not_usable():
@@ -202,3 +203,60 @@ def test_selected_renders_without_a_trailing_dash():
     report.annotate(table, self_hosted_ids={"box"})
     line = next(x for x in report.render(table).splitlines() if "self-hosted usable" in x)
     assert line.rstrip().endswith("(selected)")
+
+
+# --- the branches that were uncareful about the candidate the function exists to be careful about ----
+
+
+def test_selected_but_uncertified_is_not_reported_as_usable():
+    """The first real cohort was exactly this: the box was chosen, nothing was certified, and the report said
+    "usable (selected)" two lines under "not certified". `usable` then meant "the compiler named it", which is
+    not what a reader takes it for."""
+    e = entry(["box"], status="provisional", ranked=[ranked("box", 0.0, 0.01, certified=False)],
+              reason="held out below the margin")
+    ans = report.self_hosted_answer(e, report.frontier_for(e), self_hosted_ids={"box"})
+    assert ans["usable"] is False and ans["reason"] == "selected_not_certified"
+    assert "the default this evidence falls back to" in ans["detail"]
+    assert "held out below the margin" in ans["detail"]
+
+
+def test_selected_and_certified_is_still_the_simple_yes():
+    e = entry(["box"], status="assigned", ranked=[ranked("box", 0.0, 0.01)])
+    ans = report.self_hosted_answer(e, report.frontier_for(e), self_hosted_ids={"box"})
+    assert ans == {"usable": True, "reason": "selected", "candidates": ["box"]}
+
+
+def test_an_unpriced_candidate_is_off_the_frontier():
+    """An infinite cost is the compiler saying "excluded for want of a spend figure". Left in, a candidate
+    nobody priced lands on the frontier with the best bound and is presented as a Pareto option."""
+    fr = report.frontier_for(entry(["a"], ranked=[
+        {"arrangement": ["unpriced"], "kind": "outright", "quality_lcb": 0.9,
+         "cost_per_request": float("inf"), "certified": True},
+        ranked("a", 0.0, 0.10),
+    ]))
+    by = {p["candidate"]: p for p in fr}
+    assert by["unpriced"]["on_frontier"] is False
+    assert "not a point on any frontier" in by["unpriced"]["frontier_note"]
+    assert by["a"]["on_frontier"] is True
+
+
+def test_a_certified_but_unpriced_box_is_not_usable_and_says_why():
+    e = entry(["a"], ranked=[
+        {"arrangement": ["box"], "kind": "outright", "quality_lcb": 0.0,
+         "cost_per_request": float("inf"), "certified": True},
+        ranked("a", 0.0, 0.10),
+    ])
+    ans = report.self_hosted_answer(e, report.frontier_for(e), self_hosted_ids={"box"})
+    assert ans["usable"] is False and ans["reason"] == "not_priced"
+    assert "uncomparable candidate is not a usable one" in ans["detail"]
+
+
+def test_the_uncertified_detail_does_not_deny_that_a_margin_is_a_threshold():
+    """The earlier sentence said "more evidence, not a different threshold". Certification is
+    `lcb >= -margin`, so a different margin literally changes the answer, and the sentence asserted the
+    opposite of the code."""
+    e = entry(["dear"], ranked=[ranked("box", -0.30, 0.01, certified=False),
+                                ranked("dear", 0.00, 0.50)])
+    d = report.self_hosted_answer(e, report.frontier_for(e), self_hosted_ids={"box"})["detail"]
+    assert "wider non-inferiority margin" in d
+    assert "not a knob to turn until the answer changes" in d

@@ -55,6 +55,11 @@ LEGS = {
     "out": "llm.token_count.completion",
     "reasoning": "llm.token_count.completion_details.reasoning",
 }
+#: The legs a gateway bills. `reasoning` is read and carried but is NOT one of these: this project's price
+#: cards charge reasoning tokens under output, so a span without a reasoning attribute is an ordinary
+#: non-reasoning turn rather than a gap in the billing record. Priceability is judged on these four only.
+BILLED_LEGS = ("fresh_in", "cached_in", "cache_write", "out")
+
 CANDIDATE_ATTRS = {"agent": "agent.name", "model": "llm.model_name", "provider": "llm.provider"}
 
 
@@ -126,7 +131,7 @@ def read_outcomes(path: Path, *, run_group: str | None = None,
                                             operator's word rather than on the driver's stamp, so a reader
                                             of the output can tell which it was.
     """
-    rows, other, unstamped = {}, [], []
+    rows, other, unstamped, collided = {}, [], [], []
     for line in path.read_text(errors="replace").splitlines():
         line = line.strip()
         if not line:
@@ -137,22 +142,39 @@ def read_outcomes(path: Path, *, run_group: str | None = None,
             continue
         if not r.get("trace_id"):
             continue
+
+        def take(row):
+            # Keyed by trace id, so a second row under one id would silently replace the first -- the
+            # plausible artifact of a driver that retried while reusing the id it had already issued. Counted
+            # instead: a collision never reaches the trials invariant, because collapsing two rows into one is
+            # exactly what makes the count look right.
+            tid = row["trace_id"]
+            if tid in rows:
+                collided.append({"trace_id": tid, "item_id": row.get("item_id"),
+                                 "kept_state": rows[tid].get("state"), "dropped_state": row.get("state")})
+                return
+            rows[tid] = row
+
         if run_group is None:
-            rows[r["trace_id"]] = r
+            take(r)
             continue
         g = r.get("run_group")
         if g == run_group:
-            rows[r["trace_id"]] = r
+            take(r)
         elif g is None:
             unstamped.append({"trace_id": r["trace_id"], "item_id": r.get("item_id")})
             if admit_unstamped:
-                rows[r["trace_id"]] = r
+                # Marked on the row itself, not only in the selection summary. Every consumer reads rows, and
+                # a row indistinguishable from a stamped one loses the assertion-versus-observation
+                # distinction that admitting it was supposed to record.
+                take({**r, "cohort_membership": "asserted_by_operator_no_driver_stamp"})
         else:
             other.append({"trace_id": r["trace_id"], "item_id": r.get("item_id"), "run_group": g})
     selection = {
         "run_group": run_group,
         "selected": len(rows),
         "other_groups_excluded": other,
+        "trace_id_collisions": collided,
         "unstamped": unstamped,
         "unstamped_admitted": bool(unstamped) and admit_unstamped,
         **({"unstamped_note":
@@ -194,13 +216,22 @@ def trials_per_item(rows: list[dict]) -> dict:
     """
     counts: dict[tuple, list[str]] = defaultdict(list)
     for r in rows:
-        agent = (r.get("candidate") or {}).get("agent")
-        counts[(r.get("item_id"), agent)].append(r["trace_id"])
+        c = r.get("candidate") or {}
+        # Keyed by the WHOLE candidate, because that is what a record is keyed by. Keyed on the agent alone, a
+        # three-model sweep counts three trials per item, and a duplicate of (item, model A) alongside a
+        # missing (item, model B) still sums to three and passes as uniform -- so the very duplicate this
+        # exists to catch is invisible whenever it coincides with a gap.
+        counts[(r.get("item_id"), c.get("agent"), c.get("model"), c.get("provider"))].append(r["trace_id"])
     seen = sorted({len(v) for v in counts.values()})
-    uneven = [{"item_id": k[0], "agent": k[1], "trials": len(v), "trace_ids": sorted(v)}
+    uneven = [{"item_id": k[0], "agent": k[1], "model": k[2], "provider": k[3],
+               "trials": len(v), "trace_ids": sorted(v)}
               for k, v in sorted(counts.items(), key=lambda kv: str(kv[0])) if len(v) != (seen[0] if seen else 0)]
     return {"observed": seen, "uniform": len(seen) <= 1,
-            "trials_per_item": seen[0] if len(seen) == 1 else None, "uneven": uneven}
+            "trials_per_item": seen[0] if len(seen) == 1 else None, "uneven": uneven,
+            "candidates_seen": len({k[1:] for k in counts}),
+            "uniformity_caveat":
+                "uniform trials do not rule out a whole cohort collected twice: two runs of everything are "
+                "uniform at two. The stamp is what distinguishes those, and this counts what the stamp cannot"}
 
 
 def join(outcomes: dict, traces: dict, charges: dict, *, metered_providers: set[str]) -> dict:
@@ -219,12 +250,30 @@ def join(outcomes: dict, traces: dict, charges: dict, *, metered_providers: set[
                              "providers": sorted(providers)})
             continue
         legs = {k: sum(t["legs"][k] for t in tr["turns"]) for k in LEGS}
+        absent = sorted({m for t in tr["turns"] for m in t["missing_legs"] if m in BILLED_LEGS})
+        # The module's own rule, applied to its own output. `read_traces` reads an absent attribute as 0, so a
+        # total over turns that were missing a leg is BELOW what was billed -- and reporting `missing_legs`
+        # beside that total leaves the total looking usable. Marked unpriceable here, where the row is built,
+        # rather than hoping a refusal downstream sees the marker.
+        priceable = not absent
+        # A run whose turns did not all go to one candidate cannot be attributed to one. The provider set was
+        # already computed above to decide metering, so the information to notice this was present.
+        candidates = {json.dumps(t["candidate"], sort_keys=True) for t in tr["turns"]}
+        mixed = len(candidates) > 1
         rows.append({
             "trace_id": tid,
             "item_id": oc.get("item_id"),
             "state": oc.get("state"),
             "unobserved_reason": oc.get("unobserved_reason"),
-            "candidate": tr["turns"][0]["candidate"] if tr["turns"] else None,
+            "candidate": tr["turns"][0]["candidate"] if tr["turns"] and not mixed else None,
+            **({"candidates_mixed": [json.loads(c) for c in sorted(candidates)]} if mixed else {}),
+            # Carried onto the joined row, not left on the outcome row: `join` builds a new dict, and every
+            # consumer reads these rows rather than the outcomes file.
+            **({"cohort_membership": oc["cohort_membership"]} if oc.get("cohort_membership") else {}),
+            "priceable": priceable,
+            **({"unpriceable_because": f"token legs {absent} were absent from at least one turn, so the total "
+                                       "is below what was billed. An absent leg is not a zero leg"}
+               if absent else {}),
             "turns": len(tr["turns"]),
             "legs": legs,
             # Wall time as the driver observed it. Carried because the ledger needs a latency figure and the
@@ -238,10 +287,18 @@ def join(outcomes: dict, traces: dict, charges: dict, *, metered_providers: set[
                      {"kind": AMORTISED, "usd": None,
                       "note": "fixed-cost candidate: no per-request charge exists; apply a period bill "
                               "divided by that period's work, with the window stated"}),
-            "missing_legs": sorted({m for t in tr["turns"] for m in t["missing_legs"]}),
+            "missing_legs": absent,
         })
 
     n = len(outcomes)
+    # Charges with no outcome row are money that was spent and attributed to nothing. For a framework whose
+    # purpose is cost this is the worst silent loss available, and iterating outcomes alone cannot see it: the
+    # loop above never visits a charge it has no outcome for.
+    orphan_charges = [{"trace_id": t, "usd": (c or {}).get("usd"),
+                       "gateway_request_id": (c or {}).get("request_id")}
+                      for t, c in sorted(charges.items()) if t not in outcomes]
+    unpriceable = [{"trace_id": r["trace_id"], "item_id": r["item_id"],
+                    "why": r.get("unpriceable_because")} for r in rows if not r.get("priceable")]
     return {
         "rows": rows,
         "coverage": {
@@ -249,6 +306,9 @@ def join(outcomes: dict, traces: dict, charges: dict, *, metered_providers: set[
             "joined": len(rows),
             "rate": round(len(rows) / n, 4) if n else None,
             "unjoined": unjoined,
+            "charges_with_no_outcome": orphan_charges,
+            "charges_with_no_outcome_usd": round(sum(c["usd"] or 0.0 for c in orphan_charges), 6),
+            "unpriceable_rows": unpriceable,
         },
         # Counted, not asserted. A consumer that writes a `trials_per_item` into a record reads it from here
         # rather than hardcoding one, so a repeated sweep cannot be described as a single-trial one.
@@ -261,9 +321,13 @@ def main() -> int:
     ap.add_argument("--outcomes", required=True, help="JSONL, one row per run, with trace_id and state")
     ap.add_argument("--traces", required=True, help="the collector's traces.jsonl")
     ap.add_argument("--charges", help="JSONL from the gateway, with trace_id and usd. Absent is legitimate")
-    ap.add_argument("--metered-providers", default="",
+    ap.add_argument("--metered-providers", default=None,
                     help="comma-separated provider names whose charge the gateway authors. A provider not "
                          "listed is treated as fixed-cost, so its absence of a charge is not a shortfall")
+    ap.add_argument("--no-metered-candidates", action="store_true",
+                    help="state that this cohort involved no metered candidate at all. Required instead of "
+                         "--metered-providers, so that 'everything is fixed-cost and no charge was ever "
+                         "demanded' has to be asserted rather than reached by forgetting a flag")
     ap.add_argument("--run-group", help="restrict to one sweep invocation's rows. Without it every row in "
                                        "the file is taken, which is right for a file written by one sweep "
                                        "and wrong for one that outlived an aborted run")
@@ -278,14 +342,22 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
+    # The unsafe state was the default: with no `--metered-providers`, every provider is treated as
+    # fixed-cost, no charge is ever demanded of anything, and coverage comes out 100% on a cohort where the
+    # gateway's own figures were never consulted. So the two cases have to be told apart explicitly.
+    if a.metered_providers is None and not a.no_metered_candidates:
+        raise SystemExit(
+            "[FAIL] give --metered-providers, or --no-metered-candidates to state that this cohort had none. "
+            "Defaulting to 'none' would make a join that never demanded a charge look complete, which is the "
+            "one failure this file exists to prevent.")
+
     outcomes, selection = read_outcomes(Path(a.outcomes), run_group=a.run_group,
                                         admit_unstamped=a.admit_unstamped)
     res = join(outcomes, read_traces(Path(a.traces)),
                read_charges(Path(a.charges) if a.charges else None),
-               metered_providers={p for p in a.metered_providers.split(",") if p})
+               metered_providers={p for p in (a.metered_providers or "").split(",") if p})
     res["selection"] = selection
     cov = res["coverage"]
-    Path(a.out).write_text(json.dumps(res, indent=1) + "\n")
 
     if a.run_group:
         print(f"run_group {a.run_group}: {selection['selected']} rows selected, "
@@ -301,6 +373,13 @@ def main() -> int:
     fixed = [r for r in res["rows"] if r["cost"]["kind"] == AMORTISED]
     print(f"  metered rows {len(metered)}  fixed-cost rows {len(fixed)}  "
           f"trials/item {res['trials']['trials_per_item']}")
+    if cov["charges_with_no_outcome"]:
+        print(f"  [WARN] {len(cov['charges_with_no_outcome'])} charge(s) totalling "
+              f"${cov['charges_with_no_outcome_usd']:.6f} have no outcome row: money spent and attributed to "
+              "nothing")
+    if selection.get("trace_id_collisions"):
+        print(f"  [WARN] {len(selection['trace_id_collisions'])} trace id collision(s): two outcome rows "
+              "under one id, so one was dropped and the trials count cannot see it")
     if cov["unjoined"]:
         print(f"  {len(cov['unjoined'])} unjoined, named in the output:")
         for u in cov["unjoined"][:8]:
@@ -309,19 +388,46 @@ def main() -> int:
     if missing_legs:
         print(f"  WARNING: token legs absent from some spans: {missing_legs}. Absent is not zero; the "
               "producer's vocabulary may have changed")
+    def emit(refusal: str | None) -> None:
+        """Write the artifact, and when refusing, write one that cannot be mistaken for a priced join.
+
+        The output is still written on a refusal, because naming what is missing is the whole point of the
+        file. But an earlier version wrote it BEFORE the checks ran, so a run that printed "[REFUSED] ... no
+        cost figure is produced" left the full per-row costs on disk -- and anything reading the file rather
+        than the exit code got exactly what the refusal claimed to withhold. So a refused artifact carries the
+        refusal and has its cost fields replaced by it.
+        """
+        doc = dict(res)
+        if refusal:
+            doc["refused"] = refusal
+            doc["rows"] = [{**r, "cost": {"kind": r["cost"]["kind"], "usd": None,
+                                          "withheld_because": refusal}} for r in res["rows"]]
+        Path(a.out).write_text(json.dumps(doc, indent=1) + "\n")
+
     tr = res["trials"]
     if not tr["uniform"]:
         print(f"\n[REFUSED] trials per item are not uniform: {tr['observed']}. A record asserts one number "
               "here, and these rows do not have one. The rows below are the ones that differ -- an orphaned "
               "driver's row from an aborted sweep looks exactly like this:")
         for u in tr["uneven"][:8]:
-            print(f"    {u['item_id']} / {u['agent']}: {u['trials']} trials {[t[:12] for t in u['trace_ids']]}")
+            print(f"    {u['item_id']} / {u['agent']} / {u['model']}: {u['trials']} trials "
+                  f"{[t[:12] for t in u['trace_ids']]}")
+        emit(f"trials per item are not uniform: {tr['observed']}")
         return 4
 
     if cov["rate"] is not None and cov["rate"] < a.min_coverage:
         print(f"\n[REFUSED] coverage {cov['rate']:.1%} is below --min-coverage {a.min_coverage:.1%}. No cost "
               "figure is produced: a cost summed over the joined subset reads as complete.")
+        emit(f"coverage {cov['rate']:.4f} is below the required {a.min_coverage:.4f}")
         return 3
+    if cov["unpriceable_rows"]:
+        print(f"\n[REFUSED] {len(cov['unpriceable_rows'])} row(s) are missing a token leg, so their totals "
+              "are below what was billed. An absent leg is not a zero leg:")
+        for u in cov["unpriceable_rows"][:6]:
+            print(f"    {u['item_id']}: {u['why']}")
+        emit("some rows are missing a token leg and their totals are below what was billed")
+        return 5
+    emit(None)
     print(f"\nwrote {a.out}")
     return 0
 

@@ -144,17 +144,45 @@ def test_only_the_two_objectives_exist():
 
 
 def test_choosing_latency_can_choose_a_different_tier_than_choosing_cost():
-    """The two objectives are not the same ordering, which is why the table records which one it used."""
+    """The two objectives are not the same ordering, which is why the table records which one it used.
+
+    Shown on an all-metered registry. On the shipped fixture the reserved candidate is both the fastest and
+    free at the margin, so the two orderings agree there -- and that agreement is a fact about that fixture,
+    not about the objectives.
+    """
+    from tierbook.policy import Tier, assign_family
+
+    tiers = load_registry(LEDGER)
+    # All metered, and the fastest tier made dear, so that "cheapest" and "fastest" genuinely disagree. Both
+    # edits are stated because a fixture tuned until a test passes proves nothing: the subject here is that the
+    # two objectives are different orderings, which needs a registry in which they differ.
+    metered = {}
+    for tid, t in tiers.items():
+        rec = json.loads(json.dumps(t.record))
+        rec["price_card"]["hourly_fixed_usd"] = None
+        if tid == "self-hosted-a":
+            rec["families"]["tool-agent-user-retail"]["bill_usd"] = 99.0
+        metered[tid] = Tier(tid, rec, t.ledger_root)
+    fam, ref = "tool-agent-user-retail", "api-strong-a"
+    by_cost = assign_family(metered, fam, ref, margin=0.25, today="2026-08-30", objective="cost")
+    by_latency = assign_family(metered, fam, ref, margin=0.25, today="2026-08-30", objective="latency")
+    assert by_cost.objective == "cost" and by_latency.objective == "latency"
+    assert by_cost.chosen.head != by_latency.chosen.head
+    assert by_latency.chosen.head == "self-hosted-a"
+
+
+def test_a_reserved_candidate_wins_the_cost_objective_because_using_it_is_free_at_the_margin():
+    """The behavioural consequence of pricing a reservation at the period level instead of per request, and the
+    point of the change: paid-for capacity gets used. Under the old average the box was priced at $0.250665
+    against a token side of $0.038934 -- measured idle -- and the compiler sent traffic to metered APIs at real
+    money while the machine it had already paid for sat idle, raising total spend."""
     from tierbook.policy import assign_family
 
     tiers = load_registry(LEDGER)
-    fam, ref = "tool-agent-user-retail", "api-strong-a"
-    by_cost = assign_family(tiers, fam, ref, margin=0.25, today="2026-08-30", objective="cost")
-    by_latency = assign_family(tiers, fam, ref, margin=0.25, today="2026-08-30", objective="latency")
-    assert by_cost.objective == "cost" and by_latency.objective == "latency"
-    # The cheapest per request and the fastest to an accepted answer are different tiers on this family.
-    assert by_cost.chosen.head != by_latency.chosen.head
-    assert by_latency.chosen.head == "self-hosted-a"
+    d = assign_family(tiers, "tool-agent-user-retail", "api-strong-a", margin=0.25, today="2026-08-30",
+                      objective="cost")
+    assert d.chosen.head == "self-hosted-a"
+    assert tiers["self-hosted-a"].is_reserved
 
 
 def test_reliability_is_a_constraint_and_not_a_discount():
@@ -376,7 +404,9 @@ def test_the_exported_config_names_the_tier_the_holdout_supported(tmp_path):
                         default_model="api-strong-a")
     decisions = conf["routing"]["decisions"]
     assert len(decisions) == 1
-    assert decisions[0]["modelRefs"][0]["model"] == "api-cheap-a"
+    # The reserved candidate, because using capacity already paid for costs nothing more at the margin. This
+    # was `api-cheap-a` while a reservation was being amortised into a per-request price.
+    assert decisions[0]["modelRefs"][0]["model"] == "self-hosted-a"
     # The registry hash travels beside the config -- not inside it, because the router warns on an unknown
     # top-level key and a config that warns on every start is one whose warnings stop being read. It also
     # appears in the recipe description, so a reader of the config alone can still check it.

@@ -165,6 +165,15 @@ class Tier:
         """
         return self.record["price_card"].get("cache_write") is None
 
+    @property
+    def is_reserved(self) -> bool:
+        """Whether this candidate's bill is a period reservation rather than a per-request charge.
+
+        The presence of an hourly price is what says so, and it is a policy input: a contract someone signed,
+        not something observation supplies.
+        """
+        return bool(self.record["price_card"].get("hourly_fixed_usd"))
+
     def amortised_cost_per_task(self, realised_tasks_per_hour: float | None) -> float:
         """The share of a fixed hourly bill one task carries, zero for a tier without one.
 
@@ -499,76 +508,146 @@ def _family_spend(t: Tier, family: str) -> tuple[float | None, str]:
 
 def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str,
                       realised_tasks_per_hour: float | None) -> tuple[float, str | None]:
-    """Expected spend per *incoming request*, not per solved task, and a refusal instead of a guess.
+    """Expected **marginal** charge per incoming request, not an average, and not per solved task.
 
     Per-solve would smuggle a second quality objective in after non-inferiority has already constrained
     quality: an arrangement that solves less looks cheaper per solve while costing the same per request.
+
+    The harder point, and the one two independent reviews reached from different directions: **a candidate
+    whose bill is a period reservation has no policy-independent per-request cost, so this must not
+    manufacture one.** The earlier version did, as `hourly / realised tasks per hour`, and that figure is
+    wrong in three ways at once.
+
+    It is *circular*. Routing more work to the box raises its denominator, which lowers its cost, which
+    changes the routing. The compiler evaluated the average at the observation cohort's throughput and then
+    ranked as though that were exogenous.
+
+    It is the *wrong quantity for a routing decision*. Given the reservation is kept -- and it is, by explicit
+    decision -- the marginal charge of sending one more request to a box below capacity is zero: the bill
+    arrives either way. Consuming its capacity has a queueing and option cost, which this project's own scope
+    classifies as scheduling utility and never as financial cost.
+
+    And it *inverts the purpose*. At the first real cohort the average came out $0.250665 against a token side
+    of $0.038934, purely because one experimenter at concurrency 1 left the machine idle. A router that
+    believes the box costs a quarter of a dollar a request sends traffic to metered APIs at real money while
+    paid-for capacity sits idle -- raising total spend, which is the opposite of the thing this exists to do.
+
+    So: a reserved candidate contributes its *variable* charge only, which for a self-hosted engine behind no
+    meter is nothing. Its reservation is evaluated at the period level by `reservation_verdict`, against the
+    charge the traffic it absorbed would have drawn elsewhere. That comparison is the standing question "can
+    the box be used" in the only form an operator can act on.
+
+    Two further corrections, both from the reviews and both independent of the accounting argument:
+
+    - **A fixed bill is not reach-weighted.** A reservation does not shrink because only a fifth of requests
+      reach that stage. Only variable charges are multiplied by `reach`, and placing a reserved tier late in a
+      cascade no longer makes it look cheap.
+    - **Throughput is not borrowed across tiers.** It used to be computed for the head and applied to every
+      tier, so two reserved tiers shared one figure and a reserved tail behind an API head -- which reports no
+      throughput at all -- came out infinitely expensive.
     """
     total = 0.0
     reach = 1.0
-    bases = []
+    reserved, imputed = [], []
     for tid in arr.tiers:
         t = tiers[tid]
         o = t.outcome(family) or {}
         n = o.get("attempted") or 0
         if not n:
             return math.inf, f"{tid!r} attempted nothing on {family!r}"
-        amortised = t.amortised_cost_per_task(realised_tasks_per_hour)
-        if t.record["price_card"].get("hourly_fixed_usd"):
-            # `max`, not `+`, and the schema said so all along: "non-null makes this tier's effective rate
-            # max(token rates, hourly / realised tasks per hour)". They are two descriptions of ONE machine --
-            # the per-token card for a self-hosted engine is that same hour divided by throughput at
-            # saturation -- so summing them bills the GPU twice, and it inflates precisely the candidate the
-            # owner has decided to keep. `max` is the binding one: realised throughput never exceeds
-            # saturation, so the amortised share is the larger figure exactly when the machine is idler than
-            # the card assumed, which is when the card understates it.
-            spend, basis = _family_spend(t, family)
-            per_request = None if spend is None else spend / n
-            if per_request is None:
-                bases.append("hourly_reservation_amortised_over_measured_throughput")
-            else:
-                # Which side binds, and at what occupancy, because that is the whole content of the figure.
-                # The hour binds when the machine is idler than the card assumed, and a reader who cannot see
-                # that will take an idle experimenter's cost for the deployment's.
-                _, conc = _family_latency_seconds(t.outcome(family) or {})
-                which = "hourly reservation" if amortised >= per_request else "per-token rates"
-                # An idle fixed-cost candidate has an infinite amortised share, which is the switch that keeps
-                # a rented machine out of an assignment when nothing keeps it busy. It is stated as such
-                # rather than formatted as a number, because "inf" is the finding.
-                hour = ("unbounded: no throughput was realised, so the hour is spread over no work"
-                        if amortised == math.inf else
-                        f"${amortised:.6f} at {realised_tasks_per_hour:.1f} tasks/hour measured at "
-                        f"concurrency {conc}")
-                bound = max(per_request, amortised)
-                bases.append(
-                    f"hourly_or_tokens:{which} binds at "
-                    + ("an unbounded cost per request" if bound == math.inf else f"${bound:.6f} per request")
-                    + f" (hour {hour}; tokens ${per_request:.6f})")
-            total += reach * (max(per_request or 0.0, amortised) + t.retry_premium)
+
+        if t.is_reserved:
+            # Reserved and kept: the marginal financial charge of one more request is zero while there is
+            # capacity for it. Whether there IS capacity is a separate, measured question -- see
+            # `capacity_note` -- and it is a scheduling constraint, not a price.
+            reserved.append(tid)
+            total += reach * t.retry_premium
         else:
             spend, basis = _family_spend(t, family)
             if spend is None:
                 return math.inf, basis
-            bases.append(basis)
-            total += reach * (spend / n + t.retry_premium + amortised)
+            if basis != "gateway_bill":
+                imputed.append(tid)
+            total += reach * (spend / n + t.retry_premium)
         solved = (o.get("solved") or 0) / n
         reach *= max(0.0, 1.0 - solved)
-    # A figure derived from a rate card is not the same object as a figure a gateway authored, and a reader
-    # comparing two arrangements has to be able to see which one they are looking at.
-    if any(b == "hourly_reservation_amortised_over_measured_throughput" for b in bases):
-        # `max` can only ever ignore an unmeasured token side, never make anything cheaper, so this is safe
-        # rather than a hole -- but a reader has to know the figure rests on one leg of a two-leg comparison.
-        return total, ("a fixed-cost candidate priced on its hourly reservation alone: it states no gateway "
-                       "bill and no observed token legs for this family, so the token side of "
-                       "max(token rates, hourly / throughput) was not available to compare against")
-    binding = [b for b in bases if b.startswith("hourly_or_tokens:")]
-    if binding:
-        return total, ("a fixed-cost candidate priced at whichever binds; the two are never added, because "
-                       "they describe the same machine and summing them bills the GPU twice. "
-                       + "; ".join(b.split(":", 1)[1] for b in binding))
-    derived = [b for b in bases if b != "gateway_bill"]
-    return total, (None if not derived else
-                   "priced from the rate card and the observed token legs; no gateway authored this charge")
+
+    notes = []
+    if reserved:
+        notes.append(
+            f"{', '.join(sorted(reserved))} is reserved, so its marginal charge per request is nothing while "
+            "it has capacity: the period bill arrives whether or not this request uses it. Its reservation is "
+            "judged at the period level, not amortised into a per-request price -- an average would be "
+            "circular, since routing to it is what changes the denominator")
+    if imputed:
+        notes.append(
+            f"{', '.join(sorted(imputed))} is priced from a rate card and observed token legs because no "
+            "gateway authored a charge. That is an imputed figure, not a settled one: it omits credits, "
+            "minimums, rounding and price changes, and it must not be read as money that left")
+    return total, ("; ".join(notes) or None)
+
+
+def capacity_note(t: Tier, family: str, realised_tasks_per_hour: float | None) -> str:
+    """What is known about how much traffic a reserved candidate can absorb, and what is not.
+
+    Separated from cost on purpose. "Can the box take this request" is a capacity question with a scheduling
+    answer; "does the box pay" is a period question with a financial one. Collapsing them into a per-request
+    price is what produced a figure that answered neither.
+    """
+    if not t.is_reserved:
+        return "not a reserved candidate: its charge is per request and capacity is the provider's problem"
+    per, conc = _family_latency_seconds(t.outcome(family) or {})
+    if per is None:
+        return (f"{t.id!r} is reserved and no latency was recorded for {family!r}, so nothing is known about "
+                "how much of this family it can absorb")
+    return (f"{t.id!r} served {family!r} at {per:.1f} s/task with {conc} in flight. That is one point on a "
+            "service curve, not a saturation figure: throughput at higher concurrency may be higher, flat or "
+            "lower, so this bounds nothing on its own. A capacity claim needs probes at several "
+            "concurrencies")
+
+
+def reservation_verdict(t: Tier, family: str, *, window_hours: float | None,
+                        counterfactual: Tier | None) -> dict:
+    """Whether a kept reservation paid for itself over a stated window, and the reason when it cannot be said.
+
+    The period-level question the per-request average was standing in for. It compares what the reservation
+    cost over the window against what the traffic it absorbed would have been charged elsewhere -- which
+    requires a metered candidate to quote that traffic. Without one, the answer is that the economics are not
+    decidable on this evidence, which is a different statement from "the box is expensive" and leads somewhere
+    different: measure demand and get a quote, rather than route away.
+    """
+    if not t.is_reserved:
+        return {"verdict": "not_applicable", "reason": "this candidate is not reserved"}
+    hourly = t.record["price_card"]["hourly_fixed_usd"]
+    o = t.outcome(family) or {}
+    tok = o.get("tokens") or {}
+    if window_hours is None:
+        return {"verdict": "undecidable", "reason":
+                "no accounting window was stated, and a reservation's cost exists only over one. The bill is "
+                f"${hourly:.6f} an hour and nothing here says for how many hours it was held"}
+    bill = hourly * window_hours
+    if counterfactual is None or not tok:
+        missing = [] if counterfactual else ["a metered candidate to quote the same traffic"]
+        if not tok:
+            missing.append("the token legs the traffic actually used")
+        return {"verdict": "undecidable", "bill_usd": round(bill, 6), "window_hours": window_hours,
+                "reason": ("the reservation cost $%.6f over the stated window, but whether that beat the "
+                           "alternative cannot be said without %s. This is not evidence that the box is "
+                           "expensive; it is the absence of the comparison" % (bill, " and ".join(missing)))}
+    elsewhere = counterfactual.token_cost(int(tok.get("fresh_in") or 0), int(tok.get("cached_in") or 0),
+                                          int(tok.get("out") or 0), int(tok.get("cache_write") or 0))
+    return {
+        "verdict": "pays" if bill < elsewhere else "does_not_pay",
+        "bill_usd": round(bill, 6),
+        "counterfactual_usd": round(elsewhere, 6),
+        "counterfactual_tier": counterfactual.id,
+        "window_hours": window_hours,
+        "reason": (f"over {window_hours:.2f} hours the reservation cost ${bill:.6f}, and the traffic it "
+                   f"absorbed would have been charged ${elsewhere:.6f} by {counterfactual.id!r} at that "
+                   "candidate's card. The comparison assumes the same token legs elsewhere, which is only "
+                   "true for the same model: a different tokenizer counts differently and a cold cache "
+                   "charges the cached leg as fresh"),
+    }
 
 
 def _family_latency_seconds(o: dict) -> tuple[float | None, int]:

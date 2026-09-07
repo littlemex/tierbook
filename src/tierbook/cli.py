@@ -29,7 +29,8 @@ from pathlib import Path
 from tierbook import SCHEMA_PATH, SCHEMA_VERSION, __version__, report
 from tierbook.config import ConfigError, draft_from_model_list, load_config
 from tierbook.evidence import EvidenceError
-from tierbook.policy import assign_family, cutover_violation, evidence_class, load_registry, registry_version
+from tierbook.policy import (assign_family, capacity_note, cutover_violation, evidence_class, load_registry,
+                             registry_version, reservation_verdict)
 from tierbook.table import Unvalidated, check_fresh, compile_to_file, load_table, lookup
 
 REQUIRED_FOR_A_DECISION = (
@@ -161,7 +162,19 @@ def cmd_compile(args) -> int:
     # can be used. Added to the artifact rather than printed only, because the next reader is a program.
     self_hosted = {t.id for t in tiers.values()
                    if (t.record.get("price_card") or {}).get("hourly_fixed_usd")}
-    report.annotate(table, self_hosted_ids=self_hosted)
+    # A reservation's economics are a period question, so they are computed here -- where the window and a
+    # metered candidate to quote the same traffic are available -- rather than inside a per-request price.
+    # `undecidable` is a real answer and the common one: it says get a quote, not route away.
+    metered = sorted(t for t in tiers if t not in self_hosted)
+    counterfactual = tiers[metered[0]] if metered else None
+    economics, capacity = {}, {}
+    for fam in table.get("families", {}):
+        for sid in sorted(self_hosted):
+            economics[fam] = reservation_verdict(
+                tiers[sid], fam, window_hours=args.window_hours, counterfactual=counterfactual)
+            capacity[fam] = capacity_note(tiers[sid], fam, None)
+            break
+    report.annotate(table, self_hosted_ids=self_hosted, economics=economics, capacity=capacity)
     Path(args.out).write_text(json.dumps(table, indent=1) + "\n")
     if args.report:
         Path(args.report).write_text(report.render(table))
@@ -378,6 +391,11 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--max-age-days", type=int, default=90)
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
+    c.add_argument("--window-hours", type=float, default=None,
+                   help="how many hours the reservation was held for, so its bill can be compared against "
+                        "what the traffic it absorbed would have cost elsewhere. A POLICY INPUT: a "
+                        "reservation has no cost without a window, and without this the economics are "
+                        "reported as undecidable rather than resolved into a per-request price")
     c.add_argument("--report", default=None,
                    help="also write a human reading of the policy kind, the frontier and the self-hosted "
                         "answer, per family")
