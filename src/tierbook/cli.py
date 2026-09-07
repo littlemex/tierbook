@@ -191,7 +191,7 @@ def cmd_compile(args) -> int:
                                  metered_ids={t for t in tiers} - self_hosted,
                                  default=(families[fam],),
                                  default_declared_by=("--config" if cfg else "--family FAMILY=REFERENCE"),
-                                 service_curve=curve,
+                                 service_curve=curve, min_marginal_gain=args.capacity_marginal_gain,
                                  max_evidence_age_days=args.max_age_days)
             table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
             if not pol.can_ever_fire and pol.certified:
@@ -420,6 +420,11 @@ def main(argv: list[str] | None = None) -> int:
                         "accepted: a number a caller passes is a configured threshold whatever the "
                         "documentation beside it says. Without a curve the guard is emitted unmeasured, no "
                         "rule can fire, and the missing probe is named")
+    c.add_argument("--capacity-marginal-gain", type=float, default=None,
+                   help="the fraction of extra throughput a step up in concurrency must buy to be worth the "
+                        "occupancy, e.g. 0.10. A POLICY INPUT, because 'throughput stopped rising' is not a "
+                        "fact about a curve: one real probe rose half a percent between two concurrencies "
+                        "while latency doubled, and a strict test walks past that knee")
     c.add_argument("--window-hours", type=float, default=None,
                    help="how many hours the reservation was held for, so its bill can be compared against "
                         "what the traffic it absorbed would have cost elsewhere. A POLICY INPUT: a "

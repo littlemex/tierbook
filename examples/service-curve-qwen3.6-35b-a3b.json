@@ -1,0 +1,78 @@
+{
+ "endpoint": "http://127.0.0.1:18123/v1",
+ "model": "Qwen/Qwen3.6-35B-A3B",
+ "request": "/Users/akazawt/tmp/e02/tap/reask-replay.json",
+ "measured_at": "2026-09-07T19:56:41+0900",
+ "rounds_per_point": 2,
+ "max_tokens": 512,
+ "points": [
+  {
+   "concurrency": 16,
+   "calls": 32,
+   "completed": 32,
+   "failed": 0,
+   "failures": [],
+   "elapsed_s": 14.48,
+   "tasks_per_hour": 7957.3,
+   "mean_latency_s": 5.44,
+   "p95_latency_s": 8.71,
+   "output_tokens_total": 11145
+  },
+  {
+   "concurrency": 32,
+   "calls": 64,
+   "completed": 64,
+   "failed": 0,
+   "failures": [],
+   "elapsed_s": 14.38,
+   "tasks_per_hour": 16024.5,
+   "mean_latency_s": 6.1,
+   "p95_latency_s": 12.01,
+   "output_tokens_total": 16385
+  },
+  {
+   "concurrency": 64,
+   "calls": 128,
+   "completed": 128,
+   "failed": 0,
+   "failures": [],
+   "elapsed_s": 20.12,
+   "tasks_per_hour": 22908.1,
+   "mean_latency_s": 8.19,
+   "p95_latency_s": 17.46,
+   "output_tokens_total": 29668
+  },
+  {
+   "concurrency": 128,
+   "calls": 256,
+   "completed": 256,
+   "failed": 0,
+   "failures": [],
+   "elapsed_s": 40.01,
+   "tasks_per_hour": 23034.9,
+   "mean_latency_s": 17.63,
+   "p95_latency_s": 34.13,
+   "output_tokens_total": 75918
+  },
+  {
+   "concurrency": 256,
+   "calls": 512,
+   "completed": 512,
+   "failed": 0,
+   "failures": [],
+   "elapsed_s": 66.16,
+   "tasks_per_hour": 27860.7,
+   "mean_latency_s": 26.4,
+   "p95_latency_s": 46.57,
+   "output_tokens_total": 142926
+  }
+ ],
+ "curve": {
+  "16": 7957.3,
+  "32": 16024.5,
+  "64": 22908.1,
+  "128": 23034.9,
+  "256": 27860.7
+ },
+ "workload_note": "measured by replaying a captured request, so this curve describes THIS request shape on THIS serving configuration and nothing else. A different shape saturates a batching engine at a different concurrency"
+}

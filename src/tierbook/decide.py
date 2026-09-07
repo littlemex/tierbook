@@ -71,6 +71,11 @@ MISSING_FOR_A_CLOSED_LOOP = (
     "recomputed as evidence accrues and admission happens at a data-dependent stopping time",
     "change-point detection, so a policy stays valid until its evidence expires by age rather than because "
     "the environment stopped resembling the one it was measured in",
+    "a value for the reserved candidate's scarce capacity. Below capacity its marginal charge is nothing, so "
+    "these rules give it to whichever certified request arrives first -- and the last free slot spent on a "
+    "request that avoids a tenth of a cent of metered spend displaces one that would have avoided a dollar. "
+    "That is scheduling utility rather than a gateway charge, which is why it is not in the cost objective, "
+    "but it is also not nowhere: greedy use is locally right and globally unproven",
 )
 
 #: Why a guard cannot be evaluated or was never given a threshold. Closed so a gap can be counted.
@@ -284,7 +289,8 @@ def as_dict(policy: Policy) -> dict:
 
 def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_ids: set[str],
                    default: tuple[str, ...], default_declared_by: str,
-                   service_curve: dict | None = None, max_evidence_age_days: float | None = None) -> Policy:
+                   service_curve: dict | None = None, min_marginal_gain: float | None = None,
+                   max_evidence_age_days: float | None = None) -> Policy:
     """Derive the policy from one compiled family entry. Every threshold is a measurement or a named gap.
 
     The shape falls out of the accounting rather than being chosen. A reserved candidate is free at the margin
@@ -333,7 +339,7 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
                       note="unconditional in occupancy: nothing here is capacity-bound")
 
     box = reserved[0]
-    bound, source = _capacity_from_curve(service_curve)
+    bound, source = _capacity_from_curve(service_curve, min_marginal_gain)
     # Above capacity the assignment's own metered tail is a measured continuation; an unrelated default is not.
     tail = tuple(c for c in chosen if c not in reserved_ids)
     guards = (age, *money,
@@ -367,13 +373,19 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
                                         else "NOT measured yet")))
 
 
-def _capacity_from_curve(curve: dict | None) -> tuple[float | None, str]:
+def _capacity_from_curve(curve: dict | None, min_marginal_gain: float | None = None) -> tuple[float | None, str]:
     """Derive the occupancy bound from a service curve, or say why there is none.
 
-    The curve maps concurrency to observed tasks per hour. The bound is the lowest concurrency beyond which
-    throughput stopped rising: past it the candidate absorbs no more work, so sending more is queueing rather
-    than serving. Derived rather than read, because a scalar someone passed is a configured threshold whatever
-    the docstring beside it says.
+    The curve maps concurrency to observed tasks per hour. The bound is the highest concurrency up to which
+    every step still bought at least `min_marginal_gain` more throughput; past it the candidate absorbs no more
+    useful work, so sending more is queueing rather than serving.
+
+    **`min_marginal_gain` is a declared policy input, and it has to be**, because "stopped rising" is not a
+    fact about the curve. The real probe here went 22,908 tasks/hour at 64 in flight to 23,035 at 128 -- a rise
+    of half a percent, while mean latency doubled from 8.2 to 17.6 seconds. Strictly that is rising, and a
+    strict test walks straight past the knee; anything stricter needs a number, and inventing one here would be
+    the configured threshold this module exists to avoid. So the operator states what a worthwhile gain is, the
+    artifact records it, and the bound is derived from the measurements under that statement.
     """
     if not curve:
         return None, ("no load probe at several concurrencies has been run, so the occupancy at which the "
@@ -382,13 +394,28 @@ def _capacity_from_curve(curve: dict | None) -> tuple[float | None, str]:
     if len(points) < 2:
         return None, (f"a service curve needs at least two concurrencies to show where throughput stops "
                       f"rising; this one has {len(points)}")
+    if min_marginal_gain is None:
+        return None, (f"a service curve over {[int(c) for c, _ in points]} exists but no marginal-gain "
+                      "criterion was declared, and 'stopped rising' is not a fact about a curve: one real probe "
+                      "rose half a percent between two concurrencies while latency doubled. State what gain is "
+                      "worth the occupancy")
     best_c, best_tph = points[0]
     for c, tph in points[1:]:
-        if tph <= best_tph:
+        if best_tph <= 0 or (tph - best_tph) / best_tph < min_marginal_gain:
             break
         best_c, best_tph = c, tph
-    return best_c, (f"derived from a service curve over concurrencies {[int(c) for c, _ in points]}: "
-                    f"throughput stopped rising above {int(best_c)} in flight ({best_tph:.1f} tasks/hour)")
+    if best_c == points[-1][0]:
+        # Censored, not measured. Throughput was still rising at the highest concurrency probed, so the
+        # occupancy where it stops is somewhere above the range -- and returning the top of the range would
+        # emit the probe's own limit as if it were the candidate's. The first probe run here did exactly this:
+        # still rising at 32, which says the probe was too small and nothing about the box.
+        return None, (f"the probe over {[int(c) for c, _ in points]} was still buying at least "
+                      f"{min_marginal_gain:.0%} more throughput at the highest concurrency tried "
+                      f"({int(best_c)}, {best_tph:.1f} tasks/hour), so where that stops is above the range "
+                      "probed. That is the probe's limit, not the candidate's; run it higher")
+    return best_c, (f"derived from a service curve over concurrencies {[int(c) for c, _ in points]} under a "
+                    f"declared {min_marginal_gain:.0%} marginal-gain criterion: the last step worth taking "
+                    f"reached {int(best_c)} in flight at {best_tph:.1f} tasks/hour")
 
 
 def as_dict(policy: Policy) -> dict:

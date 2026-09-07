@@ -19,14 +19,14 @@ def entry(chosen, *, status="assigned", reason=None):
             "validation": {"reason": reason} if reason else {}}
 
 
-def policy(chosen, *, reserved=("box",), metered=("strong", "cheap"), curve=None, age=30, **kw):
+def policy(chosen, *, reserved=("box",), metered=("strong", "cheap"), curve=None, gain=0.10, age=30, **kw):
     """A compiled policy with the parts a caller must declare, so a test never gets them by default."""
     return D.compile_policy("f", entry(chosen, **kw), reserved_ids=set(reserved), metered_ids=set(metered),
                             default=("strong",), default_declared_by="the test",
-                            service_curve=curve, max_evidence_age_days=age)
+                            service_curve=curve, min_marginal_gain=gain, max_evidence_age_days=age)
 
 
-#: A probe whose throughput stops rising above 8 in flight.
+#: A probe whose throughput stops buying a worthwhile gain above 8 in flight: 16 returns less than 8 did.
 CURVE = {"1": 60, "2": 118, "4": 230, "8": 420, "16": 415}
 
 
@@ -58,7 +58,7 @@ def test_the_bound_is_derived_from_the_curve_not_accepted_as_a_number():
     p = policy(["box"], curve=CURVE)
     assert p.can_ever_fire is True and p.gaps == []
     when = D.as_dict(p)["rules"][0]["when"]
-    assert any("inflight:box < 8.0" in w and "throughput stopped rising above 8" in w for w in when)
+    assert any("inflight:box < 8.0" in w and "last step worth taking reached 8" in w for w in when)
 
 
 def test_a_curve_with_one_point_cannot_show_where_throughput_stops_rising():
@@ -190,3 +190,25 @@ def test_the_artifact_is_readable_without_importing_this_module():
     d = D.as_dict(policy(["box"], curve=CURVE))
     assert d["rules"][0]["assign"] == ["box"] and d["can_ever_fire"] is True
     assert d["domain"]["inflight:box"] == [0, float("inf")]
+
+
+def test_a_curve_still_rising_at_the_top_is_censored_not_a_bound():
+    """The first real probe did this: still buying throughput at 32, the highest tried. Returning the top of the
+    range would emit the probe's own limit as if it were the candidate's capacity."""
+    p = policy(["box"], curve={"1": 1885, "2": 2576, "4": 4447, "8": 6747, "16": 10125, "32": 16914})
+    assert p.can_ever_fire is False
+    assert any("probe's limit, not the candidate's" in g for g in p.gaps)
+
+
+def test_the_knee_is_found_under_a_declared_criterion_and_missed_without_one():
+    """The second real probe: 22,908 tasks/hour at 64 in flight, 23,035 at 128 -- half a percent, while mean
+    latency doubled from 8.2s to 17.6s. Strictly that is rising, and a strict test walks past the knee."""
+    real = {"16": 7957.3, "32": 16024.5, "64": 22908.1, "128": 23034.9, "256": 27860.7}
+    bound, why = D._capacity_from_curve(real, 0.10)
+    assert bound == 64.0 and "declared 10% marginal-gain criterion" in why
+
+    undeclared, why2 = D._capacity_from_curve(real, None)
+    assert undeclared is None and "not a fact about a curve" in why2
+
+    strict, _ = D._capacity_from_curve(real, 0.0)
+    assert strict is None, "a strict test walks to the top of the range and is censored"
