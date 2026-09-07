@@ -28,6 +28,8 @@ from pathlib import Path
 
 from tierbook import SCHEMA_PATH, SCHEMA_VERSION, __version__, report
 from tierbook.config import ConfigError, draft_from_model_list, load_config
+from tierbook.decide import as_dict as decide_as_dict
+from tierbook.decide import compile_policy
 from tierbook.evidence import EvidenceError
 from tierbook.policy import (assign_family, capacity_note, cutover_violation, evidence_class, load_registry,
                              registry_version, reservation_verdict)
@@ -175,6 +177,21 @@ def cmd_compile(args) -> int:
             capacity[fam] = capacity_note(tiers[sid], fam, None)
             break
     report.annotate(table, self_hosted_ids=self_hosted, economics=economics, capacity=capacity)
+    # The policy as a function of observed state, not only as the point the cohort's state produced. Every
+    # threshold in it is a measurement or a named gap; the reference is the declared default, because when no
+    # rule holds the cheapest candidate is the one there is least reason to trust.
+    table["decide"] = {}
+    for fam, entry in (table.get("families") or {}).items():
+        for label in ("can_reject", "cannot_reject"):
+            e = entry.get(label)
+            if not isinstance(e, dict):
+                continue
+            pol = compile_policy(fam, e, reserved_ids=self_hosted,
+                                 default=(families[fam],),
+                                 capacity_bound=args.reserved_capacity,
+                                 **({"capacity_source": args.reserved_capacity_source}
+                                    if args.reserved_capacity and args.reserved_capacity_source else {}))
+            table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
     Path(args.out).write_text(json.dumps(table, indent=1) + "\n")
     if args.report:
         Path(args.report).write_text(report.render(table))
@@ -391,6 +408,14 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--max-age-days", type=int, default=90)
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
+    c.add_argument("--reserved-capacity", type=float, default=None,
+                   help="the concurrency at which the reserved candidate stops absorbing work, FROM A LOAD "
+                        "PROBE at several concurrencies. This is the one derived threshold in the emitted "
+                        "policy; without it the guard is emitted unmeasured, every request takes the declared "
+                        "default, and the missing probe is named rather than replaced by a plausible number")
+    c.add_argument("--reserved-capacity-source", default=None,
+                   help="what measured that capacity, recorded beside the threshold so a reader can tell a "
+                        "probe from an assumption")
     c.add_argument("--window-hours", type=float, default=None,
                    help="how many hours the reservation was held for, so its bill can be compared against "
                         "what the traffic it absorbed would have cost elsewhere. A POLICY INPUT: a "

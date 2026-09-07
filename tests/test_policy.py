@@ -275,21 +275,38 @@ def test_a_spent_budget_stops_the_walk():
 # --- an unmeasured spend is refused, never priced at zero ------------------------------------------
 
 
-def test_an_absent_bill_is_priced_from_the_rate_card_and_says_so():
-    """The record already carries what pricing needs -- a rate card and the token legs that were observed --
-    so a missing gateway charge is not a missing cost. It is a cost from a different authority, and the
-    difference is stated rather than hidden."""
+def test_an_absent_gateway_charge_is_refused_not_reconstructed():
+    """The governing document says this project reads the gateway's quotes and never reconstructs charge. An
+    earlier version fell back to the rate card and called that the project's rule about cost, which inverted
+    the rule it cited: a reconstruction omits credits, minimums, rounding and price changes, so ranking on it
+    launders an estimate into a settled figure."""
     tiers = registry()
     t = tiers["api-cheap-a"]
     o = t.outcome("agentic-coding")
     del o["bill_usd"]
     o["tokens"] = {"fresh_in": 1_000_000, "cached_in": 0, "cache_write": 0, "out": 100_000}
-    spend, basis = policy._family_spend(t, "agentic-coding")
-    assert basis == "rate_card_and_observed_tokens"
-    assert spend == pytest.approx(t.token_cost(1_000_000, 0, 100_000, 0), rel=1e-9)
-    _, note = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
+    spend, why = policy._family_spend(t, "agentic-coding")
+    assert spend is None
+    assert "Cost truth belongs to the gateway" in why and "Route the candidate through the gateway" in why
+    cost, note = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
+                                          "agentic-coding", 616)
+    assert cost == float("inf"), "unrankable on cost, which is a fact about the instrumentation"
+
+
+def test_the_imputed_figure_exists_for_reporting_and_the_objective_cannot_reach_it():
+    """The separation is the point of having two functions: the estimate answers a real question and must not
+    be able to become a decision."""
+    tiers = registry()
+    t = tiers["api-cheap-a"]
+    o = t.outcome("agentic-coding")
+    del o["bill_usd"]
+    o["tokens"] = {"fresh_in": 1_000_000, "cached_in": 0, "cache_write": 0, "out": 100_000}
+    usd, why = policy.imputed_spend(t, "agentic-coding")
+    assert usd == pytest.approx(t.token_cost(1_000_000, 0, 100_000, 0), rel=1e-9)
+    assert "Not a settled charge" in why
+    cost, _ = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
                                        "agentic-coding", 616)
-    assert note and "imputed figure, not a settled one" in note
+    assert cost == float("inf"), "the objective did not see the imputed figure"
 
 
 def test_a_gateway_bill_wins_over_the_rate_card_when_both_exist():
@@ -320,15 +337,15 @@ def test_neither_a_bill_nor_tokens_is_refused_rather_than_treated_as_free():
     assert "unmeasured spend" in note
 
 
-def test_an_absent_token_leg_is_refused_rather_than_summed_as_zero():
-    """Same rule one level down: three legs summed where four were billed reports a total below what was
-    paid, and the dropped leg is the one that only appears on long threads."""
+def test_an_absent_token_leg_is_refused_by_the_imputed_figure_too():
+    """Same rule one level down: three legs summed where four were used reports a total below what was, and
+    the dropped leg is the one that only appears on long threads."""
     tiers = registry()
     o = tiers["api-cheap-a"].outcome("agentic-coding")
     del o["bill_usd"]
     o["tokens"] = {"fresh_in": 1000, "cached_in": None, "out": 10}
-    spend, why = policy._family_spend(tiers["api-cheap-a"], "agentic-coding")
-    assert spend is None and "cached_in" in why and "not a zero leg" in why
+    usd, why = policy.imputed_spend(tiers["api-cheap-a"], "agentic-coding")
+    assert usd is None and "cached_in" in why and "not a zero leg" in why
 
 
 def test_a_candidate_excluded_for_want_of_a_figure_does_not_read_as_expensive():
