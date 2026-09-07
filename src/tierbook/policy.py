@@ -682,6 +682,103 @@ def capacity_note(t: Tier, family: str) -> str:
             "concurrencies")
 
 
+def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
+               seconds_per_task: float | None) -> dict:
+    """What one second of the reserved candidate's occupancy is worth to this family, and why it may be nothing.
+
+    Below capacity a reservation is free at the margin, so any certified request may take it. Capacity is
+    finite, and that leaves a question the marginal price cannot answer: the last free slot spent on a request
+    that avoids a tenth of a cent displaces one that would have avoided a dollar. Both reviews raised it and
+    neither the cost objective nor the guards addressed it.
+
+    The quantity that does is derivable rather than invented: **the metered charge this family avoids by using
+    the box, divided by the occupancy it consumes to do so.** The numerator is the alternative's gateway charge
+    per request; the denominator is the box's seconds per task at the concurrency it is being run at, which the
+    service curve measures. Neither is a constant anybody chose.
+
+    What this is and is not. It prices the SAVING, not the delay a queued request suffers -- that is a latency
+    constraint and belongs where the other constraints are. It is a greedy index, which is exactly optimal when
+    slots divide and only near-optimal when they do not. And it is a ratio of two measurements taken at one
+    operating point, so it moves when either does; that is why it is emitted with its inputs rather than as a
+    number.
+    """
+    if not reserved.is_reserved:
+        return {"usd_per_slot_second": None,
+                "reason": f"{reserved.id!r} is not reserved, so its occupancy is not the scarce thing"}
+    if alternative is None:
+        return {"usd_per_slot_second": None,
+                "reason": "no metered alternative for this family, so using the box avoids no charge and there "
+                          "is nothing to weigh a slot against. That is not a slot worth nothing; it is a "
+                          "comparison that does not exist"}
+    if seconds_per_task is None:
+        return {"usd_per_slot_second": None,
+                "reason": "how long a task occupies the candidate at the concurrency in use is unmeasured, so "
+                          "the occupancy a saving costs is unknown. The service curve supplies it"}
+    spend, why = _family_spend(alternative, family)
+    o = alternative.outcome(family) or {}
+    n = o.get("attempted") or 0
+    if spend is None or not n:
+        return {"usd_per_slot_second": None,
+                "reason": f"the alternative {alternative.id!r} has no gateway charge for {family!r}, so the "
+                          f"saving is unquantified: {why if spend is None else 'it attempted nothing'}"}
+    avoided = spend / n
+    return {
+        "usd_per_slot_second": avoided / seconds_per_task,
+        "avoided_usd_per_request": round(avoided, 6),
+        "alternative": alternative.id,
+        "seconds_per_task": seconds_per_task,
+        "reason": (f"using {reserved.id!r} for {family!r} avoids ${avoided:.6f} a request at "
+                   f"{alternative.id!r}, and occupies it for {seconds_per_task:.2f} s to do so. Both are "
+                   "measurements at one operating point, so this moves when either does"),
+        "assumes": [
+            "the saving is the alternative's charge for the SAME traffic, which holds only where that "
+            "candidate was measured on this family",
+            "occupancy costs what it costs at the concurrency the curve was measured at; the figure changes "
+            "with the operating point",
+            "a greedy order, which is exactly optimal when slots divide and near-optimal when they do not",
+            "nothing here prices the delay a displaced request suffers; that is a latency constraint",
+        ],
+    }
+
+
+def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
+                      seconds_per_task: float | None) -> dict:
+    """The order families should be admitted to a contended reserved candidate, highest slot value first.
+
+    Emitted as an order rather than applied, because admitting a request is a scheduling act and this project
+    decides which candidate, not which request. A family whose slot value cannot be computed is placed last and
+    says why -- not because it is worth least, but because nothing here can rank it, and putting it first would
+    be ranking it on an absence.
+
+    **Occupancy is per family where it was measured.** The probe's figure describes the shape the probe replayed,
+    and a prefill-heavy agent turn does not occupy a batching engine for as long as a short retail turn -- the
+    same "throughput is a property of the pair" that the curve's own note makes, one level in. So each family's
+    own recorded latency on the reserved candidate is preferred, and the probe's figure is the fallback, labelled
+    as borrowed. Using one number for every family silently favours whichever family is in fact slower.
+    """
+    scored, unranked = [], []
+    for family in sorted(families):
+        own, _ = _family_latency_seconds(reserved.outcome(family) or {})
+        secs = own if own is not None else seconds_per_task
+        v = slot_value(reserved, family, alternative=alternatives.get(family), seconds_per_task=secs)
+        v["occupancy_source"] = ("this family's own measured latency on the reserved candidate" if own is not None
+                                else "borrowed from the load probe, which replayed a different request shape; a "
+                                     "family that occupies the engine for longer is over-ranked by this")
+        if v["usd_per_slot_second"] is None:
+            unranked.append({"family": family, "reason": v["reason"]})
+        else:
+            scored.append({"family": family, **v})
+    scored.sort(key=lambda x: -x["usd_per_slot_second"])
+    return {
+        "reserved": reserved.id,
+        "order": [x["family"] for x in scored] + [x["family"] for x in unranked],
+        "scored": scored,
+        "unranked": unranked,
+        "note": ("highest saving per second of occupancy first. Unranked families come last because nothing "
+                 "here can rank them, which is not the same as their being worth least"),
+    }
+
+
 def reservation_verdict(t: Tier, family: str, *, window_hours: float | None,
                         counterfactual: Tier | None, settled_period_usd: float | None = None,
                         family_share: float | None = None) -> dict:

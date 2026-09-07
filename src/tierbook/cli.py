@@ -31,8 +31,8 @@ from tierbook.config import ConfigError, draft_from_model_list, load_config
 from tierbook.decide import as_dict as decide_as_dict
 from tierbook.decide import compile_policy
 from tierbook.evidence import EvidenceError
-from tierbook.policy import (assign_family, capacity_note, cutover_violation, evidence_class, load_registry,
-                             registry_version, reservation_verdict)
+from tierbook.policy import (assign_family, capacity_note, capacity_priority, cutover_violation,
+                             evidence_class, load_registry, registry_version, reservation_verdict)
 from tierbook.table import Unvalidated, check_fresh, compile_to_file, load_table, lookup
 
 REQUIRED_FOR_A_DECISION = (
@@ -176,12 +176,20 @@ def cmd_compile(args) -> int:
                 tiers[sid], fam, window_hours=args.window_hours, counterfactual=counterfactual)
             capacity[fam] = capacity_note(tiers[sid], fam)
             break
-    report.annotate(table, self_hosted_ids=self_hosted, economics=economics, capacity=capacity)
+
     # The policy as a function of observed state, not only as the point the cohort's state produced. Every
     # threshold in it is a measurement or a named gap; the reference is the declared default, because when no
     # rule holds the cheapest candidate is the one there is least reason to trust.
-    curve = json.loads(Path(args.service_curve).read_text()) if args.service_curve else None
+    probe = json.loads(Path(args.service_curve).read_text()) if args.service_curve else None
+    # The file may be the probe's whole output or just its curve. Both are accepted because both are things a
+    # caller reasonably has, and the seconds-per-task figure the slot value needs only exists in the former.
+    curve = (probe or {}).get("curve", probe) if isinstance(probe, dict) else None
+    points = (probe or {}).get("points") if isinstance(probe, dict) else None
     table["decide"] = {}
+    # Occupancy per task AT THE BOUND, not at whatever concurrency was convenient: the slot value is a saving
+    # divided by the occupancy it costs, and that occupancy is a property of the operating point. Taken from the
+    # probe's own point at the derived bound when both exist, so the two numbers come from one measurement.
+    seconds_at_bound = None
     for fam, entry in (table.get("families") or {}).items():
         for label in ("can_reject", "cannot_reject"):
             e = entry.get(label)
@@ -194,9 +202,28 @@ def cmd_compile(args) -> int:
                                  service_curve=curve, min_marginal_gain=args.capacity_marginal_gain,
                                  max_evidence_age_days=args.max_age_days)
             table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
+            bound = ((pol.domain or {}).get(f"inflight:{sorted(self_hosted)[0]}")
+                     if self_hosted else None)
+            if points and pol.can_ever_fire:
+                target = next((g.threshold for r in pol.rules for g in r.guards
+                               if g.var.startswith("inflight:") and g.measured), None)
+                if target is not None:
+                    seconds_at_bound = next((pt.get("mean_latency_s") for pt in points
+                                             if float(pt.get("concurrency", -1)) == float(target)), None)
             if not pol.can_ever_fire and pol.certified:
                 print(f"  [WARN] {fam}/{label}: no rule can fire, so every request takes the declared "
                       f"default. Unmeasured: {pol.gaps}")
+    # What a second of the box's occupancy is worth to each family, and therefore which family should get a
+    # contended slot. Emitted as an order rather than applied: admitting a request is a scheduling act, and
+    # this project decides which candidate rather than which request.
+    if self_hosted:
+        box = tiers[sorted(self_hosted)[0]]
+        table["capacity_priority"] = capacity_priority(
+            box, table.get("families") or {},
+            alternatives={fam: tiers.get(families[fam]) for fam in (table.get("families") or {})
+                          if families.get(fam) not in self_hosted},
+            seconds_per_task=seconds_at_bound)
+    report.annotate(table, self_hosted_ids=self_hosted, economics=economics, capacity=capacity)
     Path(args.out).write_text(json.dumps(table, indent=1) + "\n")
     if args.report:
         Path(args.report).write_text(report.render(table))
