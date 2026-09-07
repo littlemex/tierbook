@@ -391,9 +391,14 @@ def test_two_outcome_rows_under_one_trace_id_are_counted_not_overwritten(tmp_pat
         {"trace_id": "t1", "item_id": "i1", "state": "incorrect"},
     ])
     code, out = run_cli(tmp_path, outcomes, traces)
-    coll = json.loads(out.read_text())["selection"]["trace_id_collisions"]
+    doc = json.loads(out.read_text())
+    coll = doc["selection"]["trace_id_collisions"]
     assert len(coll) == 1 and coll[0]["kept_state"] == "solved" and coll[0]["dropped_state"] == "incorrect"
-    assert "trace id collision" in capsys.readouterr().out
+    # Refused, not merely counted: which run the surviving row describes is ambiguous, and everything downstream
+    # keys on the trace id.
+    assert code == 6
+    assert "REFUSED" in capsys.readouterr().out
+    assert doc["rows"][0]["cost"]["usd"] is None
 
 
 def test_a_charge_with_no_outcome_row_is_money_attributed_to_nothing(tmp_path, capsys):
@@ -409,10 +414,14 @@ def test_a_charge_with_no_outcome_row_is_money_attributed_to_nothing(tmp_path, c
     ])
     code, out = run_cli(tmp_path, outcomes, traces, "--charges", str(charges),
                         "--metered-providers", "api-x")
-    cov = json.loads(out.read_text())["coverage"]
+    doc = json.loads(out.read_text())
+    cov = doc["coverage"]
     assert cov["charges_with_no_outcome_usd"] == 0.25
     assert cov["charges_with_no_outcome"][0]["gateway_request_id"] == "r2"
-    assert "attributed to\nnothing" in capsys.readouterr().out.replace("  ", " ") or True
+    # Refused. A cost figure that excludes unattributed spend is not this cohort's cost; it is the cost of the
+    # part that joined.
+    assert code == 7 and "REFUSED" in capsys.readouterr().out
+    assert doc["rows"][0]["cost"]["usd"] is None
 
 
 def test_trials_are_keyed_by_the_whole_candidate_not_the_agent(tmp_path):

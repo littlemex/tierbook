@@ -183,6 +183,23 @@ class Policy:
     provenance: dict = field(default_factory=dict)
 
     @property
+    def overlaps(self) -> list[str]:
+        """Pairs of rules that could both fire on one state, which makes tuple order the decision.
+
+        `decide` returns the first match, so two rules whose guards can hold together mean the order they were
+        appended in silently decides assignments. With one rule this was dormant; the capacity split made it two,
+        and the two that matter here are provably disjoint -- `inflight < B` against `inflight >= B` -- which is
+        exactly the kind of thing worth checking rather than asserting.
+        """
+        out = []
+        for i, a in enumerate(self.rules):
+            for j, b in list(enumerate(self.rules))[i + 1:]:
+                if not _provably_disjoint(a, b):
+                    out.append(f"rules {i} and {j} can both hold, so the order they are listed in decides "
+                               f"between {list(a.assign)} and {list(b.assign)}")
+        return out
+
+    @property
     def can_ever_fire(self) -> bool:
         """Whether any rule could fire under any state.
 
@@ -232,6 +249,25 @@ class Policy:
                 outside.append(f"{spec}={value} is outside the range this was measured over "
                                f"[{rng[0]}, {rng[1]}]")
         return (not outside), outside
+
+
+#: Comparisons that cannot both hold for one value. Enough for the split this compiler emits, and deliberately
+#: not a general solver: a check that quietly returns "disjoint" for a case it cannot analyse is worse than one
+#: that admits the pair is unchecked.
+_OPPOSED = {("<", ">="), (">=", "<"), ("<=", ">"), (">", "<=")}
+
+
+def _provably_disjoint(a: Rule, b: Rule) -> bool:
+    """Whether two rules provably cannot both fire, by finding one variable they oppose each other on."""
+    for ga in a.guards:
+        for gb in b.guards:
+            if ga.var != gb.var or not (ga.measured and gb.measured):
+                continue
+            if (ga.op, gb.op) in _OPPOSED and ga.threshold == gb.threshold:
+                return True
+            if ga.op == "==" and gb.op == "==" and ga.threshold != gb.threshold:
+                return True
+    return False
 
 
 def decide(policy: Policy, state: dict) -> dict:
@@ -429,6 +465,7 @@ def as_dict(policy: Policy) -> dict:
         "provenance": policy.provenance,
         "unmeasured_guards": policy.gaps,
         "can_ever_fire": policy.can_ever_fire,
+        "rule_overlaps": policy.overlaps,
         "missing_for_a_closed_loop": list(MISSING_FOR_A_CLOSED_LOOP),
         "rules": [{"when": [g.describe() for g in r.guards], "assign": list(r.assign),
                    "because": r.because} for r in policy.rules],

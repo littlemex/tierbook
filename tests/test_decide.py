@@ -212,3 +212,32 @@ def test_the_knee_is_found_under_a_declared_criterion_and_missed_without_one():
 
     strict, _ = D._capacity_from_curve(real, 0.0)
     assert strict is None, "a strict test walks to the top of the range and is censored"
+
+
+# --- rule order must not be doing the deciding ----------------------------------------------------
+
+
+def test_the_capacity_split_is_provably_disjoint():
+    """`decide` returns the first match, so two rules that can both hold mean the order they were appended in
+    silently decides assignments. With one rule this was dormant; the split made it two."""
+    p = policy(["box", "cheap"], curve=CURVE)
+    assert len(p.rules) == 2
+    assert p.overlaps == []
+    assert D.as_dict(p)["rule_overlaps"] == []
+
+
+def test_two_rules_that_can_both_hold_are_reported():
+    """A check that quietly returns disjoint for a case it cannot analyse is worse than one that admits the pair
+    is unchecked, so this reports rather than proves absence."""
+    g = D.Guard("inflight:box", "<", 8, derived_from="probe")
+    p = D.Policy("f", (D.Rule((g,), ("a",), "first"), D.Rule((g,), ("b",), "second")), ("strong",))
+    assert len(p.overlaps) == 1
+    assert "the order they are listed in decides" in p.overlaps[0]
+
+
+def test_opposed_equalities_count_as_disjoint():
+    p = D.Policy("f", (
+        D.Rule((D.Guard("available:box", "==", True, derived_from="x"),), ("a",), "up"),
+        D.Rule((D.Guard("available:box", "==", False, derived_from="x"),), ("b",), "down"),
+    ), ("strong",))
+    assert p.overlaps == []

@@ -17,6 +17,12 @@ hourly bill by one sequential experimenter's task rate and calling it a cost per
 project already published; the amortised kind therefore never enters this join at all. It is applied later,
 against a stated window, by whoever computes the frontier.
 
+**Four refusals, and each of them is a cost figure that would have read as complete.** A partial join. A
+charge with no outcome row -- money spent and attributed to nothing, which excluding leaves the cost of the part
+that joined. A trace id collision, where the surviving row's state may belong to either run and everything
+downstream keys on that id. And a row missing a billed leg, whose total is below what was paid. Counting any of
+them and continuing was the earlier behaviour, and a count in a field nobody reads is not a guard.
+
 **A partial join does not produce a partial cost figure; it produces no cost figure.** A cost summed over
 the rows that happened to join reads as complete, and that is the failure this refuses. Coverage is reported
 and a shortfall names the rows that are missing rather than the count.
@@ -373,13 +379,6 @@ def main() -> int:
     fixed = [r for r in res["rows"] if r["cost"]["kind"] == AMORTISED]
     print(f"  metered rows {len(metered)}  fixed-cost rows {len(fixed)}  "
           f"trials/item {res['trials']['trials_per_item']}")
-    if cov["charges_with_no_outcome"]:
-        print(f"  [WARN] {len(cov['charges_with_no_outcome'])} charge(s) totalling "
-              f"${cov['charges_with_no_outcome_usd']:.6f} have no outcome row: money spent and attributed to "
-              "nothing")
-    if selection.get("trace_id_collisions"):
-        print(f"  [WARN] {len(selection['trace_id_collisions'])} trace id collision(s): two outcome rows "
-              "under one id, so one was dropped and the trials count cannot see it")
     if cov["unjoined"]:
         print(f"  {len(cov['unjoined'])} unjoined, named in the output:")
         for u in cov["unjoined"][:8]:
@@ -404,6 +403,17 @@ def main() -> int:
                                           "withheld_because": refusal}} for r in res["rows"]]
         Path(a.out).write_text(json.dumps(doc, indent=1) + "\n")
 
+    if selection.get("trace_id_collisions"):
+        print(f"\n[REFUSED] {len(selection['trace_id_collisions'])} trace id collision(s): two outcome rows "
+              "under one id. Which run each row describes is ambiguous, and the surviving row's state may be "
+              "either one -- counting the collision is not enough, because everything downstream keys on the "
+              "trace id:")
+        for c in selection["trace_id_collisions"][:6]:
+            print(f"    {c['trace_id'][:16]}… item {c['item_id']}: kept {c['kept_state']}, "
+                  f"dropped {c['dropped_state']}")
+        emit(f"{len(selection['trace_id_collisions'])} trace id collision(s): attribution is ambiguous")
+        return 6
+
     tr = res["trials"]
     if not tr["uniform"]:
         print(f"\n[REFUSED] trials per item are not uniform: {tr['observed']}. A record asserts one number "
@@ -420,6 +430,16 @@ def main() -> int:
               "figure is produced: a cost summed over the joined subset reads as complete.")
         emit(f"coverage {cov['rate']:.4f} is below the required {a.min_coverage:.4f}")
         return 3
+    if cov["charges_with_no_outcome"]:
+        print(f"\n[REFUSED] {len(cov['charges_with_no_outcome'])} charge(s) totalling "
+              f"${cov['charges_with_no_outcome_usd']:.6f} have no outcome row. That is money spent and "
+              "attributed to nothing, and a cost figure that excludes it is not this cohort's cost -- it is the "
+              "cost of the part that joined:")
+        for c in cov["charges_with_no_outcome"][:6]:
+            print(f"    {c['trace_id'][:16]}… ${c['usd']} (gateway {c.get('gateway_request_id')})")
+        emit(f"${cov['charges_with_no_outcome_usd']:.6f} of charges have no outcome row")
+        return 7
+
     if cov["unpriceable_rows"]:
         print(f"\n[REFUSED] {len(cov['unpriceable_rows'])} row(s) are missing a token leg, so their totals "
               "are below what was billed. An absent leg is not a zero leg:")
