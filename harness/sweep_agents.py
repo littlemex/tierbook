@@ -86,7 +86,8 @@ def sweep_one(a, instance: str) -> dict:
             return rec
 
     manifest = Path(a.workdir) / f"runs-{instance}.json"
-    rc, out = run([
+    outcomes = Path(a.outcomes)
+    drive = [
         sys.executable, str(HERE / "agent_drive.py"),
         "--task-file", str(Path(a.workdir) / f"task-{instance}.md"),
         "--tag", instance, "--repeat", str(a.repeat),
@@ -94,40 +95,42 @@ def sweep_one(a, instance: str) -> dict:
         "--timeout", str(a.agent_timeout),
         "--context", a.context, "--namespace", a.namespace,
         "--out", str(manifest),
-    ], timeout=a.agent_timeout * 6 + 600)
+        # One capture path: the agent's own telemetry produces the token and latency figures, and this
+        # sweep produces none. The trace id the driver issues is what the outcome and the charge are
+        # later joined on.
+        "--outcomes", str(outcomes), "--item-id", instance,
+    ]
+    if a.otlp_endpoint:
+        drive += ["--otlp-endpoint", a.otlp_endpoint]
+    if a.span_attributes:
+        drive += ["--span-attributes", a.span_attributes]
+    if a.agents:
+        drive += ["--agents", a.agents]
+    rc, out = run(drive, timeout=a.agent_timeout * 6 + 600)
     rec["steps"]["drive"] = {"rc": rc, "tail": out[-800:]}
     if not manifest.exists():
         rec["outcome"] = "drive produced no manifest"
         return rec
 
-    for r in json.loads(manifest.read_text())["runs"]:
-        if not r.get("returned"):
-            rec["runs"][f"{r['agent']}#{r['iteration']}"] = {"outcome": "no returned tree"}
-            continue
-        rc, out = run(tb + ["score"] + common + ["--workspace", r["returned"]], a.score_timeout)
-        verdict = None
-        for line in out.splitlines():
-            if '"resolved"' in line:
-                verdict = "true" in line
-        # Promoted out of the log tail and into the record, because these two are what separate "tried
-        # and was wrong" from "did nothing" -- and three of four agents were silently doing nothing until
-        # a flag was found. A tail truncated to the last few hundred characters loses them, which is
-        # exactly the information needed to know whether an unresolved run is a capability result.
-        diff_bytes = files_touched = None
-        for line in out.splitlines():
-            if line.startswith("diff bytes: "):
-                diff_bytes = int(line.split(": ", 1)[1])
-            elif line.startswith("files touched: "):
-                files_touched = int(line.split(": ", 1)[1])
-        rec["runs"][f"{r['agent']}#{r['iteration']}"] = {
-            "rc": rc,
-            "resolved": verdict,
-            "diff_bytes": diff_bytes,
-            "files_touched": files_touched,
-            "wall_s": r["wall_s"],
-            "timed_out": r["timed_out"],
-            "returned": r["returned"],
-            "tail": out[-600:],
+    # The oracle is applied by the step that owns it, in place, on the rows the driver left pending. This
+    # sweep no longer parses a verdict out of a log tail, and no longer computes a token or cost figure of
+    # any kind.
+    rc, out = run([sys.executable, str(HERE / "score_outcomes.py"),
+                   "--outcomes", str(outcomes), "--instance", instance,
+                   "--context", a.context, "--namespace", a.namespace,
+                   "--timeout", str(a.score_timeout)], timeout=a.score_timeout + 1800)
+    rec["steps"]["oracle"] = {"rc": rc, "tail": out[-800:]}
+
+    judged = [json.loads(x) for x in outcomes.read_text().splitlines() if x.strip()] if outcomes.exists() else []
+    for r in [x for x in judged if x.get("item_id") == instance]:
+        rec["runs"][f"{r.get('agent')}#{r.get('iteration')}"] = {
+            "trace_id": r.get("trace_id"),
+            "state": r.get("state"),
+            "unobserved_reason": r.get("unobserved_reason"),
+            "wall_s": r.get("wall_s"),
+            "timed_out": r.get("timed_out"),
+            "returned": r.get("returned"),
+            "files_touched": (r.get("oracle") or {}).get("files_touched"),
         }
 
     if not a.keep:
@@ -182,6 +185,12 @@ def main() -> int:
     ap.add_argument("--cache", default="~/.cache/swebench-verified.json")
     ap.add_argument("--agent-dir",
                     default="/Users/akazawt/eks/distributed-ai/2026-08-24-mom-vsr-eks-benchmark/agent")
+    ap.add_argument("--outcomes", default=str(Path.home() / "tmp/e02/tap/outcomes.jsonl"),
+                    help="the single JSONL every run appends to and the oracle updates in place")
+    ap.add_argument("--otlp-endpoint", default="http://otel-collector:4318",
+                    help="where the agent exports its telemetry. This sweep produces no telemetry itself")
+    ap.add_argument("--span-attributes", default="tenant=default-org")
+    ap.add_argument("--agents", help="comma-separated subset passed through to the driver")
     ap.add_argument("--keep", action="store_true", help="leave each testbed pod up (for debugging)")
     ap.add_argument("--limit", type=int, help="stop after this many new instances")
     a = ap.parse_args()
@@ -191,6 +200,7 @@ def main() -> int:
     state_path = Path(a.state)
     state = load_state(state_path)
 
+    Path(a.outcomes).parent.mkdir(parents=True, exist_ok=True)
     done = {k for k, v in state["instances"].items() if v.get("outcome") == "done"}
     todo = [i for i in instances if i not in done]
     if a.limit:
@@ -208,7 +218,9 @@ def main() -> int:
         rec = sweep_one(a, instance)
         state["instances"][instance] = rec
         save_state(state_path, state)
-        got = {k: v.get("resolved") for k, v in rec.get("runs", {}).items()}
+        got = {k: (v.get("state") if not v.get("unobserved_reason")
+                   else f"{v['state']}/{v['unobserved_reason']}")
+               for k, v in rec.get("runs", {}).items()}
         print(f"{rec['outcome']} in {int(time.time() - t0)}s  {got}")
 
     print(f"\nstate: {state_path}")

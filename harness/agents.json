@@ -53,20 +53,13 @@
         "{prompt}"
       ],
       "workspace": "/tmp/run-{session}",
-      "notes": "Reports the model it resolved on stderr, which is worth capturing as a check that the alias took effect. The plugin and its opencode.json travel into each run's workspace via `pre`: opencode reads plugin config from the project directory, and a run staged elsewhere would silently export no telemetry. `--agent` is always passed, even for the default definition: the telemetry only carries `agent.name` when a definition was named, and a candidate tuple whose first element reads `unknown` is not a candidate. The definition name is part of the candidate, so it is data here rather than an omission.",
+      "notes": "`--agent` is always passed, even for the default definition: the telemetry only carries `agent.name` when a definition was named, and a candidate tuple whose first element reads `unknown` is not a candidate. **Nothing is copied into the run workspace.** An earlier version put the telemetry plugin's `node_modules` there via `pre`, and the scorer then saw thousands of edited `.test.ts` files and failed the run for editing its own examiner. The plugin belongs in the agent's global config directory; a workspace holds the task and nothing else, because everything in it lands in the diff.",
       "preflight": [
         "opencode",
         "run",
         "--agent",
         "{agent_definition}",
         "reply with exactly: PREFLIGHT_OK"
-      ],
-      "pre": [
-        [
-          "sh",
-          "-c",
-          "mkdir -p {workspace}/.opencode/agents {workspace}/prompts && cp -a /tmp/pt/node_modules {workspace}/ 2>/dev/null || true; cp /tmp/pt/opencode.json {workspace}/ 2>/dev/null || true"
-        ]
       ],
       "agent_definition": "build"
     },
