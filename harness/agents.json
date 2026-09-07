@@ -48,15 +48,27 @@
       "argv": [
         "opencode",
         "run",
+        "--agent",
+        "{agent_definition}",
         "{prompt}"
       ],
       "workspace": "/tmp/run-{session}",
-      "notes": "Reports the model it resolved on stderr, which is worth capturing as a check that the alias took effect.",
+      "notes": "Reports the model it resolved on stderr, which is worth capturing as a check that the alias took effect. The plugin and its opencode.json travel into each run's workspace via `pre`: opencode reads plugin config from the project directory, and a run staged elsewhere would silently export no telemetry. `--agent` is always passed, even for the default definition: the telemetry only carries `agent.name` when a definition was named, and a candidate tuple whose first element reads `unknown` is not a candidate. The definition name is part of the candidate, so it is data here rather than an omission.",
       "preflight": [
         "opencode",
         "run",
+        "--agent",
+        "{agent_definition}",
         "reply with exactly: PREFLIGHT_OK"
-      ]
+      ],
+      "pre": [
+        [
+          "sh",
+          "-c",
+          "mkdir -p {workspace}/.opencode/agents {workspace}/prompts && cp -a /tmp/pt/node_modules {workspace}/ 2>/dev/null || true; cp /tmp/pt/opencode.json {workspace}/ 2>/dev/null || true"
+        ]
+      ],
+      "agent_definition": "build"
     },
     "qwen-code": {
       "deployment": "qwen-code",

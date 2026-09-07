@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import subprocess
 import sys
 import time
@@ -72,6 +73,7 @@ def preflight(spec: dict, agent: str, model: str, context: str, namespace: str,
     """
     session = f"pf-{uuid.uuid4().hex[:8]}"
     argv = _fill(spec["preflight"], model=model, session=session, workspace=f"/tmp/{session}",
+                 agent_definition=spec.get("agent_definition", ""),
                  prompt="reply with exactly: PREFLIGHT_OK")
     try:
         proc = kubectl(context, namespace, "exec", f"deploy/{spec['deployment']}", "--", *argv,
@@ -87,12 +89,30 @@ def preflight(spec: dict, agent: str, model: str, context: str, namespace: str,
     return False, f"rc={proc.returncode}, no PREFLIGHT_OK in output: {blob.strip()[-200:]}"
 
 
+def new_traceparent() -> tuple[str, str]:
+    """A W3C trace context issued BEFORE the run starts, so three sources can meet on it.
+
+    The agent accepts one through an environment variable and emits spans under it, which is what replaces
+    joining by time window -- a window join breaks as soon as two runs overlap, and overlapping runs are the
+    normal case in a deployment. Issued here rather than read from the telemetry afterwards, because the
+    outcome and the charge have to be labelled with the same id and neither of them has seen a span.
+    """
+    trace_id = secrets.token_hex(16)
+    return trace_id, f"00-{trace_id}-{secrets.token_hex(8)}-01"
+
+
 def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, namespace: str,
-            timeout: int, stage_from: str | None = None) -> dict:
+            timeout: int, stage_from: str | None = None, telemetry: dict | None = None) -> dict:
     """One agent, one task, one fresh session and workspace."""
     session = f"{agent}-{uuid.uuid4().hex[:10]}"
+    trace_id, traceparent = new_traceparent()
     workspace = spec["workspace"].format(session=session)
-    argv = _fill(spec["argv"], prompt=prompt, session=session, workspace=workspace, model=model)
+    # `agent_definition` is part of the candidate tuple, so it is substituted like any other field. A spec
+    # that omits it gets an empty string and the run fails loudly rather than emitting telemetry whose
+    # candidate is half unknown.
+    fills = dict(prompt=prompt, session=session, workspace=workspace, model=model,
+                 agent_definition=spec.get("agent_definition", ""))
+    argv = _fill(spec["argv"], **fills)
 
     # `mkdir` then `cd` then exec, as one shell command, because the workspace must exist before the
     # agent starts in it and `kubectl exec` has no working-directory option.
@@ -105,15 +125,29 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
     # same shell as the task so it cannot be skipped, and before the archive is expanded is fine: it
     # configures a path, it does not read one.
     pre = "".join(
-        " ".join(_shq(x) for x in _fill(c, prompt=prompt, session=session, workspace=workspace,
-                                       model=model)) + " >/dev/null 2>&1 && "
+        " ".join(_shq(x) for x in _fill(c, **fills)) + " >/dev/null 2>&1 && "
         for c in spec.get("pre", [])
     )
     stage = f"tar xf {stage_from} --no-same-owner -C {workspace} && " if stage_from else ""
     ret = f"/work/returned/{session}.tar"
     give_back = (f" ; mkdir -p /work/returned && tar cf {ret} -C {workspace} ." if stage_from else "")
-    inner = ("mkdir -p {ws} && {pre}{stage}cd {ws} && {{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}; "
-             "exit ${{exec_rc:-0}}").format(ws=workspace, pre=pre, stage=stage, back=give_back)
+    # Telemetry is exported by the agent itself, to a collector this project runs. Nothing here computes a
+    # token count or a cost: one producer of those figures, not two, or the same number is computed twice
+    # and the two disagree eventually.
+    env = ""
+    if telemetry:
+        pairs = {
+            "OPENCODE_ENABLE_TELEMETRY": "1",
+            "OPENCODE_OTLP_ENDPOINT": telemetry["endpoint"],
+            # `http/protobuf`, not `http`. The plugin accepts both spellings and `http` takes an http2 path
+            # that dies with "authority must be of type string ... Received type number".
+            "OPENCODE_OTLP_PROTOCOL": telemetry.get("protocol", "http/protobuf"),
+            "OPENCODE_TRACEPARENT": traceparent,
+            "OPENCODE_SPAN_ATTRIBUTES": telemetry.get("span_attributes", ""),
+        }
+        env = "".join(f"export {k}={_shq(v)}; " for k, v in pairs.items() if v)
+    inner = ("mkdir -p {ws} && {env}{pre}{stage}cd {ws} && {{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}; "
+             "exit ${{exec_rc:-0}}").format(ws=workspace, env=env, pre=pre, stage=stage, back=give_back)
 
     started_wall = time.time()
     t0 = time.monotonic()
@@ -138,6 +172,9 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
         "argv": argv,
         "staged_from": stage_from,
         "pre": spec.get("pre", []),
+        # The join key. Recorded even when the run failed: a failed run still emitted spans and may still
+        # have been charged, and dropping its id is how a charge becomes unattributable.
+        "trace_id": trace_id,
         # Where the edited tree was left, for the scorer. Named even when the run failed: an agent that
         # crashed halfway still edited files, and whether those files score is a fact about the agent.
         "returned": (f"/work/returned/{session}.tar" if stage_from else None),
@@ -178,6 +215,17 @@ def main() -> int:
     ap.add_argument("--skip-preflight", action="store_true",
                     help="measure without proving the agents work first. For debugging the driver only: "
                          "the preflight exists because every agent here was silently 404ing for days.")
+    ap.add_argument("--otlp-endpoint",
+                    help="the collector the agent exports to, e.g. http://otel-collector:4318. Given, the "
+                         "driver issues a trace id per run and the agent's own telemetry is the only "
+                         "producer of token and latency figures")
+    ap.add_argument("--otlp-protocol", default="http/protobuf")
+    ap.add_argument("--span-attributes", default="",
+                    help="comma-separated k=v put on every span, e.g. tenant=default-org")
+    ap.add_argument("--outcomes",
+                    help="append one JSONL row per run: trace_id, item_id and the run's own exit state. "
+                         "The oracle's verdict is added later by whoever scores it")
+    ap.add_argument("--item-id", help="the task's id, carried into the outcomes rows")
     ap.add_argument("--tag", default="untagged")
     ap.add_argument("--out", help="manifest path; default ~/tmp/e02/tap/runs-<tag>-<ts>.json")
     args = ap.parse_args()
@@ -250,13 +298,33 @@ def main() -> int:
         for name in order:
             print(f"[{i + 1}/{args.repeat}] {name} ... ", end="", flush=True)
             row = run_one(spec[name], name, prompt, model, args.context, args.namespace,
-                          args.timeout, args.stage_from)
+                          args.timeout, args.stage_from,
+                          telemetry=({"endpoint": args.otlp_endpoint,
+                                      "protocol": args.otlp_protocol,
+                                      "span_attributes": args.span_attributes}
+                                     if args.otlp_endpoint else None))
             row["iteration"] = i
             row["position"] = order.index(name)
             runs.append(row)
             state = "timeout" if row["timed_out"] else f"rc={row['returncode']}"
-            print(f"{state} in {row['wall_s']}s")
+            print(f"{state} in {row['wall_s']}s  trace={row['trace_id'][:16]}")
             out_path.write_text(json.dumps(manifest, indent=1))
+            if args.outcomes:
+                # The driver records only what it observed of the RUN -- it never states an outcome, because
+                # the oracle has not run yet. `state: pending_oracle` is the honest value, and a scorer
+                # replaces it. A driver that guessed "solved" here would be inventing the measurement.
+                with open(args.outcomes, "a") as fh:
+                    fh.write(json.dumps({
+                        "trace_id": row["trace_id"],
+                        "item_id": args.item_id or args.tag,
+                        "agent": name,
+                        "iteration": i,
+                        "state": "pending_oracle",
+                        "returned": row.get("returned"),
+                        "timed_out": row["timed_out"],
+                        "returncode": row["returncode"],
+                        "wall_s": row["wall_s"],
+                    }) + "\n")
 
     print(f"\nmanifest: {out_path}")
     print("Pair it with the tap log to attribute calls:")
