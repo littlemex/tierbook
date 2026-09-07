@@ -88,3 +88,37 @@ Checked per conversation instead of pooled. Across 43 reconstructed conversation
 input token count dropped at **zero** steps; the longest reached 142 messages and 95,229 tokens against a 200,000
 limit, with no plateau at any round number. The apparent stall was an artifact of pooling: later buckets are
 dominated by long conversations whose individual messages are small tool results.
+
+## Prompt caching is not available through this gateway, and asking for it drops content (2026-09-08)
+
+A review made the sharpest cost objection of the project: the reported break-even price compared an *optimised*
+reservation against a metered arm nobody had optimised. The self-hosted arm read 91.4% of its input from a prefix
+cache; the metered path read 0%, because nothing on it asked for caching. With caching at a typical discount and
+the same 91% hit pattern, the break-even would move from about $0.69 per million tokens to several dollars, which
+flips the decision.
+
+So caching was switched on in the translator and measured. The result is worse than caching being unavailable:
+the gateway does not cache the marked blocks, it **drops** them. A four-message request that carried 4,333 input
+tokens unmarked came back reporting 25, with both cache legs at zero and the system prompt, the tool schemas and
+the history all missing. That is the same silent shrinking that made an earlier arm worthless, reproduced by a
+change intended to fix a different distortion.
+
+Two consequences, both in the code. Caching defaults off and carries the measurement in its own comment. And a
+general guard now refuses any reply whose billed input is implausibly small for the bytes the request carried:
+real traffic on this path runs about 45 billed tokens per 100 bytes, both observed failures were two orders of
+magnitude under that, and both were invisible in the outcomes. The floor is far below anything observed because
+its job is to catch a collapse rather than to police a tokenizer.
+
+What this leaves open, and it is the live question for the cost comparison: the metered arm's price advantage
+cannot be evaluated on caching terms through this gateway at all. Deciding it needs a path that supports caching
+-- the provider's own endpoint, or a gateway that forwards the directive -- and until then the break-even figure
+holds only for an uncached metered path.
+
+## The 27,051-token gap between the ledger and the cohort (2026-09-08)
+
+A review caught the report using two figures for one quantity: the break-even divided by 23,616,541 tokens while
+the ledger reconciliation used 23,643,592. The difference is 27,051 and it is exactly the driver's 24 preflight
+calls, one per instance -- tool-free, three messages each, which the ledger counts and no run's trace carries.
+Confirmed by summing the tool-free requests in the translator's log: 24 calls, 27,051 tokens, matching to the
+token. The per-task comparison uses the cohort; the reconciliation uses the ledger; and the 0.11% between them is
+harness overhead rather than an unexplained discrepancy.

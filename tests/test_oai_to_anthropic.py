@@ -193,3 +193,69 @@ def test_the_default_output_cap_is_not_silently_tiny():
     incapability."""
     body, _ = shim.to_anthropic({"model": "m", "messages": [{"role": "user", "content": "x"}]})
     assert body["max_tokens"] >= 4096
+
+
+def test_cache_marking_is_off_unless_asked_for(monkeypatch):
+    """It changes what a request costs, so it changes what a comparison measures, and it is a per-deployment
+    decision rather than a default."""
+    monkeypatch.delenv(shim.CACHE_MARK_ENV, raising=False)
+    body, notes = shim.to_anthropic({"model": "m", "messages": [{"role": "user", "content": "x"}],
+                                     "tools": [{"type": "function", "function": {"name": "f"}}]})
+    assert "cache_control" not in json.dumps(body)
+    assert not any("cacheable" in n for n in notes)
+
+
+def test_cache_marking_covers_the_schemas_the_system_and_the_previous_history(monkeypatch):
+    """The absence of this distorted a comparison: the self-hosted arm read 91.4% of its input from a prefix cache
+    and the metered arm read 0%, because nothing on that path asked for caching."""
+    monkeypatch.setenv(shim.CACHE_MARK_ENV, "1")
+    body, notes = shim.to_anthropic({
+        "model": "m",
+        "messages": [{"role": "system", "content": "you are an agent"},
+                     {"role": "user", "content": "task"},
+                     {"role": "assistant", "content": "working"},
+                     {"role": "user", "content": "next"}],
+        "tools": [{"type": "function", "function": {"name": "a"}},
+                  {"type": "function", "function": {"name": "b"}}],
+    })
+    assert body["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in body["tools"][0], "one breakpoint at the end covers the whole block"
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    marked = [i for i, m in enumerate(body["messages"])
+              if any("cache_control" in b for b in m["content"])]
+    assert marked == [len(body["messages"]) - 2], "the turn before the newest one"
+    assert sum("cacheable" in n for n in notes) == 3
+
+
+def test_cache_marking_does_not_rewrite_content(monkeypatch):
+    monkeypatch.setenv(shim.CACHE_MARK_ENV, "1")
+    body, _ = shim.to_anthropic({"model": "m", "messages": [
+        {"role": "user", "content": "first"}, {"role": "assistant", "content": "second"},
+        {"role": "user", "content": "third"}]})
+    texts = [b["text"] for m in body["messages"] for b in m["content"] if b.get("type") == "text"]
+    assert texts == ["first", "second", "third"]
+
+
+def test_a_single_message_request_marks_no_history(monkeypatch):
+    monkeypatch.setenv(shim.CACHE_MARK_ENV, "1")
+    body, notes = shim.to_anthropic({"model": "m", "messages": [{"role": "user", "content": "only"}]})
+    assert not any("history through" in n for n in notes)
+
+
+def test_the_cache_marker_carries_the_warning_that_it_drops_content_on_this_gateway(monkeypatch):
+    """Measured, not assumed: a four-message request carrying 4,333 input tokens unmarked came back reporting 25,
+    cache legs zero, with the system prompt, tool schemas and history gone. The same silent shrinking that made an
+    earlier arm worthless, reproduced by a change meant to fix a different distortion."""
+    monkeypatch.setenv(shim.CACHE_MARK_ENV, "1")
+    _, notes = shim.to_anthropic({"model": "m", "messages": [{"role": "user", "content": "x"},
+                                                             {"role": "assistant", "content": "y"},
+                                                             {"role": "user", "content": "z"}]})
+    assert any("DROPPED rather than cached" in n for n in notes)
+
+
+def test_the_shrink_floor_is_far_below_observed_traffic():
+    """Its job is to catch a collapse, not to police a tokenizer. Real traffic on this path runs about 45 billed
+    tokens per 100 bytes; both observed failures were two orders of magnitude below the floor."""
+    assert shim.MIN_BILLED_PER_100_BYTES < 45 / 10
+    # The two real failures: 25 tokens against a 4-message history, and 6 tokens against a full transcript.
+    assert 25 * 100.0 / 20_000 < shim.MIN_BILLED_PER_100_BYTES

@@ -42,6 +42,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TRANSLATED = {"model", "messages", "tools", "tool_choice", "max_tokens", "max_completion_tokens", "temperature",
               "top_p", "stream", "stream_options", "stop"}
 
+#: Whether to mark the reusable part of a request cacheable. Off by default and switched on per deployment,
+#: because it changes what the request costs and therefore what a comparison measures.
+#:
+#: This exists because a two-arm comparison was distorted by its absence. The self-hosted arm read 91.4% of its
+#: input from a prefix cache; the metered arm read 0%, because nothing on that path asked for caching. The
+#: resulting break-even price -- 0.69 dollars per million tokens -- compared an optimised reservation against a
+#: metered arm that had been left unoptimised, which is a fact about the experiment and not about either offering.
+#:
+#: **AND ON THIS GATEWAY IT MUST STAY OFF.** Switching it on was measured, not assumed, and the result is worse
+#: than caching being unavailable: the gateway does not cache the marked blocks, it DROPS them. A four-message
+#: request that carried 4,333 input tokens unmarked came back reporting 25, with the cache legs at zero and the
+#: system prompt, the tool schemas and the history all gone. That is the same silent shrinking that made an
+#: earlier arm worthless, reproduced by a change intended to fix a different distortion -- so the guard below
+#: exists, and the switch defaults off.
+CACHE_MARK_ENV = "SHIM_CACHE_CONTROL"
+
+#: Below this many billed input tokens per 100 bytes of message content, a reply is treated as evidence that the
+#: request was shrunk in flight rather than answered. Real traffic on this path runs about 45 (2.2 bytes a token);
+#: the two failures seen here both produced ratios two orders of magnitude below it. It is deliberately far under
+#: anything observed, because its job is to catch a collapse and not to police a tokenizer.
+MIN_BILLED_PER_100_BYTES = 2.0
+
 #: Message roles this understands. An unrecognised role used to become a user turn, which mistranslates a
 #: `developer` or legacy `function` message into something with different meaning.
 ROLES = {"system", "user", "assistant", "tool"}
@@ -60,6 +82,34 @@ def _text_of(content) -> str:
         if isinstance(c, dict) and c.get("type") in (None, "text"):
             parts.append(c.get("text") or "")
     return "\n".join(parts)
+
+
+def _mark_cacheable(body: dict, notes: list) -> None:
+    """Mark the stable prefix of a request cacheable, the way an agent loop makes it worthwhile.
+
+    Two breakpoints and no more, because the API allows a small number and the useful ones are obvious: the tool
+    schemas and system prompt, which are identical on every turn of a run, and the end of the history as it stood
+    before the newest turn, which is identical to the previous request's whole history. That second one is what
+    turns an agent loop from re-reading its transcript at the fresh rate into re-reading it at the cache rate.
+
+    Nothing here reorders or rewrites content. A cache marker is a hint about what may be reused; if the provider
+    ignores it, the reply's own cache legs come back zero and the reconciliation shows it.
+    """
+    if body.get("tools"):
+        body["tools"][-1] = {**body["tools"][-1], "cache_control": {"type": "ephemeral"}}
+        notes.append("marked the tool schemas cacheable")
+    system = body.get("system")
+    if isinstance(system, str) and system:
+        body["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        notes.append("marked the system prompt cacheable")
+    msgs = body.get("messages") or []
+    if len(msgs) >= 2:
+        # The turn before the newest one: everything up to here was in the previous request too.
+        target = msgs[-2]
+        blocks = target.get("content")
+        if isinstance(blocks, list) and blocks:
+            blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+            notes.append(f"marked history through message {len(msgs) - 2} cacheable")
 
 
 def to_anthropic(req: dict) -> tuple[dict, list[str]]:
@@ -159,6 +209,10 @@ def to_anthropic(req: dict) -> tuple[dict, list[str]]:
                       "input_schema": fn.get("parameters") or {"type": "object", "properties": {}}})
     if tools:
         body["tools"] = tools
+    if os.environ.get(CACHE_MARK_ENV, "").lower() in ("1", "true", "yes"):
+        _mark_cacheable(body, notes)
+        notes.append("WARNING: cache marking is on. On the gateway measured here it causes the marked blocks to "
+                     "be DROPPED rather than cached, which shrinks the request silently")
     tc = req.get("tool_choice")
     if tc is not None:
         if tc == "auto":
@@ -299,6 +353,22 @@ class Handler(BaseHTTPRequestHandler):
 
         out, reply_notes = to_openai(doc, req.get("model") or "gateway")
         notes = notes + reply_notes
+        # The general guard against a request being shrunk in flight, which has now happened twice by two
+        # different mechanisms: a client library that sent only the newest turn, and a cache marker that made the
+        # gateway drop the blocks it was asked to cache. Both were invisible in the outcomes and immediate in this
+        # ratio. Refused rather than warned, because a run that continues past it produces a plausible number.
+        content_bytes = sum(len(json.dumps(m.get("content") or "")) for m in (req.get("messages") or []))
+        billed = out["usage"]["billed_input_tokens"]
+        if content_bytes >= 2000 and billed * 100.0 / content_bytes < MIN_BILLED_PER_100_BYTES:
+            detail = (f"the request carried {content_bytes:,} bytes of message content and the reply reports "
+                      f"{billed:,} billed input tokens, a ratio of "
+                      f"{billed * 100.0 / content_bytes:.2f} per 100 bytes against a floor of "
+                      f"{MIN_BILLED_PER_100_BYTES}. Real traffic here runs about 45. Something between this "
+                      "process and the model discarded most of the request, which is invisible in an outcome and "
+                      "immediate here")
+            self._json(502, {"error": {"message": detail, "type": "request_shrunk_in_flight"}})
+            self._record(req, out, notes + [detail], refused=True, delivered=False)
+            return
         if not want_stream:
             self._json(200, out)
             self._record(req, out, notes, delivered=True)
