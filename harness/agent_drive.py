@@ -328,6 +328,10 @@ def main() -> int:
                         "trace_id": row["trace_id"],
                         "item_id": args.item_id or args.tag,
                         "run_group": args.run_group,
+                        # The definition the driver ASKED for. The telemetry reports one per span, and a
+                        # delegating agent emits a different one per subagent, so the run's own definition has to
+                        # come from the driver or a delegate's name gets read as the candidate's.
+                        "agent_definition": spec[agent].get("agent_definition") or None,
                         "agent": name,
                         "iteration": i,
                         "state": "pending_oracle",

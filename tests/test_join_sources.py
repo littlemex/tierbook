@@ -455,9 +455,8 @@ def test_an_admitted_unstamped_row_is_marked_on_the_row(tmp_path):
     assert rows["i2"]["cohort_membership"] == "asserted_by_operator_no_driver_stamp"
 
 
-def test_a_run_whose_turns_used_different_candidates_is_not_attributed_to_one(tmp_path):
-    """The provider set was already computed to decide metering, so the information to notice this was there.
-    Stamping the row with the first turn's model misattributes the rest."""
+def test_a_run_served_by_two_models_is_not_attributed_to_one(tmp_path):
+    """Stamping the row with the first turn's model would misattribute the rest."""
     traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1}, model="A"),
                                      span("t1", "opencode.llm", start=2, legs={"out": 1}, model="B")])
     outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [{"trace_id": "t1", "item_id": "i1",
@@ -465,7 +464,24 @@ def test_a_run_whose_turns_used_different_candidates_is_not_attributed_to_one(tm
     code, out = run_cli(tmp_path, outcomes, traces)
     row = json.loads(out.read_text())["rows"][0]
     assert row["candidate"] is None
-    assert [c["model"] for c in row["candidates_mixed"]] == ["A", "B"]
+    assert [c["model"] for c in row["served_mixed"]] == ["A", "B"]
+
+
+def test_delegation_to_a_subagent_is_recorded_not_treated_as_another_candidate(tmp_path):
+    """An agent that delegates emits a different agent.name per subagent. Keying the candidate on that split one
+    run across several records -- one cohort produced `agent-build` and `agent-unknown` -- and the paired
+    comparison then had two arms it could not line up. The candidate is (model, endpoint); the definition is not
+    part of it."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1}, agent="build"),
+                                     span("t1", "opencode.llm", start=2, legs={"out": 1}, agent="explore")])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [
+        {"trace_id": "t1", "item_id": "i1", "state": "solved", "agent_definition": "build"}])
+    code, out = run_cli(tmp_path, outcomes, traces)
+    row = json.loads(out.read_text())["rows"][0]
+    assert row["candidate"]["agent"] == "build", "the definition the driver asked for"
+    assert row["candidate"]["model"] == "M"
+    assert row["agent_definitions_observed"] == ["build", "explore"]
+    assert "served_mixed" not in row, "one model, one endpoint: one candidate"
 
 
 def test_uniform_trials_do_not_rule_out_a_cohort_collected_twice(tmp_path):
@@ -510,7 +526,7 @@ def test_a_metered_cohorts_charge_reaches_the_family_record(tmp_path):
                         "--joined", str(joined), "--out", str(out)],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
-    rec = json.loads((out / "tiers" / "agent-a.json").read_text())
+    rec = json.loads((out / "tiers" / "agent-a-M.json").read_text())
     assert rec["families"]["agentic-coding"]["bill_usd"] == pytest.approx(0.35)
 
 
@@ -538,6 +554,55 @@ def test_a_mixed_cohort_does_not_present_the_metered_subsets_bill_as_the_whole(t
                         "--joined", str(joined), "--out", str(out)],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
-    fam = json.loads((out / "tiers" / "agent-a.json").read_text())["families"]["agentic-coding"]
+    fam = json.loads((out / "tiers" / "agent-a-M.json").read_text())["families"]["agentic-coding"]
     assert "bill_usd" not in fam
     assert "every row carried one" in fam["bill_usd_absent_because"]
+
+
+def test_two_arms_differing_only_in_the_model_get_different_ids(tmp_path):
+    """The id had carried only the agent definition, so two arms differing in the model produced the same one --
+    and writing the second into a registry silently overwrote the first, turning the pair that was the whole point
+    of the experiment into one record."""
+    import subprocess
+    out = tmp_path / "led"
+    for model in ("Qwen-35B", "claude-haiku"):
+        joined = tmp_path / f"joined-{model}.json"
+        joined.write_text(json.dumps({
+            "rows": [{"trace_id": f"t-{model}", "item_id": "i1", "state": "solved", "wall_s": 5.0, "turns": 1,
+                      "candidate": {"agent": "build", "model": model, "provider": "p"},
+                      "legs": {"fresh_in": 10, "cached_in": 0, "cache_write": 0, "out": 1},
+                      "cost": {"kind": "per_period_amortised", "usd": None}}],
+            "coverage": {"outcomes": 1, "joined": 1, "rate": 1.0, "unjoined": []},
+            "trials": {"uniform": True, "trials_per_item": 1, "observed": [1]},
+        }))
+        r = subprocess.run([sys.executable, str(ROOT / "harness" / "sweep_to_ledger.py"),
+                            "--joined", str(joined), "--out", str(out)],
+                           capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, r.stderr
+    names = sorted(x.name for x in (out / "tiers").iterdir())
+    assert names == ["agent-build-Qwen-35B.json", "agent-build-claude-haiku.json"]
+
+
+def test_a_colliding_candidate_id_is_refused_rather_than_overwriting(tmp_path):
+    """Two cohorts producing one id are not distinguishable as candidates, and the second silently replacing the
+    first is the failure this guards."""
+    import subprocess
+    out = tmp_path / "led"
+    joined = tmp_path / "joined.json"
+    joined.write_text(json.dumps({
+        "rows": [{"trace_id": "t1", "item_id": "i1", "state": "solved", "wall_s": 5.0, "turns": 1,
+                  "candidate": {"agent": "build", "model": "M", "provider": "p"},
+                  "legs": {"fresh_in": 10, "cached_in": 0, "cache_write": 0, "out": 1},
+                  "cost": {"kind": "per_period_amortised", "usd": None}}],
+        "coverage": {"outcomes": 1, "joined": 1, "rate": 1.0, "unjoined": []},
+        "trials": {"uniform": True, "trials_per_item": 1, "observed": [1]},
+    }))
+    first = subprocess.run([sys.executable, str(ROOT / "harness" / "sweep_to_ledger.py"),
+                            "--joined", str(joined), "--out", str(out)],
+                           capture_output=True, text=True, timeout=120)
+    assert first.returncode == 0
+    again = subprocess.run([sys.executable, str(ROOT / "harness" / "sweep_to_ledger.py"),
+                            "--joined", str(joined), "--out", str(out)],
+                           capture_output=True, text=True, timeout=120)
+    assert again.returncode != 0
+    assert "already exists in this registry" in (again.stdout + again.stderr)

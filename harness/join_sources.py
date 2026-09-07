@@ -262,17 +262,30 @@ def join(outcomes: dict, traces: dict, charges: dict, *, metered_providers: set[
         # beside that total leaves the total looking usable. Marked unpriceable here, where the row is built,
         # rather than hoping a refusal downstream sees the marker.
         priceable = not absent
-        # A run whose turns did not all go to one candidate cannot be attributed to one. The provider set was
-        # already computed above to decide metering, so the information to notice this was present.
-        candidates = {json.dumps(t["candidate"], sort_keys=True) for t in tr["turns"]}
-        mixed = len(candidates) > 1
+        # A run whose turns did not all go to one candidate cannot be attributed to one -- but "candidate" is
+        # (model, endpoint, decode policy), and the AGENT DEFINITION is not part of it. An agent that delegates
+        # emits a different `agent.name` per subagent, so keying on the whole span attribute split one run across
+        # several records: a first pass produced `agent-build` and `agent-unknown` from one cohort, and the paired
+        # comparison then had two arms it could not line up. The definitions observed are recorded instead, which
+        # is the delegation being visible rather than being mistaken for a candidate.
+        served = {(t["candidate"].get("model"), t["candidate"].get("provider")) for t in tr["turns"]}
+        definitions = sorted({t["candidate"].get("agent") for t in tr["turns"]
+                              if t["candidate"].get("agent")})
+        mixed = len(served) > 1
+        # The definition the driver asked for, which is a property of the run rather than of a delegate's turn.
+        root_definition = oc.get("agent_definition") or (definitions[0] if definitions else None)
         rows.append({
             "trace_id": tid,
             "item_id": oc.get("item_id"),
             "state": oc.get("state"),
             "unobserved_reason": oc.get("unobserved_reason"),
-            "candidate": tr["turns"][0]["candidate"] if tr["turns"] and not mixed else None,
-            **({"candidates_mixed": [json.loads(c) for c in sorted(candidates)]} if mixed else {}),
+            "candidate": ({"agent": root_definition,
+                           "model": tr["turns"][0]["candidate"].get("model"),
+                           "provider": tr["turns"][0]["candidate"].get("provider")}
+                          if tr["turns"] and not mixed else None),
+            **({"agent_definitions_observed": definitions} if len(definitions) > 1 else {}),
+            **({"served_mixed": [{"model": m, "provider": pr} for m, pr in sorted(
+                served, key=lambda x: (str(x[0]), str(x[1])))]} if mixed else {}),
             # Carried onto the joined row, not left on the outcome row: `join` builds a new dict, and every
             # consumer reads these rows rather than the outcomes file.
             **({"cohort_membership": oc["cohort_membership"]} if oc.get("cohort_membership") else {}),

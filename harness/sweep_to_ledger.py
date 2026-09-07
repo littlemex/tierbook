@@ -150,6 +150,13 @@ def from_joined(a, doc: dict, rate: dict) -> int:
     for key, p in sorted(per.items()):
         c = p["candidate"]
         agent = c.get("agent") or "unknown"
+        # The id carries the MODEL, not only the agent definition. It did not, and two arms differing only in the
+        # model therefore produced the same id -- so writing the second arm into a registry silently overwrote the
+        # first, and the pair that was the entire point of the experiment became one record. The rule this file
+        # states in its own docstring, that a candidate is (agent, model, endpoint, decode policy), was being
+        # broken by the identifier for it.
+        model = (c.get("model") or "unknown-model").replace("/", "-")
+        cid = f"agent-{agent}-{model}"
         ids = sorted(i["item_id"] for i in p["items"] if i["item_id"])
         suite_digest = hashlib.sha256(
             ("SWE-bench-Verified-pilot-subset\0" + "\0".join(ids)).encode()).hexdigest()
@@ -159,10 +166,10 @@ def from_joined(a, doc: dict, rate: dict) -> int:
                 "derived from the suite label and this cohort's sorted item ids, not from the benchmark's "
                 "own task definitions. It detects a different item SET under this label, not a changed "
                 "upstream release.",
-            "run_id": f"joined-{a.family}:{agent}",
+            "run_id": f"joined-{a.family}:{cid}",
             "scorer_version": "SWE-bench Verified FAIL_TO_PASS + PASS_TO_PASS via agent/score.py; the test "
                               "patch is applied only after the candidate's diff is taken",
-            "subject": f"agent-{agent}",
+            "subject": cid,
             "family": a.family,
             "trials_per_item": trials_per_item,
             "produced_at": "2026-09-07",
@@ -178,7 +185,7 @@ def from_joined(a, doc: dict, rate: dict) -> int:
             lines.append(json.dumps(v, sort_keys=True))
         body = "\n".join(lines) + "\n"
         digest = hashlib.sha256(body.encode()).hexdigest()
-        ev_name = f"{a.family}-agent-{agent}-{digest[:16]}.jsonl"
+        ev_name = f"{a.family}-{cid}-{digest[:16]}.jsonl"
         (ev_dir / ev_name).write_text(body)
 
         legs = p["legs"]
@@ -187,7 +194,7 @@ def from_joined(a, doc: dict, rate: dict) -> int:
         kinds = sorted(k for k in p["cost_kinds"] if k)
         rec = {
             "schema_version": 1,
-            "id": f"agent-{agent}",
+            "id": cid,
             "serves": {"model": c.get("model"), "endpoint": c.get("provider")},
             "measured_at": "2026-09-07",
             "provenance": {
@@ -294,12 +301,17 @@ def from_joined(a, doc: dict, rate: dict) -> int:
                 }
             },
         }
-        (tiers_dir / f"agent-{agent}.json").write_text(json.dumps(rec, indent=1) + "\n")
-        written.append((agent, solved, len(p["items"]), total_in, kinds))
+        out_path = tiers_dir / f"{cid}.json"
+        if out_path.exists():
+            raise SystemExit(f"[FAIL] {out_path.name} already exists in this registry. Two cohorts produced the "
+                            "same candidate id, which means they are not distinguishable as candidates -- and "
+                            "writing the second over the first is how a two-arm comparison becomes one record.")
+        out_path.write_text(json.dumps(rec, indent=1) + "\n")
+        written.append((cid, solved, len(p["items"]), total_in, kinds))
 
     print(f"wrote {len(written)} records to {tiers_dir} and artifacts to {ev_dir}")
-    for agent, s_, at, ti, kinds in written:
-        print(f"  agent-{agent:11s} {s_:2d}/{at}  in={ti:,}  cost_kinds={kinds}")
+    for cid, s_, at, ti, kinds in written:
+        print(f"  {cid:44s} {s_:2d}/{at}  in={ti:,}  cost_kinds={kinds}")
     return 0
 
 
