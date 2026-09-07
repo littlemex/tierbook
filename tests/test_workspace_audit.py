@@ -201,3 +201,97 @@ def test_a_scratch_file_written_outside_the_workspace_is_caught():
     directory the run is supposed to be confined to, and no named argument records it."""
     f = call("bash", {"command": f"cd {WS} && cat > /tmp/test_typehints.py << 'EOF'\nclass C: pass\nEOF"})
     assert f["shell_paths_outside"] == ["/tmp/test_typehints.py"]
+
+
+# --- every clause of the contract's pass condition, including the one the code used to drop -------
+
+
+def test_the_refusal_string_is_pinned_to_a_real_span():
+    """Cut from the telemetry rather than guessed: a change in the tool's wording must fail here rather than
+    silently zeroing the count, which would make the verdict pass on ignorance."""
+    observed = "The user rejected permission to use this specific tool call."
+    assert wa.REFUSED in observed
+    f = call("grep", {"path": "/", "pattern": "x"}, success=False, error=observed)
+    assert f["refused"] is True and f["refused_for_a_path"] is True
+
+
+def test_a_path_refusal_counts_against_the_verdict(tmp_path):
+    """The contract's pass condition says zero permission rejections attributable to a path. The code counted them,
+    printed them, and then left them out of the verdict -- keeping the fragile half of a deliberately redundant
+    pair and dropping the robust one."""
+    span = {"traceId": "t1", "name": "opencode.tool.grep",
+            "attributes": [{"key": "tool.name", "value": {"stringValue": "grep"}},
+                           {"key": "tool.parameters",
+                            "value": {"stringValue": json.dumps({"path": "/", "pattern": "x"})}},
+                           {"key": "tool.success", "value": {"boolValue": False}},
+                           {"key": "tool.error", "value": {"stringValue":
+                                                           "The user rejected permission to use this call."}}]}
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "incorrect",
+                                    "returned": "/work/returned/opencode-abc.tar"}) + "\n")
+    res = wa.audit(traces, outcomes, [])
+    assert res["with_path_refusals"] == 1
+    assert res["mechanism_pass"] is False
+
+
+def test_a_refusal_about_a_tools_own_arguments_does_not_count_against():
+    """Otherwise a `todowrite` refused for omitting a schema key would fail a change about workspaces."""
+    f = call("todowrite", {"todos": [{"content": "x"}]}, success=False,
+             error='rejected permission is not the reason; SchemaError(Missing key ["priority"])')
+    assert f["refused"] is True and f["refused_for_a_path"] is False
+
+
+def test_the_module_says_it_does_decide_this_one_thing():
+    """The other instruments here report and decide nothing. This one is a pass condition, so it returns a verdict
+    and an exit status -- and saying both would be a contradiction."""
+    doc = Path(ROOT / "harness" / "workspace_audit.py").read_text()
+    assert "This one does decide something" in doc
+    assert "It reports; it decides nothing." not in doc
+
+
+# --- attempted, as the contract means it after being amended ---------------------------------------
+
+
+def test_attempted_is_a_change_to_the_repository_not_activity():
+    """A review pointed out that "files touched" is satisfied by a scratch file, and the contract was amended before
+    any run. Both figures come from the oracle and are measured against the staged tree."""
+    did, why = wa.attempted({"files_touched": 1, "diff_bytes": 428})
+    assert did is True and "428 bytes" in why
+
+
+def test_zero_files_is_not_an_attempt():
+    did, why = wa.attempted({"files_touched": 0, "diff_bytes": 0})
+    assert did is False and "nothing was attempted" in why
+
+
+def test_files_touched_with_an_empty_diff_is_reported_as_neither():
+    """A run that opened files and changed nothing is a third thing, and folding it into either answer would hide
+    it."""
+    did, why = wa.attempted({"files_touched": 3, "diff_bytes": 0})
+    assert did is False and "which is not a change" in why
+
+
+def test_a_missing_oracle_record_with_no_state_is_not_read_as_an_attempt():
+    assert wa.attempted(None)[0] is False
+    assert wa.attempted({})[0] is False
+    assert "nothing says this run changed anything" in wa.attempted({"rc": 0})[1]
+
+
+def test_a_solved_run_whose_counts_were_truncated_is_not_called_never_tried():
+    """The counts are parsed out of the scorer's captured output, which truncates: six of one cohort's twenty-four
+    runs lack them, including one that solved. Reading absence as "not attempted" put a solved run in that list."""
+    did, why = wa.attempted({"rc": 0, "tail": "..."}, "solved")
+    assert did is True
+    assert "rests on the state" in why and "truncated" in why
+
+
+def test_the_weaker_basis_is_not_used_where_the_counts_exist():
+    """The counts are the strong form the contract asks for, and a state must not override them."""
+    did, why = wa.attempted({"files_touched": 0, "diff_bytes": 0}, "solved")
+    assert did is False and "nothing was attempted" in why
+
+
+def test_an_unobserved_run_is_not_attempted_on_either_basis():
+    assert wa.attempted({"rc": 0}, "unobserved")[0] is False

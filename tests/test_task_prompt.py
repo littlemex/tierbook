@@ -20,14 +20,31 @@ def test_the_workspace_variant_states_an_absolute_path():
                    variant="workspace-bound")
     assert "/tmp/run-opencode-abc" in out
     assert "in the current directory" not in out
-    assert out.count("/tmp/run-opencode-abc") >= 2, "named where the agent reads and where it edits"
+    # Once, in the first sentence. The draft named it twice and the second mention was inside a sentence about
+    # enforcement that a phase-4 review showed the contract did not license.
+    assert out.count("/tmp/run-opencode-abc") == 1
 
 
-def test_it_states_the_two_environment_facts_the_failures_ran_into():
+def test_it_states_the_checkout_is_complete_which_is_the_true_and_useful_part():
     out = tp.build("pytest-dev/pytest", "the issue", workspace="/w", variant="workspace-bound")
     assert "complete checkout" in out, "one run tried to clone the repository"
-    assert "no network access" in out
-    assert "refused" in out, "the permission wall is stated rather than discovered"
+    assert "no need to fetch or clone" in out
+
+
+def test_it_does_not_claim_the_environment_is_offline_because_it_is_not():
+    """A run that solved fetched 5,010 bytes from raw.githubusercontent.com successfully. The `git clone` in the
+    other failure was stopped by the permission system, not by the absence of a network, and telling a model
+    something it can disprove in one call invites it to discount the rest of the prompt."""
+    out = tp.build("r", "p", workspace="/w", variant="workspace-bound")
+    assert "no network access" not in out
+    assert "cannot be fetched" not in out
+
+
+def test_it_does_not_talk_about_enforcement():
+    """A statement that paths outside the workspace "are refused" is about enforcement -- the text-channel twin of
+    the harness lever this change deliberately excluded, so that the prompt could be told apart from it."""
+    out = tp.build("r", "p", workspace="/w", variant="workspace-bound")
+    assert "refused" not in out and "not permitted" not in out
 
 
 def test_the_instructions_the_oracle_depends_on_survive_the_change():
@@ -88,7 +105,7 @@ def test_the_marker_survives_the_file_and_is_filled_at_run_time():
     assert tp.WORKSPACE_MARKER in text
     filled = tp.fill_workspace(text, "/tmp/run-opencode-abc")
     assert tp.WORKSPACE_MARKER not in filled
-    assert filled.count("/tmp/run-opencode-abc") >= 2
+    assert filled.count("/tmp/run-opencode-abc") == 1
 
 
 def test_filling_refuses_when_the_text_needs_a_workspace_and_none_is_given():
@@ -113,4 +130,4 @@ def test_a_problem_statement_containing_braces_is_not_mangled_by_the_marker_path
     filled = tp.fill_workspace(text, "/tmp/run-x")
     assert problem in filled, "the issue text is untouched"
     assert "{workspace}" in filled, "a brace in the issue stays a brace"
-    assert filled.count("/tmp/run-x") == 2, "only the marker was replaced"
+    assert filled.count("/tmp/run-x") == 1, "only the marker was replaced"

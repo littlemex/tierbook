@@ -1,0 +1,685 @@
+{
+ "runs": 24,
+ "clean": 16,
+ "with_outside_paths": 4,
+ "with_shell_paths_outside": 6,
+ "with_network": 1,
+ "with_refusals": 6,
+ "with_path_refusals": 6,
+ "solved_with_refusals": 0,
+ "workspace_unknown": [],
+ "no_tool_calls": [],
+ "not_attempted": [
+  "pydata__xarray-4695",
+  "pytest-dev__pytest-8399"
+ ],
+ "per_run": [
+  {
+   "item_id": "astropy__astropy-14365",
+   "state": "incorrect",
+   "trace_id": "bf05f7fcd1dea2a0adaf94e1d00c9783",
+   "workspace": "/tmp/run-opencode-bcfd37a3d0",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 495 bytes",
+   "tool_calls": 7,
+   "outside_workspace": 0,
+   "shell_paths_outside": 1,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/test.qdp"
+     ],
+     "args": "{\"command\":\"cd /tmp/run-opencode-bcfd37a3d0 && python3 -c \\\"\\nfrom astropy.table import Table\\n\\n# Create test file with lowercase commands\\nwith open('/tmp/test.qdp', 'w') as f:\\n    f.write('read se"
+    }
+   ]
+  },
+  {
+   "item_id": "astropy__astropy-14369",
+   "state": "solved",
+   "trace_id": "61dd36f1c771b57750a029f4a3c02329",
+   "workspace": "/tmp/run-opencode-c4cd6ae898",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'solved' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 48,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "astropy__astropy-14995",
+   "state": "solved",
+   "trace_id": "d998169e1e49d08a16490ba15951a9fe",
+   "workspace": "/tmp/run-opencode-46a65e4822",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 1105 bytes",
+   "tool_calls": 57,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "django__django-11880",
+   "state": "solved",
+   "trace_id": "9c0f95b8ed0e04b316ee417c8b70ebca",
+   "workspace": "/tmp/run-opencode-5c4b284672",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 428 bytes",
+   "tool_calls": 3,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "django__django-15128",
+   "state": "incorrect",
+   "trace_id": "8c6f52a315724607b06da829d8ed6428",
+   "workspace": "/tmp/run-opencode-b5cd0209f3",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 93,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "django__django-17084",
+   "state": "incorrect",
+   "trace_id": "c3f4b6822597a3d8db5969abf5feabf6",
+   "workspace": "/tmp/run-opencode-7aa9cb482d",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 2,
+   "outside_workspace": 1,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "read",
+     "outside_workspace": [
+      "filePath=/"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"filePath\":\"/\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "matplotlib__matplotlib-26208",
+   "state": "incorrect",
+   "trace_id": "8aae26d7abcc184bb0b7be5fba10f260",
+   "workspace": "/tmp/run-opencode-8c042ffb40",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 6,
+   "outside_workspace": 4,
+   "shell_paths_outside": 1,
+   "network": 0,
+   "refused": 5,
+   "refused_for_a_path": 4,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/run-opencode-8c042ffb4"
+     ],
+     "args": "{\"command\":\"find /tmp/run-opencode-8c042ffb4 -type f -name \\\"*.py\\\" | head -5\"}"
+    },
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-8c042ffb4"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"**/*.py\",\"path\":\"/tmp/run-opencode-8c042ffb4\"}"
+    },
+    {
+     "tool": "task",
+     "outside_workspace": [],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [],
+     "args": "{\"description\":\"Explore matplotlib stackplot/twinx issue\",\"prompt\":\"I need to understand a bug in matplotlib where dataLims get replaced by inf for charts with twinx if ax1 is a stackplot.\\n\\nThe issu"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/src/matplotlib"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"stackplot\",\"include\":\"*.py\",\"path\":\"/src/matplotlib\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/src/matplotlib"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"dataLim\",\"include\":\"*.py\",\"path\":\"/src/matplotlib\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/src/matplotlib"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"twinx\",\"include\":\"*.py\",\"path\":\"/src/matplotlib\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "matplotlib__matplotlib-26342",
+   "state": "solved",
+   "trace_id": "323d6c2067bf52d02a4ee1d51fe29d2e",
+   "workspace": "/tmp/run-opencode-66576b84eb",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 585 bytes",
+   "tool_calls": 24,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "mwaskom__seaborn-3187",
+   "state": "incorrect",
+   "trace_id": "341cdc3f9e20146e846041d988b53d92",
+   "workspace": "/tmp/run-opencode-1320b0b7cc",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 745 bytes",
+   "tool_calls": 90,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pallets__flask-5014",
+   "state": "solved",
+   "trace_id": "a7ebe5e7cf34410c21196fefd7aa9637",
+   "workspace": "/tmp/run-opencode-d9cb5ac510",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 436 bytes",
+   "tool_calls": 10,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "psf__requests-1142",
+   "state": "solved",
+   "trace_id": "f8861fda9b8ea2900d8cb86691933894",
+   "workspace": "/tmp/run-opencode-0056de8fc1",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 489 bytes",
+   "tool_calls": 5,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "psf__requests-2931",
+   "state": "incorrect",
+   "trace_id": "d0b100cf8e62cdf10ac2385e99a2987f",
+   "workspace": "/tmp/run-opencode-1de70f6401",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 564 bytes",
+   "tool_calls": 9,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pydata__xarray-3993",
+   "state": "incorrect",
+   "trace_id": "116f7342e9a3ccf0d14b3edf5c450e9c",
+   "workspace": "/tmp/run-opencode-34a92ed9ff",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 9,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pydata__xarray-4094",
+   "state": "solved",
+   "trace_id": "0a65902ee591185e505dbc0c6a6e82e7",
+   "workspace": "/tmp/run-opencode-a276e8e526",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "2 file(s) differ from the staged tree, 1393 bytes",
+   "tool_calls": 47,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pydata__xarray-4695",
+   "state": "unobserved",
+   "trace_id": "1666f3b6868e9323905b7217e9e2b0f0",
+   "workspace": "/tmp/run-opencode-188c339fd8",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": false,
+   "attempted_note": "zero files differ from the staged tree: nothing was attempted",
+   "tool_calls": 4,
+   "outside_workspace": 2,
+   "shell_paths_outside": 1,
+   "network": 0,
+   "refused": 3,
+   "refused_for_a_path": 2,
+   "findings": [
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/tmp"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"**/xarray/**/*.py\",\"path\":\"/tmp\"}"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp"
+     ],
+     "args": "{\"command\":\"find /tmp -name \\\"*.py\\\" -path \\\"*/xarray/*\\\" 2>/dev/null | head -50\"}"
+    },
+    {
+     "tool": "task",
+     "outside_workspace": [],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [],
+     "args": "{\"description\":\"Find the .loc method issue\",\"prompt\":\"Search the xarray repository in / for code related to the `.loc` accessor on DataArray. I need to find where a dimension named \\\"method\\\" could be"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"method.*pad.*backfill|Invalid fill method\",\"path\":\"/\",\"include\":\"*.py\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "pydata__xarray-6992",
+   "state": "incorrect",
+   "trace_id": "ee442477eb6d3a627ce5eabee2bb8e8b",
+   "workspace": "/tmp/run-opencode-93f8eef099",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 526 bytes",
+   "tool_calls": 9,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pylint-dev__pylint-4551",
+   "state": "incorrect",
+   "trace_id": "b7f0302276bfdee4e14fcb9419b176fb",
+   "workspace": "/tmp/run-opencode-7426d44b07",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 5011 bytes",
+   "tool_calls": 68,
+   "outside_workspace": 0,
+   "shell_paths_outside": 4,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/"
+     ],
+     "args": "{\"command\":\"ls /tmp/\"}"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/test_typehints.py"
+     ],
+     "args": "{\"command\":\"cd /tmp/run-opencode-7426d44b07 && cat > /tmp/test_typehints.py << 'EOF'\\nclass C:\\n    def __init__(self, a: str = None):\\n        self.a = a\\n    \\n    def get_a(self) -> str:\\n        r"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/pyreverse_output",
+      "/tmp/test_typehints.py"
+     ],
+     "args": "{\"command\":\"cd /tmp/run-opencode-7426d44b07 && python3 -m pylint.pyreverse.main -o /tmp/pyreverse_output /tmp/test_typehints.py 2>&1\"}"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [
+      "/tmp/pyreverse_output_dot",
+      "/tmp/test_typehints.py",
+      "/tmp/pyreverse_output_dot/classes_test_typehints.dot"
+     ],
+     "args": "{\"command\":\"cd /tmp/run-opencode-7426d44b07 && python3 -m pylint.pyreverse.main --output=/tmp/pyreverse_output_dot dot /tmp/test_typehints.py 2>&1 && cat /tmp/pyreverse_output_dot/classes_test_typehin"
+    }
+   ]
+  },
+  {
+   "item_id": "pylint-dev__pylint-6386",
+   "state": "incorrect",
+   "trace_id": "43ad30c10539b3bcc807d490c07dc350",
+   "workspace": "/tmp/run-opencode-ed6f928fa4",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 1007 bytes",
+   "tool_calls": 17,
+   "outside_workspace": 0,
+   "shell_paths_outside": 2,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/test_file.py"
+     ],
+     "args": "{\"command\":\"echo 'print(\\\"hello\\\")' > /tmp/test_file.py && python -m pylint /tmp/test_file.py -v 2>&1 | head -20\"}"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/test_file.py"
+     ],
+     "args": "{\"command\":\"python3 -c \\\"\\nimport sys\\nsys.path.insert(0, '.')\\nfrom pylint.lint.run import Run\\ntry:\\n    run = Run(['-v', '/tmp/test_file.py'])\\nexcept SystemExit:\\n    pass\\n\\\" 2>&1 | tail -10\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "pylint-dev__pylint-7277",
+   "state": "solved",
+   "trace_id": "0d35322f2c20d5c43ab89425c86bdb9a",
+   "workspace": "/tmp/run-opencode-32fae6fbc9",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 1230 bytes",
+   "tool_calls": 5,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pytest-dev__pytest-10356",
+   "state": "incorrect",
+   "trace_id": "d704c0e98ef8232e79c6044a5d762f43",
+   "workspace": "/tmp/run-opencode-a62f82ed0d",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 6,
+   "outside_workspace": 5,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 6,
+   "refused_for_a_path": 5,
+   "findings": [
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"**/pytest/**/*.py\",\"path\":\"/\"}"
+    },
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"**/testing/**/test_collection*.py\",\"path\":\"/\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"pytestmark\",\"path\":\"/\",\"include\":\"*.py\"}"
+    },
+    {
+     "tool": "task",
+     "outside_workspace": [],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [],
+     "args": "{\"description\":\"Explore pytest marks collection\",\"prompt\":\"I need to understand how pytest collects marks from classes, especially when dealing with multiple inheritance and MRO. \\n\\nThe issue is that"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"pytestmark\",\"path\":\"/tmp\",\"include\":\"*.py\"}"
+    },
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/tmp"
+     ],
+     "network": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "args": "{\"pattern\":\"**/*.py\",\"path\":\"/tmp\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "pytest-dev__pytest-7432",
+   "state": "incorrect",
+   "trace_id": "b5c71f229293c0a99930b5a6557eef74",
+   "workspace": "/tmp/run-opencode-646a4f41f3",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 566 bytes",
+   "tool_calls": 3,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pytest-dev__pytest-8399",
+   "state": "unobserved",
+   "trace_id": "b3fc8daf8193315fdc12b72e65fc9cde",
+   "workspace": "/tmp/run-opencode-b036831e6f",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": false,
+   "attempted_note": "zero files differ from the staged tree: nothing was attempted",
+   "tool_calls": 2,
+   "outside_workspace": 0,
+   "shell_paths_outside": 1,
+   "network": 1,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": true,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [
+      "/tmp",
+      "//github.com/pytest-dev/pytest.git"
+     ],
+     "args": "{\"command\":\"cd /tmp && git clone --depth 1 https://github.com/pytest-dev/pytest.git pytest-repo 2>/dev/null || echo \\\"Already cloned or error\\\"\",\"timeout\":30000}"
+    }
+   ]
+  },
+  {
+   "item_id": "scikit-learn__scikit-learn-14496",
+   "state": "solved",
+   "trace_id": "36114417623ac30f181ae0965b8b1f36",
+   "workspace": "/tmp/run-opencode-61fa5eb29c",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 1017 bytes",
+   "tool_calls": 9,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "scikit-learn__scikit-learn-15100",
+   "state": "solved",
+   "trace_id": "0f22693632cf0b78b92e06f09df6433f",
+   "workspace": "/tmp/run-opencode-41687fd413",
+   "workspace_source": "recovered from the returned tar's name, because no manifest carried this trace -- a second sweep over the same instances overwrites the first",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 584 bytes",
+   "tool_calls": 6,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  }
+ ],
+ "mechanism_pass": false,
+ "mechanism_note": "across every run and without reference to any outcome, the verdict is against: an out-of-workspace path in a named argument; one parsed out of a shell command, which is weaker evidence and is reported apart; a fetch; a permission refusal attributable to one of those, which is the backstop for paths the argument scan cannot see; a run whose workspace could not be established, since an unknown workspace cannot be audited; and a run that made no tool calls, since doing nothing would otherwise satisfy staying put. A refusal the tool raised about its own arguments is counted and does not count against"
+}

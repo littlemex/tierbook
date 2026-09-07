@@ -10,8 +10,16 @@ Neither run looked inside its own workspace. A run that solved, by contrast, add
 tool calls to an absolute path under its own workspace. The prompt said "in the current directory", and the agents
 that failed did not act as though a current directory existed.
 
-So the workspace is stated as an absolute path, and the environment's two relevant properties -- the checkout is
-complete, and there is no network -- are stated rather than left to be discovered by having a tool call refused.
+So the workspace is stated as an absolute path, and the checkout is stated to be complete at the revision in
+question, so there is nothing to fetch.
+
+**Two sentences that were drafted and cut**, both because they claimed more than was true or licensed. One said
+"there is no network access". A phase-4 review asked whether that was so, and it is not: a run that solved fetched
+5,010 bytes from `raw.githubusercontent.com` successfully. The `git clone` in the other failure was stopped by the
+permission system, not by the absence of a network, and telling a model something it can disprove in one call
+invites it to discount the rest. The other said paths outside the workspace "are refused" -- a statement about
+enforcement, which is the text-channel twin of the harness lever this change deliberately excluded so that the
+prompt could be told apart from it.
 
 **What deliberately did not change**, because both are load-bearing for the oracle rather than for the agent: the
 instruction not to write tests, since the instance's own test patch is applied after the diff is taken; and the
@@ -29,9 +37,8 @@ When you are done, stop.
 {problem}"""
 
 WORKSPACE_BOUND = """You are working in a checkout of the {repo} repository at {workspace}.
-That directory is a complete checkout: everything you need is already there. There is no network access, so the
-repository cannot be fetched and does not need to be. Read and edit files under {workspace} only; paths outside it
-are not part of this task and are refused.
+That directory is a complete checkout at the revision this task is about: everything you need to read and change
+is already there, and there is no need to fetch or clone anything.
 Fix the issue described below by editing the source files. Do not write any tests.
 When you are done, stop.
 

@@ -16,7 +16,10 @@ a network location. A path with no leading slash is relative to the workspace by
 inspected. The run's workspace comes from the driver's manifest; when that is missing it is recovered from the
 returned tar's name, which is how it had to be recovered once already after a second sweep overwrote the manifest.
 
-SCOPE (see ../SCOPE.md, which governs this file): an instrument. It reports; it decides nothing.
+**This one does decide something**, unlike the other instruments here, and the difference is deliberate: a change
+contract made "no run left its workspace" a pass condition, so there has to be one place that says whether it
+held. It returns a non-zero exit status when it did not. What it still does not decide is anything about a
+candidate -- no outcome, no rate, no policy.
 """
 from __future__ import annotations
 
@@ -29,8 +32,14 @@ from pathlib import Path
 #: pattern like `**/*.py` is not read as a path.
 PATH_KEYS = ("path", "filePath", "file_path", "cwd", "directory")
 
-#: A refusal by the permission system, as the tool reports it.
+#: A refusal by the permission system, as the tool reports it. The literal string observed in the telemetry is
+#: "The user rejected permission to use this specific tool call."; the fixture in the tests is cut from a real
+#: span so a change in that wording fails here rather than silently zeroing the count.
 REFUSED = "rejected permission"
+
+#: A refusal whose cause is a path or a fetch, as opposed to one the tool raised about its own arguments. The
+#: contract's pass condition says "zero permission rejections attributable to a path", and without this
+#: distinction a `todowrite` refused for omitting a schema key would count against a change about workspaces.
 
 #: Arguments that can actually reach the network. Scanning the whole argument blob over-fired on the first real
 #: cohort: it flagged a `webfetch` -- a tool whose entire purpose is the network, used by a run that solved -- and
@@ -107,6 +116,10 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
     if not outside and not network and not refused and not shell_outside:
         return None
     return {"tool": name, "outside_workspace": outside, "network": network, "refused": refused,
+            # Attribution, which the contract's pass condition asks for: a refusal that came with an
+            # out-of-workspace path or a fetch is this change's business, and one the tool raised about its own
+            # arguments is not.
+            "refused_for_a_path": bool(refused and (outside or shell_outside or network)),
             # Kept apart from `outside_workspace`: one is a named argument the tool contract defines, the other is
             # a string this file parsed, and they do not deserve the same confidence.
             "shell_paths_outside": shell_outside,
@@ -140,14 +153,17 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path]) -> dict:
     for t, row in sorted(rows.items(), key=lambda kv: kv[1].get("item_id") or ""):
         ws, ws_source = workspace_of(t, manifests, row.get("returned"))
         findings = [f for f in (audit_call(n, p, ok, e, ws) for n, p, ok, e in calls[t]) if f]
+        did, why = attempted(row.get("oracle"), row.get("state"))
         per_run.append({
             "item_id": row.get("item_id"), "state": row.get("state"), "trace_id": t,
             "workspace": ws, "workspace_source": ws_source,
+            "attempted": did, "attempted_note": why,
             "tool_calls": len(calls[t]),
             "outside_workspace": sum(1 for f in findings if f["outside_workspace"]),
             "shell_paths_outside": sum(1 for f in findings if f["shell_paths_outside"]),
             "network": sum(1 for f in findings if f["network"]),
             "refused": sum(1 for f in findings if f["refused"]),
+            "refused_for_a_path": sum(1 for f in findings if f["refused_for_a_path"]),
             "findings": findings,
         })
     clean = [r for r in per_run if not r["outside_workspace"] and not r["network"] and not r["refused"]
@@ -164,21 +180,57 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path]) -> dict:
         "with_shell_paths_outside": sum(1 for r in per_run if r["shell_paths_outside"]),
         "with_network": sum(1 for r in per_run if r["network"]),
         "with_refusals": sum(1 for r in per_run if r["refused"]),
+        "with_path_refusals": sum(1 for r in per_run if r["refused_for_a_path"]),
         "solved_with_refusals": sum(1 for r in per_run if r["refused"] and r["state"] == "solved"),
         "workspace_unknown": unknown_ws,
         "no_tool_calls": silent,
+        "not_attempted": [r["item_id"] for r in per_run if not r["attempted"]],
         "per_run": per_run,
+        # Every clause of the contract's pass condition, including the refusal one it used to drop. The two halves
+        # are redundant on purpose: the refusal count is the backstop for exactly the paths the argument scan
+        # cannot see, and an earlier version kept the fragile half and ignored the robust one.
         "mechanism_pass": (sum(1 for r in per_run
-                               if r["outside_workspace"] or r["network"] or r["shell_paths_outside"]) == 0
+                               if r["outside_workspace"] or r["network"] or r["shell_paths_outside"]
+                               or r["refused_for_a_path"]) == 0
                            and not unknown_ws and not silent),
-        "mechanism_note": ("the pass condition is zero out-of-workspace paths and zero network references across "
-                           "every run, checkable without reference to any outcome. Three things count against it "
-                           "besides those: a run whose workspace could not be established, because an unknown "
-                           "workspace cannot be audited; a run that made no tool calls at all, because doing "
-                           "nothing would otherwise satisfy staying put; and a shell command naming a path "
-                           "outside the workspace, read from the command string, which is weaker evidence than a "
-                           "named argument and is reported apart from it"),
+        "mechanism_note": ("across every run and without reference to any outcome, the verdict is against: an "
+                           "out-of-workspace path in a named argument; one parsed out of a shell command, which is "
+                           "weaker evidence and is reported apart; a fetch; a permission refusal attributable to "
+                           "one of those, which is the backstop for paths the argument scan cannot see; a run "
+                           "whose workspace could not be established, since an unknown workspace cannot be "
+                           "audited; and a run that made no tool calls, since doing nothing would otherwise "
+                           "satisfy staying put. A refusal the tool raised about its own arguments is counted and "
+                           "does not count against"),
     }
+
+
+def attempted(oracle: dict | None, state: str | None = None) -> tuple[bool, str]:
+    """Whether a run actually attempted the task, as the contract's second pass condition means it.
+
+    Not "files touched", which a scratch file satisfies -- a review said so and the contract was amended before any
+    run. The oracle reports how many files the returned tree differs in and by how many bytes, both measured
+    against the staged tree, so a non-empty diff is a change to the repository rather than activity somewhere.
+
+    **Two bases, and which one was used is reported.** The counts are parsed out of the scorer's captured output,
+    which is truncated, so six of one cohort's twenty-four runs do not carry them -- including one that solved. The
+    fallback is the state: `unobserved/unsupported` is what the scorer produces when zero files differ, so any other
+    scored state means the tree did differ. That is weaker evidence and it says so, rather than a solved run being
+    reported as never having tried.
+    """
+    o = oracle or {}
+    files = o.get("files_touched")
+    nbytes = o.get("diff_bytes")
+    if files is not None:
+        if not files:
+            return False, "zero files differ from the staged tree: nothing was attempted"
+        if nbytes is not None and nbytes <= 0:
+            return False, f"{files} file(s) differ but the diff is {nbytes} bytes, which is not a change"
+        return True, f"{files} file(s) differ from the staged tree, {nbytes} bytes"
+    if state in ("solved", "incorrect"):
+        return True, ("the oracle's counts were truncated out of its captured output, so this rests on the state: "
+                      f"{state!r} means a tree that differed was scored, since zero files differing is recorded as "
+                      "unobserved/unsupported instead")
+    return False, (f"no diff counts and state {state!r}, so nothing says this run changed anything")
 
 
 def main() -> int:
@@ -197,7 +249,10 @@ def main() -> int:
     print(f"{res['runs']} runs   clean {res['clean']}   out-of-workspace {res['with_outside_paths']}   "
           f"shell paths {res['with_shell_paths_outside']}   network {res['with_network']}   "
           f"refused {res['with_refusals']}")
-    print(f"  of the runs with a refusal, {res['solved_with_refusals']} solved")
+    print(f"  refusals attributable to a path or a fetch: {res['with_path_refusals']} runs; "
+          f"of all runs with any refusal, {res['solved_with_refusals']} solved")
+    if res["not_attempted"]:
+        print(f"  not attempted (no change to the repository): {res['not_attempted']}")
     for r in res["per_run"]:
         if not (r["outside_workspace"] or r["network"] or r["refused"]):
             continue
