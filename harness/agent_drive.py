@@ -226,6 +226,12 @@ def main() -> int:
                     help="append one JSONL row per run: trace_id, item_id and the run's own exit state. "
                          "The oracle's verdict is added later by whoever scores it")
     ap.add_argument("--item-id", help="the task's id, carried into the outcomes rows")
+    ap.add_argument("--run-group",
+                    help="an id for the invocation that launched this driver, written on every outcomes "
+                         "row. Killing a sweep does not kill its already-launched driver, and an orphan "
+                         "then appends to the outcomes file of whatever runs next -- which produced a "
+                         "duplicate item the ledger refused. With this, rows from another invocation are "
+                         "identifiable instead of silently mixed")
     ap.add_argument("--tag", default="untagged")
     ap.add_argument("--out", help="manifest path; default ~/tmp/e02/tap/runs-<tag>-<ts>.json")
     args = ap.parse_args()
@@ -317,6 +323,7 @@ def main() -> int:
                     fh.write(json.dumps({
                         "trace_id": row["trace_id"],
                         "item_id": args.item_id or args.tag,
+                        "run_group": args.run_group,
                         "agent": name,
                         "iteration": i,
                         "state": "pending_oracle",

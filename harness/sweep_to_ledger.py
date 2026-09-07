@@ -1,4 +1,10 @@
-"""Turn a sweep's results into ledger records, so the compiler can be asked what policy they support.
+"""Turn joined observations into ledger records, so the compiler can be asked what policy they support.
+
+**Reads the join, not the sweep.** The three sources -- the oracle's outcome, the agent's telemetry and the
+gateway's charge -- meet in `join_sources.py` on a trace id, and this reads that output. An earlier version
+read a sweep state and a recording pass-through directly, which made this a second producer of token figures
+alongside the agent's own telemetry; two producers of one number is two things to keep correct and a
+disagreement that surfaces later as a contradiction in a report.
 
 This closes the loop the project has never closed on real data: measurement -> ledger -> compile -> policy.
 Until it is closed, "the framework emits the supported policy" is a claim about code nobody has run on
@@ -31,6 +37,9 @@ import json
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+#: The legs a record carries, in the ledger's own spelling.
+LEG_KEYS = ("fresh_in", "cached_in", "cache_write", "out")
 
 #: The engine the sweep ran against. Part of the candidate, not context: a measurement of an agent on one
 #: model does not transfer to another model, and the affinity case in this sweep is why.
@@ -71,11 +80,188 @@ def legs_of(rows: list[dict]) -> tuple[int, int, int, int]:
     return fresh, read, write, out
 
 
+def _latency(wall: list[float]) -> dict:
+    """Latency from the wall times the driver observed.
+
+    The schema wants numbers, and a record with nulls here is refused -- correctly: a tier whose latency is
+    unstated cannot be excluded by a latency constraint, so the absence would silently widen the admissible
+    set. `concurrency_when_measured` is 1 and stated, because a latency measured alone is not the latency
+    under load and a reader who cannot see the concurrency will assume it was the deployment's.
+    """
+    w = sorted(wall)
+    n = len(w)
+    if not n:
+        raise SystemExit("[FAIL] no wall times in the joined rows; a record cannot state a latency it does "
+                         "not have, and the schema is right to refuse nulls here")
+    return {
+        "unit": "seconds_per_task",
+        "p50": round(w[n // 2], 1),
+        "mean": round(sum(w) / n, 1),
+        "p95": round(w[min(n - 1, int(0.95 * n))], 1),
+        "max": round(w[-1], 1),
+        "concurrency_when_measured": 1,
+    }
+
+
+def from_joined(a, doc: dict, rate: dict) -> int:
+    """Build one record per candidate from joined rows.
+
+    The candidate is the tuple the telemetry reported, so a record cannot be keyed by model with the agent
+    demoted to metadata -- which is the laundering that would hide an agent-model affinity inside a model's
+    score.
+    """
+    per: dict[str, dict] = {}
+    for row in doc["rows"]:
+        c = row.get("candidate") or {}
+        key = f"{c.get('agent')}|{c.get('model')}|{c.get('provider')}"
+        p = per.setdefault(key, {"candidate": c, "items": [], "legs": dict.fromkeys(LEG_KEYS, 0),
+                                 "turns": 0, "cost_kinds": set(), "metered_usd": 0.0, "wall": []})
+        p["items"].append({
+            "item_id": row.get("item_id"),
+            "state": row.get("state"),
+            "unobserved_reason": row.get("unobserved_reason"),
+        })
+        for k in LEG_KEYS:
+            p["legs"][k] += int((row.get("legs") or {}).get(k) or 0)
+        p["turns"] += int(row.get("turns") or 0)
+        if row.get("wall_s"):
+            p["wall"].append(float(row["wall_s"]))
+        cost = row.get("cost") or {}
+        p["cost_kinds"].add(cost.get("kind"))
+        if cost.get("kind") == "per_request_metered" and cost.get("usd") is not None:
+            p["metered_usd"] += float(cost["usd"])
+
+    out_root = Path(a.out)
+    tiers_dir, ev_dir = out_root / "tiers", out_root / "evidence"
+    tiers_dir.mkdir(parents=True, exist_ok=True)
+    ev_dir.mkdir(parents=True, exist_ok=True)
+
+    written = []
+    for key, p in sorted(per.items()):
+        c = p["candidate"]
+        agent = c.get("agent") or "unknown"
+        ids = sorted(i["item_id"] for i in p["items"] if i["item_id"])
+        suite_digest = hashlib.sha256(
+            ("SWE-bench-Verified-pilot-subset\0" + "\0".join(ids)).encode()).hexdigest()
+        header = {
+            "suite_manifest_digest": f"standin:sha256:{suite_digest}",
+            "suite_manifest_digest_caveat":
+                "derived from the suite label and this cohort's sorted item ids, not from the benchmark's "
+                "own task definitions. It detects a different item SET under this label, not a changed "
+                "upstream release.",
+            "run_id": f"joined-{a.family}:{agent}",
+            "scorer_version": "SWE-bench Verified FAIL_TO_PASS + PASS_TO_PASS via agent/score.py; the test "
+                              "patch is applied only after the candidate's diff is taken",
+            "subject": f"agent-{agent}",
+            "family": a.family,
+            "trials_per_item": 1,
+            "produced_at": "2026-09-07",
+        }
+        lines = [json.dumps(header, sort_keys=True)]
+        for it in sorted(p["items"], key=lambda x: x["item_id"] or ""):
+            v = {"item_id": it["item_id"], "state": it["state"]}
+            if it["state"] == "unobserved":
+                # The reason is required for an unobserved verdict and forbidden otherwise; the loader
+                # refuses a row that carries both, which is the check that keeps a configuration fact out of
+                # a capability rate.
+                v["unobserved_reason"] = it["unobserved_reason"] or "execution_error"
+            lines.append(json.dumps(v, sort_keys=True))
+        body = "\n".join(lines) + "\n"
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        ev_name = f"{a.family}-agent-{agent}-{digest[:16]}.jsonl"
+        (ev_dir / ev_name).write_text(body)
+
+        legs = p["legs"]
+        total_in = legs["fresh_in"] + legs["cached_in"] + legs["cache_write"]
+        solved = sum(1 for i in p["items"] if i["state"] == "solved")
+        kinds = sorted(k for k in p["cost_kinds"] if k)
+        rec = {
+            "schema_version": 1,
+            "id": f"agent-{agent}",
+            "serves": {"model": c.get("model"), "endpoint": c.get("provider")},
+            "measured_at": "2026-09-07",
+            "provenance": {
+                "repo": "github.com/littlemex/tierbook",
+                **({"commit": a.commit} if a.commit else {}),
+                "harness": "harness/sweep_agents.py, joined by harness/join_sources.py on a trace id",
+                "candidate_is": "(agent definition, model, endpoint, decode policy)",
+                "validity_conditions": VALIDITY,
+                # Which kinds of cost the rows carried. A record whose rows are all amortised has no
+                # per-request charge by construction, and saying so beats leaving a reader to infer it.
+                "cost_kinds": kinds,
+            },
+            "claim": {"kind": "correctness", "metric": "resolved by the instance's own tests"},
+            "oracle": {
+                "kind": "executable_acceptance",
+                "checker_id": "SWE-bench Verified FAIL_TO_PASS + PASS_TO_PASS via agent/score.py",
+                "independent_of_candidate": True,
+                "existed_before_candidate_output": True,
+                "generator": None, "coverage": None,
+            },
+            "measurement_target": {
+                "endpoint": c.get("provider"),
+                "served_model_version": c.get("model"),
+                "harness_commit": a.commit,
+                "serving_stack": "vLLM, FP8, prefix caching on, max-num-seqs 128, 2 replicas",
+                "gateway_version": None, "gateway_surface": None,
+            },
+            "adapter": {
+                "wire": "chat_completions", "tool_calling": "native", "agent": agent,
+                "compliance": {
+                    "empty_diff_rate": round(
+                        sum(1 for i in p["items"] if i["unobserved_reason"] == "unsupported")
+                        / len(p["items"]), 4) if p["items"] else None,
+                    "timeout_rate": round(
+                        sum(1 for i in p["items"] if i["unobserved_reason"] == "execution_error")
+                        / len(p["items"]), 4) if p["items"] else None,
+                    "steps_observed": p["turns"],
+                },
+            },
+            "price_card": {
+                "unit": "usd_per_mtok",
+                "source": f"measured rate card for the self-hosted engine, read from {Path(a.tiers).name}",
+                "fresh_in": rate["fresh_in"], "cached_in": rate["cache_read"],
+                "cache_write": rate["cache_write"], "output": rate["out"],
+                "hourly_fixed_usd": None,
+                "cache_hit_rate_observed": round(legs["cached_in"] / total_in, 4) if total_in else None,
+                "reusable_cache_tokens": None,
+            },
+            "latency": _latency(p["wall"]),
+            "reliability": {
+                "attempts_observed": len(p["items"]),
+                "failures": sum(1 for i in p["items"] if i["unobserved_reason"] == "execution_error"),
+                "mean_sunk_usd": None,
+                "failure_classes": sorted({i["unobserved_reason"] for i in p["items"]
+                                           if i["unobserved_reason"]}),
+            },
+            "families": {
+                a.family: {
+                    "solved": solved,
+                    "attempted": len(p["items"]),
+                    "suite": "SWE-bench Verified, pilot-subset.json (stratified on repository and "
+                             "difficulty with a fixed seed, chosen before any of this ran)",
+                    "runs_per_item": 1,
+                    "evidence": {"path": f"evidence/{ev_name}", "digest": f"sha256:{digest}"},
+                    "tokens": dict(legs),
+                }
+            },
+        }
+        (tiers_dir / f"agent-{agent}.json").write_text(json.dumps(rec, indent=1) + "\n")
+        written.append((agent, solved, len(p["items"]), total_in, kinds))
+
+    print(f"wrote {len(written)} records to {tiers_dir} and artifacts to {ev_dir}")
+    for agent, s_, at, ti, kinds in written:
+        print(f"  agent-{agent:11s} {s_:2d}/{at}  in={ti:,}  cost_kinds={kinds}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--state", required=True, help="the sweep state file")
-    ap.add_argument("--tap", help="the tap log, for token and latency figures")
-    ap.add_argument("--pods", help="kubectl get pods -o json, to attribute calls")
+    ap.add_argument("--joined", help="output of join_sources.py: the single source for outcomes, tokens "
+                                     "and charge. Preferred over --state")
+    ap.add_argument("--state", help="legacy: a sweep state file, when no join output exists")
+    ap.add_argument("--tap", help="legacy: the pass-through log. Not a producer; see --joined")
+    ap.add_argument("--pods", help="legacy: kubectl get pods -o json, to attribute pass-through calls")
     ap.add_argument("--workdir", default=str(Path.home() / "tmp/e02/tap"))
     ap.add_argument("--out", required=True, help="directory to write records into")
     ap.add_argument("--family", default="agentic-coding")
@@ -84,8 +270,25 @@ def main() -> int:
     ap.add_argument("--commit", default=None, help="the sweep's commit, for provenance")
     a = ap.parse_args()
 
-    state = json.loads(Path(a.state).read_text())
     rate = json.loads(Path(a.tiers).read_text())["self_hosted"]["rate"]
+    if not a.joined and not a.state:
+        raise SystemExit("[FAIL] one of --joined or --state is required")
+
+    if a.joined:
+        # The supported path. Every figure here came through the join, so a record can never disagree with
+        # the telemetry it was built from.
+        doc = json.loads(Path(a.joined).read_text())
+        cov = doc.get("coverage") or {}
+        if cov.get("rate") is not None and cov["rate"] < 1.0:
+            # The join already refuses to price a partial set; refusing to build records from one is the
+            # same rule one step later. A ledger built on the rows that happened to join reads as complete.
+            raise SystemExit(
+                f"[FAIL] the join covered {cov['rate']:.1%} of its outcomes ({cov.get('joined')} of "
+                f"{cov.get('outcomes')}). Records are not built from a partial join: fix the unjoined rows "
+                f"named in {a.joined} first.")
+        return from_joined(a, doc, rate)
+
+    state = json.loads(Path(a.state).read_text())
     done = {k: v for k, v in state["instances"].items() if v.get("outcome") == "done"}
 
     ips = {}

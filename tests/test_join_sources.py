@@ -177,3 +177,44 @@ def test_the_cli_refuses_below_the_coverage_threshold(tmp_path, capsys):
     assert "REFUSED" in printed and "reads as complete" in printed
     # The output is still written, because naming what is unjoined is the point.
     assert json.loads(out.read_text())["coverage"]["unjoined"][0]["missing"] == "telemetry"
+
+
+# --- the cross-check reports divergence and never averages it ------------------------------------
+
+
+def test_crosscheck_flags_a_renamed_leg_as_one_side_zero(tmp_path):
+    """The shape of a producer renaming an attribute: one source has the tokens, the other has zero.
+
+    Reported as `one_side_zero` rather than as a ratio, because a ratio against zero is not a number and
+    silently skipping the leg is how a rename becomes a missing measurement nobody noticed.
+    """
+    import crosscheck_telemetry as cc  # noqa: PLC0415
+
+    tap = {"legs": {"fresh_in": 100, "cached_in": 900, "cache_write": 0, "out": 10}, "calls": 1}
+    telem = {"legs": {"fresh_in": 100, "cached_in": 0, "cache_write": 0, "out": 10}, "calls": 1}
+    res = cc.compare(tap, telem, tolerance=1.10)
+    assert res["legs"]["cached_in"]["one_side_zero"] is True
+    assert res["legs"]["cached_in"]["ratio"] is None
+    assert res["within_tolerance"] is False
+    # The legs that agree are still reported as agreeing, so a reader can see the disagreement is local.
+    assert res["legs"]["fresh_in"]["ratio"] == 1.0
+
+
+def test_crosscheck_passes_when_both_sources_agree(tmp_path):
+    import crosscheck_telemetry as cc  # noqa: PLC0415
+
+    same = {"legs": {"fresh_in": 5, "cached_in": 6, "cache_write": 7, "out": 8}, "calls": 2}
+    res = cc.compare(same, dict(same), tolerance=1.10)
+    assert res["within_tolerance"] and res["worst_ratio"] == 1.0
+
+
+def test_crosscheck_reports_a_small_difference_without_flagging_it(tmp_path):
+    """A retried attempt one side counted and the other abandoned is an expected small difference. The
+    check reports it and does not declare a winner."""
+    import crosscheck_telemetry as cc  # noqa: PLC0415
+
+    res = cc.compare({"legs": {"fresh_in": 100, "cached_in": 0, "cache_write": 0, "out": 10}, "calls": 1},
+                     {"legs": {"fresh_in": 105, "cached_in": 0, "cache_write": 0, "out": 10}, "calls": 1},
+                     tolerance=1.10)
+    assert res["within_tolerance"] is True
+    assert res["legs"]["fresh_in"]["ratio"] == 1.05

@@ -99,6 +99,7 @@ def sweep_one(a, instance: str) -> dict:
         # sweep produces none. The trace id the driver issues is what the outcome and the charge are
         # later joined on.
         "--outcomes", str(outcomes), "--item-id", instance,
+        "--run-group", a.run_group,
     ]
     if a.otlp_endpoint:
         drive += ["--otlp-endpoint", a.otlp_endpoint]
@@ -117,12 +118,13 @@ def sweep_one(a, instance: str) -> dict:
     # any kind.
     rc, out = run([sys.executable, str(HERE / "score_outcomes.py"),
                    "--outcomes", str(outcomes), "--instance", instance,
+                   "--run-group", a.run_group,
                    "--context", a.context, "--namespace", a.namespace,
                    "--timeout", str(a.score_timeout)], timeout=a.score_timeout + 1800)
     rec["steps"]["oracle"] = {"rc": rc, "tail": out[-800:]}
 
     judged = [json.loads(x) for x in outcomes.read_text().splitlines() if x.strip()] if outcomes.exists() else []
-    for r in [x for x in judged if x.get("item_id") == instance]:
+    for r in [x for x in judged if x.get("item_id") == instance and x.get("run_group") == a.run_group]:
         rec["runs"][f"{r.get('agent')}#{r.get('iteration')}"] = {
             "trace_id": r.get("trace_id"),
             "state": r.get("state"),
@@ -191,6 +193,9 @@ def main() -> int:
                     help="where the agent exports its telemetry. This sweep produces no telemetry itself")
     ap.add_argument("--span-attributes", default="tenant=default-org")
     ap.add_argument("--agents", help="comma-separated subset passed through to the driver")
+    ap.add_argument("--run-group", default=None,
+                    help="id for this invocation, defaulting to a fresh one. Written on every outcomes row "
+                         "so an orphaned driver from an aborted sweep cannot be mistaken for this one's")
     ap.add_argument("--keep", action="store_true", help="leave each testbed pod up (for debugging)")
     ap.add_argument("--limit", type=int, help="stop after this many new instances")
     a = ap.parse_args()
@@ -200,6 +205,8 @@ def main() -> int:
     state_path = Path(a.state)
     state = load_state(state_path)
 
+    a.run_group = a.run_group or f"sweep-{int(time.time())}"
+    print(f"run_group {a.run_group}")
     Path(a.outcomes).parent.mkdir(parents=True, exist_ok=True)
     done = {k for k, v in state["instances"].items() if v.get("outcome") == "done"}
     todo = [i for i in instances if i not in done]

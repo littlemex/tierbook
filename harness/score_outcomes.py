@@ -88,12 +88,16 @@ def main() -> int:
     ap.add_argument("--instance", required=True)
     ap.add_argument("--context", default="distai-eks")
     ap.add_argument("--namespace", default="qwen-trial")
+    ap.add_argument("--run-group", help="judge only rows from this invocation. A row from another group is "
+                                       "another run's business and is left alone")
     ap.add_argument("--timeout", type=int, default=2400)
     a = ap.parse_args()
 
     path = Path(a.outcomes)
     rows = [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
-    pending = [r for r in rows if r.get("state") == "pending_oracle" and r.get("item_id") == a.instance]
+    pending = [r for r in rows
+               if r.get("state") == "pending_oracle" and r.get("item_id") == a.instance
+               and (a.run_group is None or r.get("run_group") == a.run_group)]
     if not pending:
         print(f"nothing pending for {a.instance}")
         return 0

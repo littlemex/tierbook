@@ -164,6 +164,10 @@ def join(outcomes: dict, traces: dict, charges: dict, *, metered_providers: set[
             "candidate": tr["turns"][0]["candidate"] if tr["turns"] else None,
             "turns": len(tr["turns"]),
             "legs": legs,
+            # Wall time as the driver observed it. Carried because the ledger needs a latency figure and the
+            # driver is the only thing that saw the process start and stop; it is not a token count, so this
+            # is not a second producer of anything.
+            "wall_s": oc.get("wall_s"),
             # Two kinds, never one number. The amortised kind is deliberately absent here: it does not exist
             # per request and is applied against a closed window elsewhere.
             "cost": ({"kind": METERED, "usd": ch.get("usd"), "source": "gateway",
