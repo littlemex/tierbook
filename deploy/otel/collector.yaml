@@ -24,6 +24,30 @@ data:
             endpoint: 0.0.0.0:4318
 
     processors:
+      # Prompts and completions are removed HERE, at the boundary this project owns, and not by trusting the
+      # producer to withhold them. The plugin's own prompt flag governs its LOG signal only: with the flag
+      # unset, `llm.input_messages` and `input.value` were still observed on the SPANS. A privacy rule that
+      # depends on a producer's default is a rule that changes when the producer does.
+      #
+      # Named individually, never by pattern. `llm.token_count.prompt` and
+      # `llm.token_count.prompt_details.cache_read` contain the word "prompt" and are the numbers the whole
+      # capture exists for; a regex over "prompt" would delete the measurement and keep the text's shape.
+      #
+      # What survives is everything the framework needs: the four token legs, reasoning tokens, the
+      # candidate tuple, durations, finish reason, session parentage and the injected trace id. What goes is
+      # only the text. Set `OTEL_KEEP_PROMPTS=1` on the collector and remove this processor from the
+      # pipeline to keep it -- deliberately two steps, because one flag is how this becomes accidental.
+      attributes/strip-prompts:
+        actions:
+          - { key: llm.input_messages, action: delete }
+          - { key: llm.output_messages, action: delete }
+          - { key: input.value, action: delete }
+          - { key: output.value, action: delete }
+          - { key: llm.invocation_parameters, action: delete }
+          - { key: llm.prompts, action: delete }
+          - { key: llm.prompt_template.template, action: delete }
+          - { key: llm.prompt_template.variables, action: delete }
+
       # Bounded so a burst cannot take the collector down and lose the run it was recording.
       memory_limiter:
         check_interval: 2s
@@ -36,12 +60,18 @@ data:
     exporters:
       # One file per signal. Durable because it is on the shared volume, and readable by the join without
       # a query language: a JSONL-shaped artifact is what the ledger's evidence loader already understands.
+      # `flush_interval` is stated rather than left to the default: without it the exporter buffered and a
+      # run that had plainly arrived (the debug exporter logged its spans) left an empty file, which looks
+      # exactly like telemetry that never came.
       file/traces:
         path: /data/otel/traces.jsonl
+        flush_interval: 1s
       file/metrics:
         path: /data/otel/metrics.jsonl
+        flush_interval: 1s
       file/logs:
         path: /data/otel/logs.jsonl
+        flush_interval: 1s
       # Kept because a collector that cannot say what it received is a collector nobody can debug.
       debug:
         verbosity: basic
@@ -53,7 +83,7 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
+          processors: [memory_limiter, attributes/strip-prompts, batch]
           exporters: [file/traces, debug]
         metrics:
           receivers: [otlp]
@@ -61,7 +91,7 @@ data:
           exporters: [file/metrics]
         logs:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
+          processors: [memory_limiter, attributes/strip-prompts, batch]
           exporters: [file/logs]
 ---
 apiVersion: apps/v1
