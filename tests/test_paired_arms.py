@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "harness"))
 import paired_arms as pa  # noqa: E402
@@ -81,3 +83,81 @@ def test_the_result_says_a_high_p_is_not_evidence_of_sameness():
     res = pa.paired({"x": True}, {"x": True})
     assert "not evidence they are the same" in res["not_a_verdict"]
     assert "WHERE the arms differ" in res["not_a_verdict"]
+
+
+# --- the interval belongs beside the p-value, never after it ---------------------------------------
+
+
+def test_the_interval_says_how_large_a_difference_the_test_could_have_missed():
+    """"No detectable difference" is a statement about power. At two discordant pairs out of twenty-one the
+    interval spans about fourteen points, so quoting p = 1.0 alone reads as "no difference", which is false."""
+    a = {f"i{n}": n < 10 for n in range(21)}
+    b = dict(a)
+    b["i10"] = True            # one item B solved and A did not
+    b["i9"] = False            # one item A solved and B did not
+    res = pa.paired(a, b)
+    assert res["discordant"] == 2 and res["exact_p_two_sided"] == 1.0
+    lo, hi = res["gap_ci95_points"]
+    assert lo < 0 < hi
+    # A review put it at roughly plus or minus fourteen points, i.e. a half-width near fourteen, not a span.
+    half = (hi - lo) / 2
+    assert 12 <= half <= 16, f"about fourteen points either side, got {half}"
+    assert "how large a difference" in res["not_a_verdict"]
+
+
+def test_a_wide_interval_shrinks_as_the_items_grow():
+    """The same discordance over more items is a tighter statement, which is the thing more tasks buy."""
+    def span(n):
+        a = {f"i{k}": k < n // 2 for k in range(n)}
+        b = dict(a)
+        b[f"i{n // 2}"] = True
+        b[f"i{n // 2 - 1}"] = False
+        lo, hi = pa.paired(a, b)["gap_ci95_points"]
+        return hi - lo
+    assert span(21) > span(100) > span(500)
+
+
+def test_a_lopsided_discordance_gives_an_interval_that_excludes_zero():
+    a = {f"i{n}": True for n in range(10)}
+    a.update({f"j{n}": False for n in range(10)})
+    b = {f"i{n}": False for n in range(10)}
+    b.update({f"j{n}": False for n in range(10)})
+    res = pa.paired(a, b)
+    lo, hi = res["gap_ci95"]
+    assert lo > 0, "A is better and the interval says so"
+    assert res["exact_p_two_sided"] < 0.01
+
+
+def test_the_interval_is_zero_width_when_the_arms_never_disagree():
+    a = {f"i{n}": n < 5 for n in range(10)}
+    res = pa.paired(a, dict(a))
+    assert res["gap_ci95"] == [0.0, 0.0] and res["gap_a_minus_b"] == 0.0
+
+
+# --- exclusions concentrated on one arm can manufacture the result ---------------------------------
+
+
+def test_one_sided_exclusions_are_flagged_because_they_can_manufacture_the_result():
+    """Excluding items an arm did not observe is right, and if every exclusion sits on one arm then the comparison
+    dropped that arm's hardest attempts. Both statements are true about the same act."""
+    bal = pa.exclusion_balance(["x", "y", "z"], [], compared=21)
+    assert bal["one_sided"] is True
+    assert "flatters that arm" in bal["reading"]
+    assert bal["share_of_compared"] == pytest.approx(3 / 24)
+
+
+def test_a_split_exclusion_pattern_is_not_flagged():
+    """The pair measured here was two and one, so it was not one-sided -- which is why the check had to exist
+    rather than the outcome being assumed."""
+    bal = pa.exclusion_balance(["x", "y"], ["z"], compared=21)
+    assert bal["one_sided"] is False and "not concentrated on one arm" in bal["reading"]
+
+
+def test_a_single_exclusion_is_not_called_one_sided():
+    """One item is not a pattern, and calling it one would make the flag fire on ordinary runs."""
+    assert pa.exclusion_balance(["x"], [], compared=23)["one_sided"] is False
+
+
+def test_no_exclusions_says_so():
+    bal = pa.exclusion_balance([], [], compared=24)
+    assert bal["total"] == 0 and bal["reading"] == "no items were excluded"

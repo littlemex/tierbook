@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from math import comb
+from math import comb, sqrt
 from pathlib import Path
 
 SOLVED = "solved"
@@ -59,6 +59,24 @@ def two_sided_exact(b: int, c: int) -> float:
     return min(1.0, 2 * tail)
 
 
+def discordance_interval(b: int, c: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """A confidence interval on the accuracy gap, from the discordant pairs.
+
+    Required beside the test, not instead of it. "No detectable difference" is a statement about power, and at two
+    discordant pairs out of twenty-one items the interval spans about fourteen points -- so quoting the p-value
+    alone invites the reader to hear "no difference", which is a different and false claim.
+
+    The gap is (b - c) / n and its variance under the paired design is (b + c - (b - c)^2 / n) / n^2, which is the
+    standard McNemar-style interval. Written out so the arithmetic is inspectable at these small counts.
+    """
+    if n <= 0:
+        return (0.0, 0.0)
+    diff = (b - c) / n
+    var = max(0.0, (b + c - (b - c) ** 2 / n)) / (n ** 2)
+    half = z * sqrt(var)
+    return (max(-1.0, diff - half), min(1.0, diff + half))
+
+
 def paired(a_solved: dict, b_solved: dict) -> dict:
     shared = sorted(set(a_solved) & set(b_solved))
     both = [i for i in shared if a_solved[i] and b_solved[i]]
@@ -66,6 +84,7 @@ def paired(a_solved: dict, b_solved: dict) -> dict:
     b_only = [i for i in shared if not a_solved[i] and b_solved[i]]
     neither = [i for i in shared if not a_solved[i] and not b_solved[i]]
     p = two_sided_exact(len(a_only), len(b_only))
+    lo, hi = discordance_interval(len(a_only), len(b_only), len(shared))
     return {
         "items_compared": len(shared),
         "a_only_excluded": sorted(set(a_solved) - set(b_solved)),
@@ -77,6 +96,11 @@ def paired(a_solved: dict, b_solved: dict) -> dict:
         "b_solved": len(both) + len(b_only),
         "discordant": len(a_only) + len(b_only),
         "exact_p_two_sided": round(p, 6),
+        # The interval belongs beside the p-value and never after it. At two discordant pairs this spans about
+        # fourteen points, so a p of 1.0 quoted alone reads as "no difference", which it is not.
+        "gap_a_minus_b": round((len(a_only) - len(b_only)) / len(shared), 6) if shared else None,
+        "gap_ci95": [round(lo, 6), round(hi, 6)],
+        "gap_ci95_points": [round(lo * 100, 1), round(hi * 100, 1)],
         "reading": (
             "the discordant pairs are what carry information here: the marginals can differ while the arms "
             f"agreed on all but {len(a_only) + len(b_only)} item(s). "
@@ -85,8 +109,33 @@ def paired(a_solved: dict, b_solved: dict) -> dict:
                f"Of those, {len(a_only)} went to A and {len(b_only)} to B, which under an even split has "
                f"two-sided p = {p:.4f}")),
         "not_a_verdict": ("at these counts an exact test rarely separates two arms, and a p above any threshold "
-                          "is not evidence they are the same. The named items are the useful output: they say "
-                          "WHERE the arms differ, which a marginal cannot"),
+                          "is not evidence they are the same -- the interval above says how large a difference "
+                          "this could still have missed. The named items are the useful output: they say WHERE "
+                          "the arms differ, which a marginal cannot"),
+    }
+
+
+def exclusion_balance(a_unobs: list, b_unobs: list, compared: int) -> dict:
+    """Whether the excluded items fall on one arm, which can manufacture the result.
+
+    A review put this exactly right: excluding items an arm did not observe is correct, and if every exclusion sits
+    on one arm then the comparison quietly dropped that arm's hardest attempts. On the pair measured here the split
+    was two and one, so it did not -- but the check has to exist, because "excluding them is right" and "excluding
+    them changed the answer" are both true statements about the same act.
+    """
+    a, b = len(a_unobs), len(b_unobs)
+    total = a + b
+    one_sided = total >= 2 and (a == 0 or b == 0)
+    return {
+        "excluded_a": a, "excluded_b": b, "total": total,
+        "one_sided": one_sided,
+        "share_of_compared": (round(total / (compared + total), 4) if compared + total else None),
+        "reading": ("no items were excluded" if total == 0 else
+                    (f"all {total} exclusions fall on one arm, so the comparison dropped that arm's attempts and "
+                     "kept the other's. Read the transcripts before quoting the marginals: an exclusion that is "
+                     "the model declining to act is a capability failure, and excluding it flatters that arm"
+                     if one_sided else
+                     f"{a} on A and {b} on B, so the exclusions are not concentrated on one arm")),
     }
 
 
@@ -101,15 +150,19 @@ def main() -> int:
     b_solved, b_unobs = outcomes_by_item(Path(args.b))
     res = paired(a_solved, b_solved)
     res["unobserved"] = {"a": a_unobs, "b": b_unobs}
+    res["exclusion_balance"] = exclusion_balance(a_unobs, b_unobs, res["items_compared"])
 
     t = res["table"]
     print(f"items compared {res['items_compared']}   A solved {res['a_solved']}   B solved {res['b_solved']}")
     print(f"  both {t['both']}   A only {t['a_only']}   B only {t['b_only']}   neither {t['neither']}")
+    print(f"  gap (A - B) {res['gap_a_minus_b']:+.4f}, 95% interval "
+          f"[{res['gap_ci95_points'][0]:+.1f}, {res['gap_ci95_points'][1]:+.1f}] points")
     print(f"  {res['reading']}")
     if res["items"]["a_only"]:
         print(f"  A solved and B did not: {res['items']['a_only']}")
     if res["items"]["b_only"]:
         print(f"  B solved and A did not: {res['items']['b_only']}")
+    print(f"  exclusions: {res['exclusion_balance']['reading']}")
     for side in ("a", "b"):
         for u in res["unobserved"][side]:
             print(f"  [{side}] {u['item_id']} unobserved ({u['reason']}) -- excluded, not counted as a failure")

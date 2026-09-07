@@ -43,6 +43,9 @@ import time
 import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import task_prompt  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 
 
@@ -110,6 +113,9 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
     # `agent_definition` is part of the candidate tuple, so it is substituted like any other field. A spec
     # that omits it gets an empty string and the run fails loudly rather than emitting telemetry whose
     # candidate is half unknown.
+    # The workspace is a per-session directory this function creates, so a task text that names it carries a
+    # marker until now. Filled here and nowhere else.
+    prompt = task_prompt.fill_workspace(prompt, workspace)
     fills = dict(prompt=prompt, session=session, workspace=workspace, model=model,
                  agent_definition=spec.get("agent_definition", ""))
     argv = _fill(spec["argv"], **fills)
@@ -189,6 +195,37 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
         # manifest. Enough to see what it answered and whether it errored.
         "stdout_tail": out[-4000:],
         "stderr_tail": err[-2000:],
+    }
+
+
+def outcome_row(row: dict, spec_for_agent: dict, name: str, iteration: int, *,
+                item_id: str | None, run_group: str | None) -> dict:
+    """One outcomes row for a completed run, as the DRIVER observed it.
+
+    The driver records only what it saw of the run and never states an outcome, because the oracle has not run
+    yet: `pending_oracle` is the honest value and a scorer replaces it. A driver that wrote "solved" here would be
+    inventing the measurement.
+
+    Pulled out of the loop so it can be exercised without a cluster. It is here because it broke: a reference to a
+    name that was not in scope raised inside this dict, so thirteen instances ran to completion and wrote no rows
+    at all, and nothing failed until the sweep was inspected. A cluster-only code path is a code path with no
+    tests.
+    """
+    return {
+        "trace_id": row["trace_id"],
+        "item_id": item_id,
+        "run_group": run_group,
+        # The definition the driver ASKED for. The telemetry reports one per span, and a delegating agent emits a
+        # different one per subagent, so the run's own definition has to come from the driver or a delegate's name
+        # gets read as the candidate's.
+        "agent_definition": spec_for_agent.get("agent_definition") or None,
+        "agent": name,
+        "iteration": iteration,
+        "state": "pending_oracle",
+        "returned": row.get("returned"),
+        "timed_out": row["timed_out"],
+        "returncode": row["returncode"],
+        "wall_s": row["wall_s"],
     }
 
 
@@ -320,26 +357,10 @@ def main() -> int:
             print(f"{state} in {row['wall_s']}s  trace={row['trace_id'][:16]}")
             out_path.write_text(json.dumps(manifest, indent=1))
             if args.outcomes:
-                # The driver records only what it observed of the RUN -- it never states an outcome, because
-                # the oracle has not run yet. `state: pending_oracle` is the honest value, and a scorer
-                # replaces it. A driver that guessed "solved" here would be inventing the measurement.
                 with open(args.outcomes, "a") as fh:
-                    fh.write(json.dumps({
-                        "trace_id": row["trace_id"],
-                        "item_id": args.item_id or args.tag,
-                        "run_group": args.run_group,
-                        # The definition the driver ASKED for. The telemetry reports one per span, and a
-                        # delegating agent emits a different one per subagent, so the run's own definition has to
-                        # come from the driver or a delegate's name gets read as the candidate's.
-                        "agent_definition": spec[agent].get("agent_definition") or None,
-                        "agent": name,
-                        "iteration": i,
-                        "state": "pending_oracle",
-                        "returned": row.get("returned"),
-                        "timed_out": row["timed_out"],
-                        "returncode": row["returncode"],
-                        "wall_s": row["wall_s"],
-                    }) + "\n")
+                    fh.write(json.dumps(outcome_row(row, spec[name], name, i,
+                                                    item_id=args.item_id or args.tag,
+                                                    run_group=args.run_group)) + "\n")
 
     print(f"\nmanifest: {out_path}")
     print("Pair it with the tap log to attribute calls:")

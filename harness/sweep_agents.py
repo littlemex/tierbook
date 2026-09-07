@@ -89,7 +89,7 @@ def sweep_one(a, instance: str) -> dict:
     outcomes = Path(a.outcomes)
     drive = [
         sys.executable, str(HERE / "agent_drive.py"),
-        "--task-file", str(Path(a.workdir) / f"task-{instance}.md"),
+        "--task-file", str(Path(a.workdir) / f"task-{instance}-{a.prompt_variant}.md"),
         "--tag", instance, "--repeat", str(a.repeat),
         "--stage-from", f"/work/testbeds/{instance}/staged.tar",
         "--timeout", str(a.agent_timeout),
@@ -148,23 +148,26 @@ def sweep_one(a, instance: str) -> dict:
 def write_task(a, instance: str) -> bool:
     """The problem statement, as the task. Written once per instance and kept, so a re-run gives the
     identical prompt rather than one regenerated from a dataset that may have moved."""
-    out = Path(a.workdir) / f"task-{instance}.md"
+    # The variant is in the filename. A cached task file from the baseline would otherwise be reused for the
+    # changed run, and the "change" would measure nothing at all -- the quietest way a before/after can fail.
+    out = Path(a.workdir) / f"task-{instance}-{a.prompt_variant}.md"
     if out.exists():
         return True
+    # The text itself lives in `task_prompt.py` so it can be tested and so a change to it shows in a diff. It
+    # used to be string literals in this heredoc, which mattered once the recordings identified the prompt as the
+    # cause of two zero-edit runs.
     code = f'''
 import json, sys, pathlib
 sys.path.insert(0, {str(Path(a.agent_dir))!r})
-import dataset
+import dataset, task_prompt
 m = [x for x in dataset.load(pathlib.Path({str(Path(a.cache).expanduser())!r}))
      if x.instance_id == {instance!r}]
 if not m:
     raise SystemExit(1)
 i = m[0]
-print("You are working in a checkout of the {{}} repository in the current directory.".format(i.repo))
-print("Fix the issue described below by editing the source files. Do not write any tests.")
-print("When you are done, stop.\\n")
-print("--- issue ---")
-print(i.problem_statement)
+print(task_prompt.build(i.repo, i.problem_statement,
+                        workspace=task_prompt.WORKSPACE_MARKER,
+                        variant={a.prompt_variant!r}), end="")
 '''
     rc, text = run([sys.executable, "-c", code], 300)
     if rc != 0 or not text.strip():
@@ -196,6 +199,10 @@ def main() -> int:
     ap.add_argument("--agents", help="comma-separated subset passed through to the driver")
     ap.add_argument("--model", default=None,
                     help="passed through to the driver, so a second arm differs only in the model")
+    ap.add_argument("--prompt-variant", default="baseline",
+                    help="which task wording to use, from harness/task_prompt.py. The variant is part of the "
+                         "task file's name, because a cached baseline task file reused for a changed run would "
+                         "measure nothing -- the quietest way a before/after can fail")
     ap.add_argument("--run-group", default=None,
                     help="id for this invocation, defaulting to a fresh one. Written on every outcomes row "
                          "so an orphaned driver from an aborted sweep cannot be mistaken for this one's")
