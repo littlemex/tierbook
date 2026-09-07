@@ -58,3 +58,33 @@ carried real diffs of 428 to 1,572 bytes across one or two files, so they were n
 10 against 11 a difference: with 24 items and one run per arm, binomial noise is worth two or three tasks, so
 those two numbers are indistinguishable whatever else is true. Any claim of a difference between arms needs
 repetition, not a cleaner pipeline.
+
+## Three controls on the solve metric (2026-09-08)
+
+The negative control above was the first answer to "is the metric generous". A second review pointed out it was
+only the first: a tree with no fix grading not-solved shows the grader does not rubber-stamp, and says nothing
+about whether it can recognise a correct fix or whether it can be fooled by a patch that removes the tests it
+grades on. Both were run, on `django__django-11880`, with `harness/scorer_controls.py`:
+
+    negative   unmodified staged tree        -> not solved     (111 tests pass, FAIL_TO_PASS unmet)
+    positive   the dataset's own gold patch  -> solved         (446 diff bytes, 1 file)
+    tamper     the graded test file deleted  -> unscoreable    (not a pass)
+
+The tamper result is the one worth keeping: removing the file the instance grades on yields "cannot score", not a
+pass, so a deletion cannot enter a solve rate.
+
+Still open, and stated because it is cheap and has not been done: the battery ran on one instance of twenty-four.
+Graders can be misconfigured per task, so it belongs across the set. It needs no model and does not compete for
+the reservation.
+
+## Per-conversation context growth (2026-09-08)
+
+A review overturned the aggregate evidence for the replacement metered arm and was right to try: pooled medians by
+conversation length can hide individual conversations that go flat, and the pooled numbers even showed an apparent
+stall -- 25,805 to 27,631 tokens between two buckets, about 180 tokens per message against 700 earlier, which is
+what trimming near a context limit looks like.
+
+Checked per conversation instead of pooled. Across 43 reconstructed conversations and 707 forwarded requests, the
+input token count dropped at **zero** steps; the longest reached 142 messages and 95,229 tokens against a 200,000
+limit, with no plateau at any round number. The apparent stall was an artifact of pooling: later buckets are
+dominated by long conversations whose individual messages are small tool results.
