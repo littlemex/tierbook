@@ -86,11 +86,85 @@ def measure(endpoint: str, payload: dict, *, concurrency: int, rounds: int, time
     }
 
 
+def interleave(endpoint: str, shapes: dict, *, concurrency: int, rounds: int, timeout: int) -> dict:
+    """Per-shape occupancy at ONE operating point, from labelled traffic mixed together.
+
+    The measurement the slot-value index actually needs, and the reason it needs its own function. A curve run
+    one shape at a time gives each shape a different operating point; a slot value divides a saving by the
+    capacity a task consumes, and capacities measured at different concurrencies are not comparable. So the
+    shapes run *together*, at a fixed concurrency, and each one's occupancy is read by Little's law from its own
+    completed share.
+
+    Free in dollars when the reserved candidate is the target: below capacity the period bill arrives anyway,
+    which is the same premise the index rests on.
+
+    **Occupancy per task is the shape's own residency, measured in the mix.** In a closed loop of `concurrency`
+    workers each request holds exactly one slot for its own duration, so the slot-seconds it consumes are its
+    latency -- there is nothing to divide. An earlier version tried to derive it from completion shares as
+    `elapsed * concurrency * share / completed`, and the first run showed why that is empty: with a round-robin
+    plan the shares are equal by construction, the share cancels, and both shapes came back at exactly the same
+    5.601 slot-seconds while their latencies differed by seven times.
+
+    Little's law on the aggregate is carried beside it as a CHECK, not as the answer. `concurrency / throughput`
+    equals the mean residency only when the pool is full for the whole window; startup and drain are inside the
+    window, so on a short run it reads high. The gap is reported because it measures the transient, and a gap
+    that does not shrink with more rounds means the window is still too short to describe a steady state.
+    """
+    names = sorted(shapes)
+    plan = [names[i % len(names)] for i in range(concurrency * rounds)]
+    started = time.time()
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        results = list(pool.map(lambda name: (name, one_call(endpoint, shapes[name], timeout)), plan))
+    elapsed = time.time() - started
+
+    out = {}
+    total_ok = sum(1 for _, r in results if r["ok"])
+    for name in names:
+        mine = [r for n, r in results if n == name]
+        ok = [r for r in mine if r["ok"]]
+        lat = [r["wall_s"] for r in ok]
+        out[name] = {
+            "attempted": len(mine), "completed": len(ok), "failed": len(mine) - len(ok),
+            "completed_share": round(len(ok) / total_ok, 6) if total_ok else 0.0,
+            # The shape's own residency: one request holds one slot for its own duration.
+            "slot_seconds_per_task": round(statistics.mean(lat), 3) if lat else None,
+            "p95_latency_s": round(sorted(lat)[min(len(lat) - 1, int(0.95 * len(lat)))], 3) if lat else None,
+            "output_tokens_total": sum(r.get("completion_tokens", 0) for r in ok),
+            "prompt_tokens_total": sum(r.get("prompt_tokens", 0) for r in ok),
+        }
+    # The check. Equal to the mean residency only when the pool was full for the whole window.
+    littles = (concurrency / (total_ok / elapsed)) if total_ok and elapsed > 0 else None
+    observed_mean = (statistics.mean(r["wall_s"] for _, r in results if r["ok"]) if total_ok else None)
+    return {
+        "concurrency": concurrency, "elapsed_s": round(elapsed, 2), "completed": total_ok,
+        "tasks_per_hour": round(total_ok / elapsed * 3600, 1) if elapsed > 0 else None,
+        "littles_law_seconds": round(littles, 3) if littles else None,
+        "observed_mean_seconds": round(observed_mean, 3) if observed_mean else None,
+        "transient_gap": (round(littles / observed_mean - 1, 4)
+                          if littles and observed_mean else None),
+        "transient_note": ("Little's law over the whole window against the mean residency actually observed. "
+                           "They agree when the pool was full throughout; the gap is startup and drain inside "
+                           "the window, and a gap that does not shrink with more rounds means the window is too "
+                           "short to describe a steady state"),
+        "per_shape": out,
+        "note": ("occupancy per shape at ONE operating point, from traffic mixed together. Shapes measured "
+                 "separately sit at different operating points and their capacities are not comparable, which "
+                 "is what this exists to avoid"),
+        "does_not_establish": [
+            "that these shares are production's. The mix here is round-robin by construction, and occupancy on a "
+            "batching engine depends on the mix",
+            "correctness. An HTTP 200 counts as completed work; whether the reply was right is the oracle's "
+            "question",
+            "a steady state: startup and drain are inside the window",
+        ],
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--endpoint", required=True)
     ap.add_argument("--model", required=True)
-    ap.add_argument("--request", required=True,
+    ap.add_argument("--request", default=None,
                     help="a captured request to replay, from harness/trajectory.py --out. Required: a curve "
                          "measured on a synthetic shape is a threshold for a workload nobody has")
     ap.add_argument("--concurrency", default="1,2,4,8,16",
@@ -100,8 +174,44 @@ def main() -> int:
                                                           "sample")
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--interleave", default=None,
+                    help="JSON map of {label: path to a captured request}, run TOGETHER at one concurrency to "
+                         "read each label's occupancy by Little's law. This is what a slot-value index needs: "
+                         "capacities measured at different concurrencies are not comparable")
+    ap.add_argument("--at-concurrency", type=int, default=None,
+                    help="the single operating point to interleave at, normally the derived capacity bound")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+
+    if a.interleave:
+        spec = json.loads(Path(a.interleave).read_text())
+        if not a.at_concurrency:
+            raise SystemExit("[FAIL] --interleave needs --at-concurrency: the whole point is one operating point")
+        shapes = {}
+        for label, path in sorted(spec.items()):
+            d = json.loads(Path(path).read_text())
+            ctx = d.get("context") or d.get("messages")
+            if not ctx:
+                raise SystemExit(f"[FAIL] {path} carries no context to replay for {label!r}")
+            shapes[label] = {"model": a.model, "max_tokens": a.max_tokens, "temperature": 0,
+                             "messages": [{k: v for k, v in m.items()
+                                           if k in ("role", "content", "name", "tool_calls", "tool_call_id")
+                                           and v is not None}
+                                          for m in ctx if m.get("content") or m.get("tool_calls")]}
+        print(f"interleaving {sorted(shapes)} at {a.at_concurrency} in flight, {a.rounds} round(s)")
+        res = interleave(a.endpoint, shapes, concurrency=a.at_concurrency, rounds=a.rounds, timeout=a.timeout)
+        for label, d in sorted(res["per_shape"].items()):
+            print(f"  {label:22s} completed {d['completed']:3d} ({d['completed_share']:.1%})  "
+                  f"{d['slot_seconds_per_task']} slot-s/task  p95 {d['p95_latency_s']}s  "
+                  f"in {d['prompt_tokens_total']:,} out {d['output_tokens_total']:,}")
+        print(f"  aggregate {res['tasks_per_hour']} tasks/hour over {res['elapsed_s']}s; "
+              f"Little's law {res['littles_law_seconds']}s vs observed mean {res['observed_mean_seconds']}s "
+              f"(transient gap {res['transient_gap']:+.1%})")
+        Path(a.out).write_text(json.dumps({"endpoint": a.endpoint, "model": a.model,
+                                           "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                           **res}, indent=1) + "\n")
+        print(f"wrote {a.out}")
+        return 0
 
     doc = json.loads(Path(a.request).read_text())
     ctx = doc.get("context") or doc.get("messages")

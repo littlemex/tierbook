@@ -842,20 +842,46 @@ def test_a_family_share_scales_the_reservation_side():
 # --- what the review caught with arithmetic on our own numbers ------------------------------------
 
 
-def test_occupancy_comes_from_littles_law_not_from_mean_latency():
-    """Caught by arithmetic on measurements already in hand. At 64 in flight the probe completed 22,908 tasks an
-    hour, so 6.363 a second, so a fully occupied slot costs 64/6.363 = 10.06 slot-seconds. The mean latency there
-    was 8.19s, which implies an effective concurrency of about 52 -- a per-request wait, not the capacity a task
-    consumes. Using it inflated every slot value by roughly 23 percent."""
+def test_occupancy_is_the_observed_residency_and_littles_law_is_the_check():
+    """Two plausible answers were wrong in turn. A review objected to the mean latency on Little's law: 64 in
+    flight at 22,908 tasks/hour gives 64/6.363 = 10.06 slot-seconds against a reported mean of 8.19, a 23 percent
+    gap. Then the gap was MEASURED instead of argued about, by running the same pool longer: 23 percent at 2
+    rounds, 6.3 percent at 16 (5.435s against 5.113s). It is startup and drain inside the window, and it shrinks
+    with the window -- so the mean residency was never the wrong quantity, and Little's law over a short window
+    is the figure that overstates."""
     pts = [{"concurrency": 64, "tasks_per_hour": 22908.1, "mean_latency_s": 8.19},
-           {"concurrency": 128, "tasks_per_hour": 23034.9, "mean_latency_s": 17.63},
-           {"concurrency": 256, "tasks_per_hour": 27860.7, "mean_latency_s": 26.4}]
+           {"concurrency": 128, "tasks_per_hour": 23034.9, "mean_latency_s": 17.63}]
     at64, why = policy.occupancy_at(pts, 64)
-    assert at64 == pytest.approx(10.06, abs=0.01)
-    assert at64 / 8.19 == pytest.approx(1.23, abs=0.01), "the inflation the mean latency caused"
-    assert "Not the mean latency" in why
-    assert policy.occupancy_at(pts, 128)[0] == pytest.approx(20.0, abs=0.01)
-    assert policy.occupancy_at(pts, 256)[0] == pytest.approx(33.08, abs=0.01)
+    assert at64 == pytest.approx(8.19), "the residency observed, not Little's law over a short window"
+    assert "Little's law over the same window says 10.06 s, +22.8%" in why
+    assert "startup and drain" in why and "shrinks as the window grows" in why
+
+
+def test_littles_law_is_used_only_when_no_residency_was_recorded():
+    pts = [{"concurrency": 64, "tasks_per_hour": 22908.1}, {"concurrency": 128, "tasks_per_hour": 23034.9}]
+    v, why = policy.occupancy_at(pts, 64)
+    assert v == pytest.approx(10.06, abs=0.01)
+    assert "the only figure available" in why and "reads high" in why
+
+
+def test_occupancy_per_shape_is_measured_in_a_mix_at_one_operating_point():
+    """The premise the whole index rests on, confirmed rather than assumed: two shapes at 64 in flight came out
+    9.455 and 0.770 slot-seconds a task on this deployment, a factor of 12."""
+    il = {"concurrency": 64, "transient_gap": 0.063,
+          "per_shape": {"agentic-turn": {"slot_seconds_per_task": 9.455},
+                        "short-chat": {"slot_seconds_per_task": 0.77}}}
+    a, why_a = policy.occupancy_per_shape(il, "agentic-turn")
+    b, _ = policy.occupancy_per_shape(il, "short-chat")
+    assert a == pytest.approx(9.455) and b == pytest.approx(0.77)
+    assert a / b == pytest.approx(12.28, abs=0.05)
+    assert "at 64 in flight alongside ['short-chat']" in why_a
+    assert "transient gap was +6.3%" in why_a
+
+
+def test_a_shape_absent_from_the_mix_has_no_comparable_occupancy():
+    il = {"concurrency": 64, "per_shape": {"agentic-turn": {"slot_seconds_per_task": 9.455}}}
+    v, why = policy.occupancy_per_shape(il, "retail")
+    assert v is None and "occupancy measured elsewhere is at another operating point" in why
 
 
 def test_capacity_is_not_interpolated_across_the_curve():

@@ -1,0 +1,41 @@
+{
+ "endpoint": "http://127.0.0.1:18123/v1",
+ "model": "Qwen/Qwen3.6-35B-A3B",
+ "measured_at": "2026-09-08T02:59:59+0900",
+ "concurrency": 64,
+ "elapsed_s": 86.97,
+ "completed": 1024,
+ "tasks_per_hour": 42389.2,
+ "littles_law_seconds": 5.435,
+ "observed_mean_seconds": 5.113,
+ "transient_gap": 0.0631,
+ "transient_note": "Little's law over the whole window against the mean residency actually observed. They agree when the pool was full throughout; the gap is startup and drain inside the window, and a gap that does not shrink with more rounds means the window is too short to describe a steady state",
+ "per_shape": {
+  "agentic-turn": {
+   "attempted": 512,
+   "completed": 512,
+   "failed": 0,
+   "completed_share": 0.5,
+   "slot_seconds_per_task": 9.455,
+   "p95_latency_s": 21.905,
+   "output_tokens_total": 122425,
+   "prompt_tokens_total": 1526272
+  },
+  "short-chat": {
+   "attempted": 512,
+   "completed": 512,
+   "failed": 0,
+   "completed_share": 0.5,
+   "slot_seconds_per_task": 0.77,
+   "p95_latency_s": 2.228,
+   "output_tokens_total": 6444,
+   "prompt_tokens_total": 10240
+  }
+ },
+ "note": "occupancy per shape at ONE operating point, from traffic mixed together. Shapes measured separately sit at different operating points and their capacities are not comparable, which is what this exists to avoid",
+ "does_not_establish": [
+  "that these shares are production's. The mix here is round-robin by construction, and occupancy on a batching engine depends on the mix",
+  "correctness. An HTTP 200 counts as completed work; whether the reply was right is the oracle's question",
+  "a steady state: startup and drain are inside the window"
+ ]
+}

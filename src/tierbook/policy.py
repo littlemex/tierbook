@@ -692,16 +692,25 @@ def capacity_note(t: Tier, family: str) -> str:
 
 
 def occupancy_at(points: list | None, concurrency: float | None) -> tuple[float | None, str]:
-    """Slot-seconds one task consumes at a stated operating point, by Little's law on the probe's own numbers.
+    """Slot-seconds one task consumes at a stated operating point.
 
-    Not the mean latency. A review caught this with arithmetic on the measurements already in hand: at 64
-    requests in flight the probe completed 22,908 tasks an hour, so 6.363 a second, so a fully occupied slot
-    costs 64 / 6.363 = 10.06 slot-seconds per task. The mean latency at that point was 8.19 s, which implies an
-    effective concurrency of about 52 -- it is a per-request wait seen from an unsaturated view, not the capacity
-    a task consumes. Using it inflated every slot value by roughly 23 percent.
+    The history of this function is worth keeping, because two plausible answers were both wrong in turn.
 
-    The distinction matters most where the index is used. What a contended slot allocates is capacity, and
-    capacity per task is exactly `concurrency / throughput` at the point where the contention happens.
+    It first used the mean latency the load probe reported at that concurrency. A review objected on Little's
+    law: at 64 in flight the probe completed 22,908 tasks an hour, so 6.363 a second, so `64 / 6.363 = 10.06`
+    slot-seconds -- against a reported mean of 8.19, a 23 percent gap. The objection was acted on and the
+    function switched to Little's law.
+
+    Then the gap was measured rather than argued about, by running the same pool for longer. At 2 rounds Little's
+    law read 23 percent above the observed mean; at 16 rounds it read 6.3 percent above (5.435 s against 5.113 s).
+    The gap is startup and drain inside the measurement window, and it shrinks with the window. So the mean
+    residency was never the wrong *quantity* -- in a closed pool each request holds exactly one slot for its own
+    duration, which is what a slot-value denominator wants -- and Little's law over a short window is the figure
+    that overstates. What had actually been wrong was borrowing a latency measured at a different concurrency on
+    a different request shape.
+
+    So: the observed mean residency is preferred, Little's law is carried as a convergence check, and the gap
+    between them is reported because it says whether the window was long enough to mean anything.
     """
     if not points or concurrency is None:
         return None, "no probe point, or no operating point to read it at"
@@ -713,11 +722,44 @@ def occupancy_at(points: list | None, concurrency: float | None) -> tuple[float 
     tph = at.get("tasks_per_hour")
     if not tph:
         return None, f"the probe completed no work at {int(concurrency)} in flight, so a slot bought nothing"
-    return concurrency / (tph / 3600.0), (
-        f"by Little's law at {int(concurrency)} in flight: {tph:.1f} tasks/hour is {tph / 3600.0:.3f} a second, "
-        f"so one task occupies {concurrency / (tph / 3600.0):.2f} slot-seconds. Not the mean latency at that "
-        f"point ({at.get('mean_latency_s')}s), which is a per-request wait rather than the capacity a task "
-        "consumes")
+    littles = concurrency / (tph / 3600.0)
+    observed = at.get("mean_latency_s")
+    if observed:
+        gap = littles / observed - 1
+        return float(observed), (
+            f"the mean residency observed at {int(concurrency)} in flight: {observed:.2f} slot-seconds a task. "
+            f"In a closed pool one request holds one slot for its own duration, so this is the capacity it "
+            f"consumes. Little's law over the same window says {littles:.2f} s, {gap:+.1%} -- that gap is "
+            "startup and drain inside the window and it shrinks as the window grows (23% at 2 rounds, 6.3% at "
+            "16 on this deployment), so a large gap here means the reading is a transient rather than a rate")
+    return littles, (f"by Little's law at {int(concurrency)} in flight, {tph:.1f} tasks/hour: {littles:.2f} "
+                     "slot-seconds a task. No mean residency was recorded at that point, so this is the only "
+                     "figure available and it reads high by whatever the window's startup and drain were")
+
+
+def occupancy_per_shape(interleaved: dict | None, label: str) -> tuple[float | None, str]:
+    """One shape's occupancy, measured in a mix at a single operating point.
+
+    What the slot-value index actually needs, and the only form of it that is comparable across families: shapes
+    measured one at a time sit at different operating points. Measured on this deployment, two shapes at 64 in
+    flight came out 9.455 and 0.770 slot-seconds a task -- a factor of 12 -- which is the premise the index rests
+    on, confirmed rather than assumed.
+    """
+    if not interleaved:
+        return None, "no interleaved measurement, so no shape has an occupancy at a shared operating point"
+    per = (interleaved.get("per_shape") or {}).get(label)
+    if not per:
+        return None, (f"{label!r} was not in the interleaved run (it carried "
+                      f"{sorted((interleaved.get('per_shape') or {}))}), and occupancy measured elsewhere is at "
+                      "another operating point")
+    v = per.get("slot_seconds_per_task")
+    if v is None:
+        return None, f"{label!r} completed nothing in the interleaved run"
+    gap = interleaved.get("transient_gap")
+    return float(v), (f"{v:.3f} slot-seconds a task for {label!r}, measured at "
+                      f"{interleaved.get('concurrency')} in flight alongside "
+                      f"{sorted(set((interleaved.get('per_shape') or {})) - {label})}"
+                      + (f". The window's transient gap was {gap:+.1%}" if gap is not None else ""))
 
 
 def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
