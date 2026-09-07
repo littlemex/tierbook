@@ -439,45 +439,13 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
                         "threshold here, and it is " + ("measured" if bound is not None else "NOT measured yet")))
 
 
-def _capacity_from_curve(points: list | None, latency_p95_slo_s: float | None = None) -> tuple[float | None, str]:
-    """Derive the occupancy bound from a measured service curve and the LATENCY constraint already declared.
-
-    An earlier version looked for a knee in throughput under a declared marginal-gain fraction, and the real
-    probe showed why that cannot work. Throughput went 22,908 tasks/hour at 64 in flight to 23,035 at 128 -- half
-    a percent -- and then to 27,861 at 256, a further 21 percent.
-
-    Note what that is and is not, because an earlier statement of it here was wrong: the throughput itself is
-    monotone increasing. What is non-monotone is the MARGINAL gain -- near-flat, then twenty-one percent -- which
-    is anti-concave and physically odd for a batching engine, and is at least as consistent with a two-round
-    measurement window as with a real curve. Either way the rule stopped at the first flat step and reported it
-    as capacity, and any fraction that stops there is a number nobody measured: the configured threshold this
-    module exists to avoid, wearing the word "declared".
-
-    What is genuinely available is a constraint the operator states for other purposes anyway: the p95 latency
-    this family must meet. Under it the bound is the highest probed concurrency whose p95 still fits -- past that
-    the candidate is not absorbing work usefully, because the work it returns is late. Nothing is invented: the
-    curve is measured, the SLO is declared, and the bound is where they meet.
-
-    Without an SLO there is no bound, and that is reported rather than replaced. The curve is still worth having
-    -- it is the throughput and latency frontier -- but choosing a point on a frontier is what a constraint is
-    for.
-    """
-    if not points:
-        return None, ("no load probe at several concurrencies has been run, so nothing is known about the "
-                      "occupancy at which the reserved candidate stops absorbing work usefully")
+def _bound_from_one_run(points: list, latency_p95_slo_s: float) -> tuple[float | None, str]:
+    """The tested operating bound implied by ONE probe run. Not usable on its own -- see `_capacity_from_curve`."""
     usable = [pt for pt in points if pt.get("concurrency") is not None]
     if len(usable) < 2:
-        return None, (f"a service curve needs at least two concurrencies; this one has {len(usable)}")
-    if latency_p95_slo_s is None:
-        shape = ", ".join(f"c={int(pt['concurrency'])}: {pt.get('tasks_per_hour')}/h p95 "
-                          f"{pt.get('p95_latency_s')}s" for pt in sorted(usable, key=lambda x: x["concurrency"]))
-        return None, ("a service curve exists but no p95 latency constraint was declared for this family, and "
-                      "throughput alone does not locate a bound: on the real probe the marginal gain went "
-                      "half a percent from 64 to 128 in flight and then 21 percent from 128 to 256, so the "
-                      "first flat step is not the limit. Declare the p95 this family must meet. The frontier "
-                      f"measured was {shape}")
-    # Contiguous from the bottom: a point that meets the target above one that does not is reported rather than
-    # jumped to, because a bound with a hole under it is not a bound.
+        return None, f"a run needs at least two concurrencies; this one has {len(usable)}"
+    # Contiguous from the bottom: a point that meets the target above one that does not means the constraint is
+    # not monotone in occupancy, and a bound with a hole under it is not a bound.
     within = []
     for pt in sorted(usable, key=lambda x: x["concurrency"]):
         ok = (pt.get("p95_latency_s") is not None and pt["p95_latency_s"] <= latency_p95_slo_s
@@ -486,26 +454,71 @@ def _capacity_from_curve(points: list | None, latency_p95_slo_s: float | None = 
             break
         within.append(pt)
     if not within:
-        return None, (f"no probed concurrency met the declared p95 of {latency_p95_slo_s:.2f}s without failures; "
-                      "the lowest probed point already misses it, so this candidate has no usable occupancy for "
-                      "this family rather than a bound")
+        return None, (f"no probed concurrency met {latency_p95_slo_s:.2f}s at p95 without failures; the lowest "
+                      "point already misses it")
     best = within[-1]
     top = max(pt["concurrency"] for pt in usable)
-    censored = ("" if best["concurrency"] < top else
-                f". CENSORED: {int(best['concurrency'])} is the highest concurrency probed, so the true bound is "
-                "at least this and possibly higher -- run the probe further before treating it as a limit")
+    extra = ""
+    if best["concurrency"] >= top:
+        extra = " (CENSORED: the highest concurrency probed, so the true bound is at least this)"
     higher_ok = [pt for pt in sorted(usable, key=lambda x: x["concurrency"])
                  if pt["concurrency"] > best["concurrency"] and pt.get("p95_latency_s") is not None
                  and pt["p95_latency_s"] <= latency_p95_slo_s]
-    non_monotone = ("" if not higher_ok else
-                    f". NOTE: {[int(pt['concurrency']) for pt in higher_ok]} also met the target, above a point "
-                    "that did not, so the constraint is not monotone in occupancy here and the highest "
-                    "contiguous point was taken")
-    return float(best["concurrency"]), (
-        f"a TESTED OPERATING BOUND, not a physical capacity: {int(best['concurrency'])} in flight is the highest "
-        f"probed occupancy whose OBSERVED SAMPLE p95 met the declared {latency_p95_slo_s:.2f}s "
-        f"(p95 {best.get('p95_latency_s')}s, {best.get('tasks_per_hour')} tasks/hour). One short run, no "
-        "repetition and no interval, so 'met' means the sample met it" + censored + non_monotone)
+    if higher_ok:
+        extra += (f" ({[int(pt['concurrency']) for pt in higher_ok]} also met the target above a point that did "
+                  "not, so the constraint is not monotone in occupancy here)")
+    return float(best["concurrency"]), (f"{int(best['concurrency'])} in flight, p95 {best.get('p95_latency_s')}s, "
+                                        f"{best.get('tasks_per_hour')} tasks/hour{extra}")
 
 
+def _capacity_from_curve(runs: list | None, latency_p95_slo_s: float | None = None) -> tuple[float | None, str]:
+    """A tested operating bound, and only when repeated probes agree on it.
 
+    Three answers have been tried here and the first two were wrong. A knee in throughput under a declared
+    marginal-gain fraction: refuted, because the marginal gains were near-flat then twenty-one percent and the
+    rule reported the first flat step. Then the highest probed occupancy meeting a declared p95: better, because
+    the constraint is one the operator states anyway -- but derived from a single run.
+
+    Then the run was repeated, which is this project's own rule about any conclusion, and **nothing survived**.
+    At two batches per point the probe read p95 17.5 s at 64 in flight; at eight it read 45.7 s. Throughput at 64
+    fell 21.8 percent, at 128 rose 18.9 percent, and the flat step that the first analysis had turned into a
+    capacity vanished -- 128 became the peak. Against a 20-second target the first run yields a bound of 64 and
+    the second yields none at all, because even 64 misses.
+
+    So a bound requires replicates that agree. One run is refused with that history, because a threshold that
+    changes by a factor of 2.6 between runs is not a property of the candidate. Replicates that disagree are
+    refused with both values, which is more useful than either.
+    """
+    if not runs:
+        return None, ("no load probe has been run, so nothing is known about the occupancy at which the reserved "
+                      "candidate stops meeting its latency target")
+    # A single point-list is one run. A list of point-lists is replicates.
+    blocks = runs if runs and isinstance(runs[0], list) else [runs]
+    if latency_p95_slo_s is None:
+        shape = "; ".join(
+            "run %d: %s" % (i + 1, ", ".join(f"c={int(pt['concurrency'])} {pt.get('tasks_per_hour')}/h p95 "
+                                             f"{pt.get('p95_latency_s')}s"
+                                             for pt in sorted(b, key=lambda x: x["concurrency"])))
+            for i, b in enumerate(blocks))
+        return None, ("a service curve exists but no p95 latency constraint was declared for this family, and "
+                      "throughput alone does not locate a bound: on one real probe the marginal gain went half a "
+                      "percent from 64 to 128 in flight and then 21 percent from 128 to 256, and a repeat run "
+                      f"reversed that shape entirely. Declare the p95 this family must meet. Measured: {shape}")
+    if len(blocks) < 2:
+        one, why = _bound_from_one_run(blocks[0], latency_p95_slo_s)
+        return None, ("a bound was computed from a SINGLE probe run and is refused on this deployment's own "
+                      f"history: {why if one is None else 'it would be ' + why}. Repeating the probe changed p95 "
+                      "at 64 in flight from 17.5 s to 45.7 s and moved the throughput peak from 256 to 128, so "
+                      "one run does not measure a property of the candidate. Probe again and pass both runs")
+    bounds, whys = [], []
+    for i, b in enumerate(blocks):
+        v, why = _bound_from_one_run(b, latency_p95_slo_s)
+        bounds.append(v)
+        whys.append(f"run {i + 1}: {why}")
+    if len(set(bounds)) != 1 or bounds[0] is None:
+        return None, (f"the probe runs do not agree on a bound at {latency_p95_slo_s:.2f}s -- {'; '.join(whys)}. "
+                      "A threshold that moves between runs is not a property of the candidate, and taking either "
+                      "value would be choosing which run to believe")
+    return bounds[0], (f"a TESTED OPERATING BOUND, not a physical capacity, and it REPRODUCED across "
+                       f"{len(blocks)} probe runs at a declared {latency_p95_slo_s:.2f}s p95: "
+                       + "; ".join(whys))

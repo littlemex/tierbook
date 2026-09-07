@@ -30,13 +30,20 @@ def pt(c, tph, p95, failed=0):
     return {"concurrency": c, "tasks_per_hour": tph, "p95_latency_s": p95, "failed": failed}
 
 
-#: A probe where p95 crosses 20 s above 8 in flight, so 8 is the last occupancy that meets the constraint.
-CURVE = [pt(1, 60, 3.0), pt(2, 118, 5.0), pt(4, 230, 9.0), pt(8, 420, 18.0), pt(16, 415, 40.0)]
+#: A probe where p95 crosses 20 s above 8 in flight, so 8 is the last occupancy that meets the constraint. TWO
+#: runs that agree, because one run is refused: the real probe's bound moved by a factor of 2.6 between runs.
+_RUN = [pt(1, 60, 3.0), pt(2, 118, 5.0), pt(4, 230, 9.0), pt(8, 420, 18.0), pt(16, 415, 40.0)]
+_RUN2 = [pt(1, 58, 3.1), pt(2, 120, 5.2), pt(4, 233, 9.4), pt(8, 415, 18.6), pt(16, 410, 41.0)]
+CURVE = [_RUN, _RUN2]
 
-#: The real probe. Its throughput is monotone increasing; what is non-monotone is the MARGINAL gain -- +0.55%
-#: from 64 to 128 and then +20.95% from 128 to 256 -- which is anti-concave and suspect for a batching engine.
+#: The real probe, run 1 (2 batches per point). Its throughput is monotone increasing; what is non-monotone is
+#: the MARGINAL gain -- +0.55% from 64 to 128 and then +20.95% from 128 to 256.
 REAL = [pt(16, 7957.3, 8.71), pt(32, 16024.5, 12.01), pt(64, 22908.1, 17.46),
         pt(128, 23034.9, 34.13), pt(256, 27860.7, 46.57)]
+
+#: The real probe, run 2 (8 batches per point). Nothing survived: p95 at 64 went 17.46 to 45.68, throughput at 64
+#: fell 21.8%, and the peak moved from 256 to 128.
+REAL2 = [pt(64, 17918.9, 45.68), pt(128, 27379.8, 42.01), pt(256, 25635.0, 70.44)]
 
 
 def st(**kw):
@@ -80,33 +87,58 @@ def test_a_tighter_constraint_moves_the_bound_down():
     assert D._capacity_from_curve(CURVE, 4.0)[0] == 1.0
 
 
+def test_a_single_probe_run_cannot_support_a_bound():
+    """This deployment's own history is the argument. Repeating the probe moved p95 at 64 in flight from 17.5 s to
+    45.7 s and the throughput peak from 256 to 128, so one run does not measure a property of the candidate."""
+    bound, why = D._capacity_from_curve(REAL, 20.0)
+    assert bound is None
+    assert "SINGLE probe run" in why and "17.5 s to 45.7 s" in why
+    assert "Probe again and pass both runs" in why
+
+
+def test_runs_that_disagree_are_refused_with_both_values():
+    """Taking either value would be choosing which run to believe."""
+    bound, why = D._capacity_from_curve([REAL, REAL2], 20.0)
+    assert bound is None
+    assert "do not agree on a bound" in why
+    assert "run 1: 64 in flight" in why and "run 2: no probed concurrency met" in why
+
+    # And at a target both runs clear, they still disagree on where the bound is.
+    bound60, why60 = D._capacity_from_curve([REAL, REAL2], 60.0)
+    assert bound60 is None and "run 1: 256 in flight" in why60 and "run 2: 128 in flight" in why60
+
+
+def test_agreeing_runs_produce_a_bound_that_says_it_reproduced():
+    bound, why = D._capacity_from_curve(CURVE, 20.0)
+    assert bound == 8.0
+    assert "REPRODUCED across 2 probe runs" in why
+    assert "run 1: 8 in flight" in why and "run 2: 8 in flight" in why
+
+
 def test_a_throughput_knee_is_not_used_because_the_real_curve_has_none():
     """22,908 tasks/hour at 64 in flight, 23,035 at 128 (+0.55%), 27,861 at 256 (+20.95%). An earlier rule
-    stopped at the first dip and reported it as capacity; that was the dip, not a limit."""
-    bound, why = D._capacity_from_curve(REAL, None)
+    stopped at the first flat step and reported it as capacity; the repeat run then reversed the shape."""
+    bound, why = D._capacity_from_curve([REAL, REAL2], None)
     assert bound is None
     assert "throughput alone does not locate a bound" in why
-    assert "the marginal gain went" in why and "first flat step is not the limit" in why
+    assert "a repeat run reversed that shape entirely" in why
     # And the throughput itself is monotone, which an earlier statement of this got wrong.
     tph = [pt["tasks_per_hour"] for pt in REAL]
     assert tph == sorted(tph), "monotone increasing; it is the marginal gain that is not"
-    # With the constraint the answer is a real occupancy, and it is not 64 by coincidence of a dip.
-    assert D._capacity_from_curve(REAL, 20.0)[0] == 64.0
-    assert D._capacity_from_curve(REAL, 40.0)[0] == 128.0
 
 
 def test_a_bound_at_the_top_of_the_probed_range_says_it_is_censored():
-    bound, why = D._capacity_from_curve(REAL, 60.0)
+    bound, why = D._capacity_from_curve([REAL, REAL], 60.0)
     assert bound == 256.0 and "CENSORED" in why
 
 
-def test_no_probed_concurrency_meeting_the_constraint_is_no_usable_occupancy():
-    bound, why = D._capacity_from_curve(REAL, 1.0)
-    assert bound is None and "no usable occupancy" in why
+def test_no_probed_concurrency_meeting_the_constraint_is_reported_per_run():
+    bound, why = D._capacity_from_curve([REAL, REAL], 1.0)
+    assert bound is None and "the lowest point already misses it" in why
 
 
 def test_a_curve_with_one_point_cannot_locate_a_bound():
-    p = policy(["box"], curve=[pt(1, 60, 3.0)])
+    p = policy(["box"], curve=[[pt(1, 60, 3.0)], [pt(1, 58, 3.1)]])
     assert p.can_ever_fire is False
     assert any("at least two concurrencies" in g for g in p.gaps)
 
@@ -291,6 +323,6 @@ def test_a_point_meeting_the_target_above_one_that_does_not_is_reported_not_jump
     """A bound with a hole under it is not a bound, and the constraint is not guaranteed monotone in occupancy on
     a batching engine."""
     holed = [pt(1, 60, 3.0), pt(2, 118, 25.0), pt(4, 230, 9.0)]
-    bound, why = D._capacity_from_curve(holed, 20.0)
+    bound, why = D._capacity_from_curve([holed, holed], 20.0)
     assert bound == 1.0
     assert "[4] also met the target" in why and "not monotone in occupancy" in why

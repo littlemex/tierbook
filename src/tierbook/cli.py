@@ -181,10 +181,16 @@ def cmd_compile(args) -> int:
     # The policy as a function of observed state, not only as the point the cohort's state produced. Every
     # threshold in it is a measurement or a named gap; the reference is the declared default, because when no
     # rule holds the cheapest candidate is the one there is least reason to trust.
-    probe = json.loads(Path(args.service_curve).read_text()) if args.service_curve else None
-    # The probe's POINTS, not a curve of throughput alone: the bound comes from latency against the declared
-    # p95, so a mapping of concurrency to tasks-per-hour is not enough on its own.
-    points = (probe or {}).get("points") if isinstance(probe, dict) else (probe if isinstance(probe, list) else None)
+    # REPLICATES. A bound from a single probe run is refused, because repeating this deployment's own probe moved
+    # p95 at 64 in flight from 17.5 s to 45.7 s. `--service-curve` is repeatable; each occurrence is one run.
+    runs = []
+    for path in (args.service_curve or []):
+        probe = json.loads(Path(path).read_text())
+        pts = probe.get("points") if isinstance(probe, dict) else probe
+        if not pts:
+            raise SystemExit(f"[FAIL] {path} carries no probe points")
+        runs.append(pts)
+    points = runs[0] if runs else None
     table["decide"] = {}
     # Occupancy per task AT THE BOUND, not at whatever concurrency was convenient: the slot value is a saving
     # divided by the occupancy it costs, and that occupancy is a property of the operating point. Taken from the
@@ -199,7 +205,7 @@ def cmd_compile(args) -> int:
                                  metered_ids={t for t in tiers} - self_hosted,
                                  default=(families[fam],),
                                  default_declared_by=("--config" if cfg else "--family FAMILY=REFERENCE"),
-                                 service_curve=points,
+                                 service_curve=(runs or None),
                                  latency_p95_slo_s=(args.capacity_p95_slo_s
                                                     or ((o.latency_slo_p95_ms / 1000.0)
                                                         if o and o.latency_slo_p95_ms else None)),
@@ -450,13 +456,15 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--max-age-days", type=int, default=90)
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
-    c.add_argument("--service-curve", default=None,
+    c.add_argument("--service-curve", action="append", default=None,
                    help="the load probe's own output (harness/service_curve.py), carrying a concurrency, a "
                         "throughput and a p95 latency per point. The reserved candidate's occupancy bound is "
                         "DERIVED from those points against the p95 below. A scalar is deliberately not "
                         "accepted: a number a caller passes is a configured threshold whatever the "
-                        "documentation beside it says. Without a probe the guard is emitted unmeasured, no rule "
-                        "can fire, and the missing measurement is named")
+                        "documentation beside it says. REPEATABLE, and at least two runs are required: repeating "
+                        "this deployment's probe moved p95 at 64 in flight from 17.5 s to 45.7 s, so one run does "
+                        "not measure a property of the candidate. Without agreeing runs the guard is emitted "
+                        "unmeasured, no rule can fire, and the missing measurement is named")
     c.add_argument("--capacity-p95-slo-s", type=float, default=None,
                    help="the p95 seconds this family must meet, used to locate the occupancy bound on the "
                         "measured curve. Defaults to the objective's own latency SLO when a config supplies "
