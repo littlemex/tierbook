@@ -19,15 +19,23 @@ def entry(chosen, *, status="assigned", reason=None):
             "validation": {"reason": reason} if reason else {}}
 
 
-def policy(chosen, *, reserved=("box",), metered=("strong", "cheap"), curve=None, gain=0.10, age=30, **kw):
+def policy(chosen, *, reserved=("box",), metered=("strong", "cheap"), curve=None, slo=20.0, age=30, **kw):
     """A compiled policy with the parts a caller must declare, so a test never gets them by default."""
     return D.compile_policy("f", entry(chosen, **kw), reserved_ids=set(reserved), metered_ids=set(metered),
                             default=("strong",), default_declared_by="the test",
-                            service_curve=curve, min_marginal_gain=gain, max_evidence_age_days=age)
+                            service_curve=curve, latency_p95_slo_s=slo, max_evidence_age_days=age)
 
 
-#: A probe whose throughput stops buying a worthwhile gain above 8 in flight: 16 returns less than 8 did.
-CURVE = {"1": 60, "2": 118, "4": 230, "8": 420, "16": 415}
+def pt(c, tph, p95, failed=0):
+    return {"concurrency": c, "tasks_per_hour": tph, "p95_latency_s": p95, "failed": failed}
+
+
+#: A probe where p95 crosses 20 s above 8 in flight, so 8 is the last occupancy that meets the constraint.
+CURVE = [pt(1, 60, 3.0), pt(2, 118, 5.0), pt(4, 230, 9.0), pt(8, 420, 18.0), pt(16, 415, 40.0)]
+
+#: The real probe, whose throughput is non-monotone: +0.55% from 64 to 128 and then +20.95% from 128 to 256.
+REAL = [pt(16, 7957.3, 8.71), pt(32, 16024.5, 12.01), pt(64, 22908.1, 17.46),
+        pt(128, 23034.9, 34.13), pt(256, 27860.7, 46.57)]
 
 
 def st(**kw):
@@ -53,16 +61,46 @@ def test_an_unmeasured_threshold_means_no_rule_can_ever_fire_and_that_is_reporte
     assert any("unmeasured_threshold" in g for g in out["gaps"])
 
 
-def test_the_bound_is_derived_from_the_curve_not_accepted_as_a_number():
-    """A scalar a caller passes is a configured threshold whatever the documentation beside it says."""
-    p = policy(["box"], curve=CURVE)
+def test_the_bound_is_where_the_measured_curve_meets_the_declared_latency_constraint():
+    """Nothing invented: the curve is measured, the p95 is declared for other purposes anyway, and the bound is
+    where they meet."""
+    p = policy(["box"], curve=CURVE, slo=20.0)
     assert p.can_ever_fire is True and p.gaps == []
     when = D.as_dict(p)["rules"][0]["when"]
-    assert any("inflight:box < 8.0" in w and "last step worth taking reached 8" in w for w in when)
+    assert any("inflight:box < 8.0" in w and "declared p95 of 20.00s" in w for w in when)
 
 
-def test_a_curve_with_one_point_cannot_show_where_throughput_stops_rising():
-    p = policy(["box"], curve={"1": 60})
+def test_a_tighter_constraint_moves_the_bound_down():
+    """The bound is a function of the constraint, which is what makes it derived rather than stored."""
+    assert D._capacity_from_curve(CURVE, 20.0)[0] == 8.0
+    assert D._capacity_from_curve(CURVE, 10.0)[0] == 4.0
+    assert D._capacity_from_curve(CURVE, 4.0)[0] == 1.0
+
+
+def test_a_throughput_knee_is_not_used_because_the_real_curve_has_none():
+    """22,908 tasks/hour at 64 in flight, 23,035 at 128 (+0.55%), 27,861 at 256 (+20.95%). An earlier rule
+    stopped at the first dip and reported it as capacity; that was the dip, not a limit."""
+    bound, why = D._capacity_from_curve(REAL, None)
+    assert bound is None
+    assert "throughput alone does not locate a bound" in why
+    assert "first flat step is not the limit" in why
+    # With the constraint the answer is a real occupancy, and it is not 64 by coincidence of a dip.
+    assert D._capacity_from_curve(REAL, 20.0)[0] == 64.0
+    assert D._capacity_from_curve(REAL, 40.0)[0] == 128.0
+
+
+def test_a_bound_at_the_top_of_the_probed_range_says_it_is_censored():
+    bound, why = D._capacity_from_curve(REAL, 60.0)
+    assert bound == 256.0 and "CENSORED" in why
+
+
+def test_no_probed_concurrency_meeting_the_constraint_is_no_usable_occupancy():
+    bound, why = D._capacity_from_curve(REAL, 1.0)
+    assert bound is None and "no usable occupancy" in why
+
+
+def test_a_curve_with_one_point_cannot_locate_a_bound():
+    p = policy(["box"], curve=[pt(1, 60, 3.0)])
     assert p.can_ever_fire is False
     assert any("at least two concurrencies" in g for g in p.gaps)
 
@@ -132,12 +170,31 @@ def test_above_capacity_a_cascade_degrades_to_its_own_metered_tail():
     assert "assignment's own metered tail" in above["reason"]
 
 
+def test_a_spend_refusal_does_not_withhold_paid_for_capacity():
+    """The box charges nothing. Gating the whole cascade on authorisation made usable capacity unreachable for
+    want of permission the box does not need."""
+    p = policy(["box", "cheap"], curve=CURVE)
+    out = D.decide(p, st(metered_authorised=False, **{"available:box": True, "inflight:box": 1}))
+    assert out["assign"] == ["box"]
+    assert "a refusal nothing requires" in out["reason"]
+
+
+def test_a_box_that_is_down_hands_over_to_the_tail_not_the_default():
+    """Previously neither rule fired: the below-capacity rule needed the box up, and the above-capacity rule had
+    no availability test -- so a certified tail sat unused while traffic went to an unrelated default."""
+    p = policy(["box", "cheap"], curve=CURVE)
+    out = D.decide(p, st(**{"available:box": False, "inflight:box": 0}))
+    assert out["assign"] == ["cheap"] and "is not serving" in out["reason"]
+
+
 def test_a_second_reserved_candidate_is_named_as_unmodelled_rather_than_guessed():
     """One occupancy figure cannot describe two of them, and guessing which one a request would land on is a
     scheduling decision this does not make."""
     p = policy(["box", "box2"], reserved=("box", "box2"), curve=CURVE)
-    assert p.provenance["reserved_not_modelled"] == ["box2"]
-    assert "cannot describe two of them" in p.provenance["reserved_not_modelled_note"]
+    # Refused, not partially guarded. An earlier version guarded the first and recorded the others as "not
+    # modelled" -- and the whole assignment still fired, so the unguarded legs ran with no capacity semantics.
+    assert p.rules == () and p.certified is False
+    assert "only one can be capacity-guarded" in p.note
 
 
 # --- what is declared says who declared it -------------------------------------------------------
@@ -192,26 +249,7 @@ def test_the_artifact_is_readable_without_importing_this_module():
     assert d["domain"]["inflight:box"] == [0, float("inf")]
 
 
-def test_a_curve_still_rising_at_the_top_is_censored_not_a_bound():
-    """The first real probe did this: still buying throughput at 32, the highest tried. Returning the top of the
-    range would emit the probe's own limit as if it were the candidate's capacity."""
-    p = policy(["box"], curve={"1": 1885, "2": 2576, "4": 4447, "8": 6747, "16": 10125, "32": 16914})
-    assert p.can_ever_fire is False
-    assert any("probe's limit, not the candidate's" in g for g in p.gaps)
 
-
-def test_the_knee_is_found_under_a_declared_criterion_and_missed_without_one():
-    """The second real probe: 22,908 tasks/hour at 64 in flight, 23,035 at 128 -- half a percent, while mean
-    latency doubled from 8.2s to 17.6s. Strictly that is rising, and a strict test walks past the knee."""
-    real = {"16": 7957.3, "32": 16024.5, "64": 22908.1, "128": 23034.9, "256": 27860.7}
-    bound, why = D._capacity_from_curve(real, 0.10)
-    assert bound == 64.0 and "declared 10% marginal-gain criterion" in why
-
-    undeclared, why2 = D._capacity_from_curve(real, None)
-    assert undeclared is None and "not a fact about a curve" in why2
-
-    strict, _ = D._capacity_from_curve(real, 0.0)
-    assert strict is None, "a strict test walks to the top of the range and is censored"
 
 
 # --- rule order must not be doing the deciding ----------------------------------------------------
@@ -221,8 +259,8 @@ def test_the_capacity_split_is_provably_disjoint():
     """`decide` returns the first match, so two rules that can both hold mean the order they were appended in
     silently decides assignments. With one rule this was dormant; the split made it two."""
     p = policy(["box", "cheap"], curve=CURVE)
-    assert len(p.rules) == 2
-    assert p.overlaps == []
+    assert len(p.rules) == 4, "authorised/unauthorised x below/at-capacity, plus the box being down"
+    assert p.overlaps == [], "no assignment depends on the order the rules happen to be listed in"
     assert D.as_dict(p)["rule_overlaps"] == []
 
 

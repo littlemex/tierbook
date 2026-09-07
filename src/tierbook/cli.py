@@ -181,10 +181,9 @@ def cmd_compile(args) -> int:
     # threshold in it is a measurement or a named gap; the reference is the declared default, because when no
     # rule holds the cheapest candidate is the one there is least reason to trust.
     probe = json.loads(Path(args.service_curve).read_text()) if args.service_curve else None
-    # The file may be the probe's whole output or just its curve. Both are accepted because both are things a
-    # caller reasonably has, and the seconds-per-task figure the slot value needs only exists in the former.
-    curve = (probe or {}).get("curve", probe) if isinstance(probe, dict) else None
-    points = (probe or {}).get("points") if isinstance(probe, dict) else None
+    # The probe's POINTS, not a curve of throughput alone: the bound comes from latency against the declared
+    # p95, so a mapping of concurrency to tasks-per-hour is not enough on its own.
+    points = (probe or {}).get("points") if isinstance(probe, dict) else (probe if isinstance(probe, list) else None)
     table["decide"] = {}
     # Occupancy per task AT THE BOUND, not at whatever concurrency was convenient: the slot value is a saving
     # divided by the occupancy it costs, and that occupancy is a property of the operating point. Taken from the
@@ -199,7 +198,10 @@ def cmd_compile(args) -> int:
                                  metered_ids={t for t in tiers} - self_hosted,
                                  default=(families[fam],),
                                  default_declared_by=("--config" if cfg else "--family FAMILY=REFERENCE"),
-                                 service_curve=curve, min_marginal_gain=args.capacity_marginal_gain,
+                                 service_curve=points,
+                                 latency_p95_slo_s=(args.capacity_p95_slo_s
+                                                    or ((o.latency_slo_p95_ms / 1000.0)
+                                                        if o and o.latency_slo_p95_ms else None)),
                                  max_evidence_age_days=args.max_age_days)
             table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
             bound = ((pol.domain or {}).get(f"inflight:{sorted(self_hosted)[0]}")
@@ -441,17 +443,18 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
     c.add_argument("--service-curve", default=None,
-                   help="JSON mapping concurrency to observed tasks per hour, from a load probe at several "
-                        "concurrencies. The reserved candidate's capacity bound is DERIVED from it -- the "
-                        "concurrency beyond which throughput stopped rising. A scalar is deliberately not "
+                   help="the load probe's own output (harness/service_curve.py), carrying a concurrency, a "
+                        "throughput and a p95 latency per point. The reserved candidate's occupancy bound is "
+                        "DERIVED from those points against the p95 below. A scalar is deliberately not "
                         "accepted: a number a caller passes is a configured threshold whatever the "
-                        "documentation beside it says. Without a curve the guard is emitted unmeasured, no "
-                        "rule can fire, and the missing probe is named")
-    c.add_argument("--capacity-marginal-gain", type=float, default=None,
-                   help="the fraction of extra throughput a step up in concurrency must buy to be worth the "
-                        "occupancy, e.g. 0.10. A POLICY INPUT, because 'throughput stopped rising' is not a "
-                        "fact about a curve: one real probe rose half a percent between two concurrencies "
-                        "while latency doubled, and a strict test walks past that knee")
+                        "documentation beside it says. Without a probe the guard is emitted unmeasured, no rule "
+                        "can fire, and the missing measurement is named")
+    c.add_argument("--capacity-p95-slo-s", type=float, default=None,
+                   help="the p95 seconds this family must meet, used to locate the occupancy bound on the "
+                        "measured curve. Defaults to the objective's own latency SLO when a config supplies "
+                        "one, because it is the same constraint. Throughput alone cannot locate a bound: one "
+                        "real probe rose half a percent from 64 to 128 in flight and then 21 percent from 128 "
+                        "to 256, so the first flat step is not the limit")
     c.add_argument("--window-hours", type=float, default=None,
                    help="how many hours the reservation was held for, so its bill can be compared against "
                         "what the traffic it absorbed would have cost elsewhere. A POLICY INPUT: a "

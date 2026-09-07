@@ -316,7 +316,10 @@ def as_dict(policy: Policy) -> dict:
         "certified": policy.certified,
         "note": policy.note,
         "domain": policy.domain,
+        "provenance": policy.provenance,
         "unmeasured_guards": policy.gaps,
+        "can_ever_fire": policy.can_ever_fire,
+        "rule_overlaps": policy.overlaps,
         "missing_for_a_closed_loop": list(MISSING_FOR_A_CLOSED_LOOP),
         "rules": [{"when": [g.describe() for g in r.guards], "assign": list(r.assign),
                    "because": r.because} for r in policy.rules],
@@ -325,7 +328,7 @@ def as_dict(policy: Policy) -> dict:
 
 def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_ids: set[str],
                    default: tuple[str, ...], default_declared_by: str,
-                   service_curve: dict | None = None, min_marginal_gain: float | None = None,
+                   service_curve: list | None = None, latency_p95_slo_s: float | None = None,
                    max_evidence_age_days: float | None = None) -> Policy:
     """Derive the policy from one compiled family entry. Every threshold is a measurement or a named gap.
 
@@ -335,11 +338,11 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     metered tail if it has one, and only otherwise to the declared default, because a certified cascade's tail
     is a measured continuation while an unrelated default is not.
 
-    `service_curve` is where the boundary comes from, and it must be **measurements**, not a number: a mapping
-    of concurrency to observed tasks per hour, from a load probe. The bound is derived here, as the highest
-    concurrency at which throughput was still rising -- above that the candidate is absorbing no more work.
-    Accepting a scalar was the previous shape and it was a configured threshold with documentation attached: a
-    caller could pass 8 and the compiler would label it measured.
+    `service_curve` is where the boundary comes from, and it must be **measurements**: the probe's own points,
+    each with a concurrency, a throughput and a p95 latency. The bound is derived from them against the p95 the
+    operator already declares for this family -- see `_capacity_from_curve` for why a throughput knee cannot do
+    the job. Accepting a scalar was an earlier shape and it was a configured threshold with documentation
+    attached: a caller could pass 8 and the compiler would label it measured.
 
     Two guards nobody had written are written now, because "a threshold is a measurement or a gap" had a third
     case: a guard that does not exist. `metered_authorised` gates any assignment that charges, so a rule cannot
@@ -374,99 +377,116 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
                       default, domain={}, certified=True, provenance=prov,
                       note="unconditional in occupancy: nothing here is capacity-bound")
 
-    box = reserved[0]
-    bound, source = _capacity_from_curve(service_curve, min_marginal_gain)
-    # Above capacity the assignment's own metered tail is a measured continuation; an unrelated default is not.
-    tail = tuple(c for c in chosen if c not in reserved_ids)
-    guards = (age, *money,
-              Guard(f"available:{box}", "==", True,
-                    derived_from="observed while the cohort ran; a candidate that is not serving cannot absorb "
-                                 "work"),
-              Guard(f"inflight:{box}", "<", bound, derived_from=source))
-    rules = [Rule(guards, chosen,
-                  "the reserved candidate is certified for this family and free at the margin while it has "
-                  "capacity, so paid-for capacity is used before anything metered is charged")]
-    if tail:
-        rules.append(Rule((age, *money, Guard(f"inflight:{box}", ">=", bound, derived_from=source)), tail,
-                          "above the reserved candidate's capacity, the assignment's own metered tail carries "
-                          "the request. That tail was measured as part of this arrangement; the declared "
-                          "default was not"))
     if len(reserved) > 1:
-        prov["reserved_not_modelled"] = sorted(reserved[1:])
-        prov["reserved_not_modelled_note"] = (
-            "this assignment contains more than one reserved candidate and only the first is capacity-guarded. "
-            "One occupancy figure cannot describe two of them, and guessing which one a request would land on "
-            "is a scheduling decision this does not make")
-    # The domain does NOT stop at the boundary. Above capacity is the measured branch, not an unknown region,
-    # and truncating there classified the default branch as an unsupported extrapolation.
+        # Refused rather than partially guarded. An earlier version guarded the first reserved candidate and
+        # recorded the others as "not modelled" -- but the whole assignment still fired and was exported, so the
+        # unguarded legs ran with no capacity semantics at all. A degenerate output is a correct output here:
+        # refusing to compile is better than emitting an assignment whose occupancy nobody can evaluate.
+        return Policy(family, (), default, domain={}, certified=False, provenance=prov,
+                      note=("no rule: this assignment contains reserved candidates "
+                            f"{sorted(reserved)} and only one can be capacity-guarded. One occupancy figure "
+                            "cannot describe several of them, and firing the assignment anyway would run the "
+                            "unguarded legs with no capacity semantics. Compile one reserved candidate per "
+                            "assignment, or give each its own availability and occupancy"))
+
+    box = reserved[0]
+    bound, source = _capacity_from_curve(service_curve, latency_p95_slo_s)
+    tail = tuple(c for c in chosen if c not in reserved_ids)
+    avail = Guard(f"available:{box}", "==", True,
+                  derived_from="observed while the cohort ran; a candidate that is not serving cannot absorb "
+                               "work")
+    below = Guard(f"inflight:{box}", "<", bound, derived_from=source)
+    at_or_above = Guard(f"inflight:{box}", ">=", bound, derived_from=source)
+    unauthorised = Guard("metered_authorised", "==", False,
+                         derived_from="the gateway authorises spend or it does not")
+
+    # Four branches, because three of them were previously wrong or missing. The below-capacity rule used to
+    # gate the WHOLE assignment on `metered_authorised`, so a spend refusal made paid-for box capacity
+    # unreachable -- the box charges nothing and was being withheld for want of authorisation it does not need.
+    # And the above-capacity tail carried no availability test, so with the box down and occupancy below the
+    # bound neither rule fired even though the certified tail applied.
+    rules = []
+    if tail:
+        rules.append(Rule((age, *money, avail, below), chosen,
+                          "the reserved candidate is certified and free at the margin while it has capacity, "
+                          "and its metered tail is authorised to catch what it cannot do"))
+        # Explicitly the negation, not merely the absence, of the authorisation guard. Omitting it would leave
+        # this rule a subset of the one above, and then which of them applied would be decided by the order they
+        # happen to be listed in -- the thing the overlap check exists to catch.
+        rules.append(Rule((age, unauthorised, avail, below), (box,),
+                          "the reserved candidate has capacity but its metered tail is not authorised to "
+                          "spend. Paid-for capacity is still usable, and withholding it for want of "
+                          "authorisation the box does not need would be a refusal nothing requires"))
+        rules.append(Rule((age, *money, avail, at_or_above), tail,
+                          "at or above the reserved candidate's capacity, the assignment's own metered tail "
+                          "carries the request. That tail was measured as part of this arrangement; the "
+                          "declared default was not"))
+        rules.append(Rule((age, *money, Guard(f"available:{box}", "==", False, derived_from=avail.derived_from)),
+                          tail,
+                          "the reserved candidate is not serving, so the assignment's own metered tail carries "
+                          "the request rather than the unrelated default"))
+    else:
+        rules.append(Rule((age, *money, avail, below), chosen,
+                          "the reserved candidate is certified for this family and free at the margin while it "
+                          "has capacity, so paid-for capacity is used before anything metered is charged"))
+
     domain = {} if bound is None else {f"inflight:{box}": [0, float("inf")]}
     if max_evidence_age_days is not None:
         domain["evidence_age_days"] = [0, max_evidence_age_days]
     return Policy(family, tuple(rules), default, domain=domain, certified=True, provenance=prov,
                   note=("the boundary between the reserved candidate and what follows it is the occupancy at "
-                        "which the reserved one stops absorbing work. That is the only derived threshold here, "
-                        "and it is " + ("derived from a service curve" if bound is not None
-                                        else "NOT measured yet")))
+                        "which it stops meeting the declared latency constraint. That is the only derived "
+                        "threshold here, and it is " + ("measured" if bound is not None else "NOT measured yet")))
 
 
-def _capacity_from_curve(curve: dict | None, min_marginal_gain: float | None = None) -> tuple[float | None, str]:
-    """Derive the occupancy bound from a service curve, or say why there is none.
+def _capacity_from_curve(points: list | None, latency_p95_slo_s: float | None = None) -> tuple[float | None, str]:
+    """Derive the occupancy bound from a measured service curve and the LATENCY constraint already declared.
 
-    The curve maps concurrency to observed tasks per hour. The bound is the highest concurrency up to which
-    every step still bought at least `min_marginal_gain` more throughput; past it the candidate absorbs no more
-    useful work, so sending more is queueing rather than serving.
+    An earlier version looked for a knee in throughput under a declared marginal-gain fraction, and the real
+    probe showed why that cannot work. Throughput went 22,908 tasks/hour at 64 in flight to 23,035 at 128 -- half
+    a percent -- and then to 27,861 at 256, a further 21 percent. That is non-monotone evidence, not evidence
+    that capacity stops at 64: the rule stopped at the first dip and ignored the recovery, so it reported the
+    dip. And any fraction that would have stopped there is a number nobody measured, which is the configured
+    threshold this module exists to avoid, wearing the word "declared".
 
-    **`min_marginal_gain` is a declared policy input, and it has to be**, because "stopped rising" is not a
-    fact about the curve. The real probe here went 22,908 tasks/hour at 64 in flight to 23,035 at 128 -- a rise
-    of half a percent, while mean latency doubled from 8.2 to 17.6 seconds. Strictly that is rising, and a
-    strict test walks straight past the knee; anything stricter needs a number, and inventing one here would be
-    the configured threshold this module exists to avoid. So the operator states what a worthwhile gain is, the
-    artifact records it, and the bound is derived from the measurements under that statement.
+    What is genuinely available is a constraint the operator states for other purposes anyway: the p95 latency
+    this family must meet. Under it the bound is the highest probed concurrency whose p95 still fits -- past that
+    the candidate is not absorbing work usefully, because the work it returns is late. Nothing is invented: the
+    curve is measured, the SLO is declared, and the bound is where they meet.
+
+    Without an SLO there is no bound, and that is reported rather than replaced. The curve is still worth having
+    -- it is the throughput and latency frontier -- but choosing a point on a frontier is what a constraint is
+    for.
     """
-    if not curve:
-        return None, ("no load probe at several concurrencies has been run, so the occupancy at which the "
-                      "reserved candidate stops absorbing work is unmeasured")
-    points = sorted((float(k), float(v)) for k, v in curve.items())
-    if len(points) < 2:
-        return None, (f"a service curve needs at least two concurrencies to show where throughput stops "
-                      f"rising; this one has {len(points)}")
-    if min_marginal_gain is None:
-        return None, (f"a service curve over {[int(c) for c, _ in points]} exists but no marginal-gain "
-                      "criterion was declared, and 'stopped rising' is not a fact about a curve: one real probe "
-                      "rose half a percent between two concurrencies while latency doubled. State what gain is "
-                      "worth the occupancy")
-    best_c, best_tph = points[0]
-    for c, tph in points[1:]:
-        if best_tph <= 0 or (tph - best_tph) / best_tph < min_marginal_gain:
-            break
-        best_c, best_tph = c, tph
-    if best_c == points[-1][0]:
-        # Censored, not measured. Throughput was still rising at the highest concurrency probed, so the
-        # occupancy where it stops is somewhere above the range -- and returning the top of the range would
-        # emit the probe's own limit as if it were the candidate's. The first probe run here did exactly this:
-        # still rising at 32, which says the probe was too small and nothing about the box.
-        return None, (f"the probe over {[int(c) for c, _ in points]} was still buying at least "
-                      f"{min_marginal_gain:.0%} more throughput at the highest concurrency tried "
-                      f"({int(best_c)}, {best_tph:.1f} tasks/hour), so where that stops is above the range "
-                      "probed. That is the probe's limit, not the candidate's; run it higher")
-    return best_c, (f"derived from a service curve over concurrencies {[int(c) for c, _ in points]} under a "
-                    f"declared {min_marginal_gain:.0%} marginal-gain criterion: the last step worth taking "
-                    f"reached {int(best_c)} in flight at {best_tph:.1f} tasks/hour")
+    if not points:
+        return None, ("no load probe at several concurrencies has been run, so nothing is known about the "
+                      "occupancy at which the reserved candidate stops absorbing work usefully")
+    usable = [pt for pt in points if pt.get("concurrency") is not None]
+    if len(usable) < 2:
+        return None, (f"a service curve needs at least two concurrencies; this one has {len(usable)}")
+    if latency_p95_slo_s is None:
+        shape = ", ".join(f"c={int(pt['concurrency'])}: {pt.get('tasks_per_hour')}/h p95 "
+                          f"{pt.get('p95_latency_s')}s" for pt in sorted(usable, key=lambda x: x["concurrency"]))
+        return None, ("a service curve exists but no p95 latency constraint was declared for this family, and "
+                      "throughput alone does not locate a bound: the real probe rose half a percent from 64 to "
+                      "128 in flight and then 21 percent from 128 to 256, so the first flat step is not the "
+                      f"limit. Declare the p95 this family must meet. The frontier measured was {shape}")
+    within = [pt for pt in sorted(usable, key=lambda x: x["concurrency"])
+              if pt.get("p95_latency_s") is not None and pt["p95_latency_s"] <= latency_p95_slo_s
+              and (pt.get("failed") or 0) == 0]
+    if not within:
+        return None, (f"no probed concurrency met the declared p95 of {latency_p95_slo_s:.2f}s without failures; "
+                      "the lowest probed point already misses it, so this candidate has no usable occupancy for "
+                      "this family rather than a bound")
+    best = within[-1]
+    top = max(pt["concurrency"] for pt in usable)
+    censored = ("" if best["concurrency"] < top else
+                f". CENSORED: {int(best['concurrency'])} is the highest concurrency probed, so the true bound is "
+                "at least this and possibly higher -- run the probe further before treating it as a limit")
+    return float(best["concurrency"]), (
+        f"derived from a measured service curve and the declared p95 of {latency_p95_slo_s:.2f}s: "
+        f"{int(best['concurrency'])} in flight is the highest probed occupancy that still met it "
+        f"(p95 {best.get('p95_latency_s')}s, {best.get('tasks_per_hour')} tasks/hour)" + censored)
 
 
-def as_dict(policy: Policy) -> dict:
-    """The policy as plain data, for the artifact. Readable without importing this module."""
-    return {
-        "family": policy.family,
-        "default": list(policy.default),
-        "certified": policy.certified,
-        "note": policy.note,
-        "domain": policy.domain,
-        "provenance": policy.provenance,
-        "unmeasured_guards": policy.gaps,
-        "can_ever_fire": policy.can_ever_fire,
-        "rule_overlaps": policy.overlaps,
-        "missing_for_a_closed_loop": list(MISSING_FOR_A_CLOSED_LOOP),
-        "rules": [{"when": [g.describe() for g in r.guards], "assign": list(r.assign),
-                   "because": r.because} for r in policy.rules],
-    }
+
