@@ -792,3 +792,49 @@ def test_the_order_says_it_is_not_wired_into_decide():
         alternatives={"agentic-coding": tiers["api-strong-a"]}, seconds_per_task=8.19)
     assert "not consulted by `decide`" in order["not_wired_into_decide"]
     assert "atomic decision" in order["not_wired_into_decide"]
+
+
+# --- the price nobody could look up -------------------------------------------------------------
+
+
+def test_the_break_even_price_needs_no_price_to_compute():
+    """The gateway in front of this deployment meters tokens and not money, and the cloud pricing API carries no
+    entry for the model the metered arm ran on. Choosing a number would put an invented figure at the centre of
+    the comparison, so the question is inverted instead."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    alt = tiers["api-strong-a"]
+    alt.outcome("agentic-coding")["tokens"] = {"fresh_in": 1_000_000, "cached_in": 0, "cache_write": 0,
+                                             "out": 250_000}
+    v = policy.break_even_price(box, alt, "agentic-coding", window_hours=1.07)
+    bill = 15.2174 * 1.07
+    assert v["usd_per_mtok"] == pytest.approx(bill / 1.25, rel=1e-6)
+    assert v["alternative_output_share"] == pytest.approx(0.2)
+    assert "No price was assumed to get here" in v["reason"]
+    assert any("tokenizes differently" in a for a in v["assumes"])
+
+
+def test_a_break_even_price_without_a_window_is_refused():
+    tiers = registry()
+    v = policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
+                               window_hours=None)
+    assert v["usd_per_mtok"] is None and "no cost without a stated window" in v["reason"]
+
+
+def test_an_incomplete_token_set_cannot_be_broken_even_against():
+    tiers = registry()
+    tiers["api-strong-a"].outcome("agentic-coding")["tokens"] = {"fresh_in": 10, "out": 1}
+    v = policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
+                               window_hours=1.0)
+    assert v["usd_per_mtok"] is None and "absent is not zero" in v["reason"]
+
+
+def test_a_family_share_scales_the_reservation_side():
+    tiers = registry()
+    tiers["api-strong-a"].outcome("agentic-coding")["tokens"] = {"fresh_in": 1_000_000, "cached_in": 0,
+                                                               "cache_write": 0, "out": 0}
+    whole = policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
+                                    window_hours=1.0)
+    half = policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
+                                   window_hours=1.0, family_share=0.5)
+    assert half["usd_per_mtok"] == pytest.approx(whole["usd_per_mtok"] / 2)

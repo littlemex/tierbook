@@ -777,6 +777,66 @@ def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
     }
 
 
+def break_even_price(reserved: Tier, alternative: Tier, family: str, *, window_hours: float | None,
+                     family_share: float | None = None) -> dict:
+    """The alternative's price at which the two arms cost the same, derived without knowing any price.
+
+    The most useful thing that can be said when the price card is not obtainable, and here it was not: the
+    gateway in front of this deployment meters tokens and not money, and the cloud pricing API carries no entry
+    for the model the metered arm ran on. Choosing a number would put an invented figure at the centre of the
+    comparison.
+
+    So invert the question. The reservation's cost over a stated window is measured. The alternative's token legs
+    are gateway-metered. The unknown is one scalar -- the blended price the alternative charges -- and there is
+    exactly one value of it at which the two arms cost the same. Above it the reservation is cheaper; below it,
+    the alternative. The reader compares that figure against the price they actually pay, which they know and
+    this does not.
+
+    Blended at the *observed* input-to-output ratio, because a single price only exists at one mix. The ratio is
+    reported so a reader can convert to a two-part card themselves.
+    """
+    if not reserved.is_reserved:
+        return {"usd_per_mtok": None, "reason": f"{reserved.id!r} holds no reservation to break even against"}
+    if window_hours is None:
+        return {"usd_per_mtok": None,
+                "reason": "a reservation has no cost without a stated window, so there is nothing to break "
+                          "even against"}
+    tok = (alternative.outcome(family) or {}).get("tokens") or {}
+    absent = [k for k in ("fresh_in", "cached_in", "out") if tok.get(k) is None]
+    if not tok or absent:
+        return {"usd_per_mtok": None,
+                "reason": f"the alternative's token legs for {family!r} are "
+                          + ("absent" if not tok else f"incomplete ({absent}, and absent is not zero")
+                          + ", so what it would have to charge cannot be computed"}
+    share = 1.0 if family_share is None else float(family_share)
+    bill = reserved.record["price_card"]["hourly_fixed_usd"] * window_hours * share
+    total = sum(int(tok.get(k) or 0) for k in ("fresh_in", "cached_in", "cache_write", "out"))
+    if total <= 0:
+        return {"usd_per_mtok": None, "reason": "the alternative used no tokens, so no price equalises the two"}
+    out_tok = int(tok.get("out") or 0)
+    return {
+        "usd_per_mtok": bill / (total / 1e6),
+        "reservation_usd": round(bill, 6),
+        "alternative_tokens": total,
+        "alternative_output_share": round(out_tok / total, 6),
+        "window_hours": window_hours,
+        "family_share": share,
+        "reason": (f"the reservation cost ${bill:.6f} over {window_hours:.2f} hours, and the alternative used "
+                   f"{total:,} tokens on the same work. They cost the same when the alternative charges "
+                   f"${bill / (total / 1e6):.4f} per million tokens blended at this cohort's mix "
+                   f"({out_tok / total:.1%} output). Above that the reservation is cheaper; below it, the "
+                   "alternative. No price was assumed to get here"),
+        "assumes": [
+            "the two arms did the same work, which the paired item set makes true of the tasks and not of the "
+            "token counts: a different model tokenizes differently and takes a different number of turns",
+            "one blended price, which exists only at this mix; convert with the reported output share for a "
+            "two-part card",
+            "the window is the window the reservation was actually held for, and the reservation served nothing "
+            "else in it unless a family share says otherwise",
+        ],
+    }
+
+
 def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
                       seconds_per_task: float | None) -> dict:
     """The order families should be admitted to a contended reserved candidate, highest slot value first.
