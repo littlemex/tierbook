@@ -43,6 +43,21 @@ NETWORK = re.compile(r"https?://|git@|github\.com|pypi\.org")
 #: evidence that a run wandered out of its directory.
 NETWORK_TOOLS = frozenset({"webfetch", "websearch"})
 
+#: Absolute paths appearing inside a shell command. A `bash` call can go anywhere and the audit sees only the
+#: string, so the string is read: this is weaker than inspecting a named argument and it is the difference between
+#: catching `find /tmp -name '*.py'` -- which a real run did -- and not looking at all.
+#:
+#: Directories every checkout legitimately touches are excluded by prefix rather than by guessing at intent. A
+#: command reading /proc or writing /dev/null is not a run leaving its workspace, and flagging those would make
+#: the check noise.
+#: A slash preceded by a glob character, a bracket or a dot is not the start of an absolute path. Two real
+#: commands showed why each exclusion is needed: `*/xarray/*` was read as the directory `/xarray/`, and
+#: `find . -path ./tests -prune` was read as `/tests`. Excluded by what precedes the slash rather than by the shape
+#: of what follows, because a pattern, a relative path and an absolute one look identical from the right.
+SHELL_PATH = re.compile(r"(?<![\w/*?\].])(/[\w./~-]+)")
+SHELL_BENIGN = ("/dev/", "/proc/", "/sys/", "/usr/", "/bin/", "/lib", "/etc/ssl", "/opt/", "/var/tmp/pytest",
+                "/dev/null")
+
 
 def workspace_of(trace_id: str, manifests: list[Path], returned: str | None) -> tuple[str | None, str]:
     """The run's workspace, from the driver's manifest, or recovered from the returned tar's name."""
@@ -77,9 +92,24 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
                 outside.append(f"{key}={v}")
     network = (name not in NETWORK_TOOLS
                and any(isinstance(args.get(k), str) and NETWORK.search(args[k]) for k in NETWORK_KEYS))
-    if not outside and not network and not refused:
+    # A shell command's own paths. Read from the string because there is no argument to read, which makes this the
+    # weakest part of the audit and better than the alternative of not looking.
+    shell_outside = []
+    cmd = args.get("command")
+    if isinstance(cmd, str) and workspace:
+        for hit in SHELL_PATH.findall(cmd):
+            if hit.startswith(tuple(SHELL_BENIGN)) or hit in ("/", "//"):
+                continue
+            if hit == workspace or hit.startswith(workspace.rstrip("/") + "/"):
+                continue
+            if hit not in shell_outside:
+                shell_outside.append(hit)
+    if not outside and not network and not refused and not shell_outside:
         return None
     return {"tool": name, "outside_workspace": outside, "network": network, "refused": refused,
+            # Kept apart from `outside_workspace`: one is a named argument the tool contract defines, the other is
+            # a string this file parsed, and they do not deserve the same confidence.
+            "shell_paths_outside": shell_outside,
             "args": (params or "")[:200]}
 
 
@@ -115,26 +145,39 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path]) -> dict:
             "workspace": ws, "workspace_source": ws_source,
             "tool_calls": len(calls[t]),
             "outside_workspace": sum(1 for f in findings if f["outside_workspace"]),
+            "shell_paths_outside": sum(1 for f in findings if f["shell_paths_outside"]),
             "network": sum(1 for f in findings if f["network"]),
             "refused": sum(1 for f in findings if f["refused"]),
             "findings": findings,
         })
-    clean = [r for r in per_run if not r["outside_workspace"] and not r["network"] and not r["refused"]]
+    clean = [r for r in per_run if not r["outside_workspace"] and not r["network"] and not r["refused"]
+             and not r["shell_paths_outside"]]
     unknown_ws = [r["item_id"] for r in per_run if not r["workspace"]]
+    # A run that made no tool calls has no out-of-workspace paths, so "clean" would be satisfied by having done
+    # nothing. That is the shape of the failure this check was built to find, and it must not be the shape of
+    # passing it. Reported separately and counted against the mechanism verdict.
+    silent = [r["item_id"] for r in per_run if r["tool_calls"] == 0]
     return {
         "runs": len(per_run),
         "clean": len(clean),
         "with_outside_paths": sum(1 for r in per_run if r["outside_workspace"]),
+        "with_shell_paths_outside": sum(1 for r in per_run if r["shell_paths_outside"]),
         "with_network": sum(1 for r in per_run if r["network"]),
         "with_refusals": sum(1 for r in per_run if r["refused"]),
         "solved_with_refusals": sum(1 for r in per_run if r["refused"] and r["state"] == "solved"),
         "workspace_unknown": unknown_ws,
+        "no_tool_calls": silent,
         "per_run": per_run,
-        "mechanism_pass": (sum(1 for r in per_run if r["outside_workspace"] or r["network"]) == 0
-                           and not unknown_ws),
+        "mechanism_pass": (sum(1 for r in per_run
+                               if r["outside_workspace"] or r["network"] or r["shell_paths_outside"]) == 0
+                           and not unknown_ws and not silent),
         "mechanism_note": ("the pass condition is zero out-of-workspace paths and zero network references across "
-                           "every run, checkable without reference to any outcome. A run whose workspace could "
-                           "not be established counts against it, because an unknown workspace cannot be audited"),
+                           "every run, checkable without reference to any outcome. Three things count against it "
+                           "besides those: a run whose workspace could not be established, because an unknown "
+                           "workspace cannot be audited; a run that made no tool calls at all, because doing "
+                           "nothing would otherwise satisfy staying put; and a shell command naming a path "
+                           "outside the workspace, read from the command string, which is weaker evidence than a "
+                           "named argument and is reported apart from it"),
     }
 
 
@@ -152,7 +195,8 @@ def main() -> int:
     res = audit(Path(a.traces), Path(a.outcomes), manifests)
 
     print(f"{res['runs']} runs   clean {res['clean']}   out-of-workspace {res['with_outside_paths']}   "
-          f"network {res['with_network']}   refused {res['with_refusals']}")
+          f"shell paths {res['with_shell_paths_outside']}   network {res['with_network']}   "
+          f"refused {res['with_refusals']}")
     print(f"  of the runs with a refusal, {res['solved_with_refusals']} solved")
     for r in res["per_run"]:
         if not (r["outside_workspace"] or r["network"] or r["refused"]):
@@ -163,6 +207,8 @@ def main() -> int:
             bits = []
             if f["outside_workspace"]:
                 bits.append("outside " + ", ".join(f["outside_workspace"]))
+            if f["shell_paths_outside"]:
+                bits.append("shell " + ", ".join(f["shell_paths_outside"][:3]))
             if f["network"]:
                 bits.append("network")
             if f["refused"]:

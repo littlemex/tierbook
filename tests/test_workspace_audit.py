@@ -134,3 +134,70 @@ def test_a_url_inside_file_content_is_not_a_network_call():
 def test_a_command_that_reaches_the_network_is_still_caught():
     f = call("bash", {"command": "pip install requests --index-url https://pypi.org/simple"})
     assert f["network"] is True
+
+
+def test_a_run_that_made_no_tool_calls_does_not_pass_by_doing_nothing(tmp_path):
+    """It has zero out-of-workspace paths, which is the shape of the failure this check was built to find and must
+    not be the shape of passing it."""
+    traces = tmp_path / "t.jsonl"
+    traces.write_text("")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "unobserved",
+                                    "returned": "/work/returned/opencode-abc.tar"}) + "\n")
+    res = wa.audit(traces, outcomes, [])
+    assert res["no_tool_calls"] == ["i1"]
+    assert res["mechanism_pass"] is False
+    assert "doing\nnothing" in res["mechanism_note"].replace(" nothing", "\nnothing") or \
+        "doing nothing" in res["mechanism_note"]
+
+
+def test_a_shell_command_naming_a_path_outside_the_workspace_is_caught():
+    """A `bash` call has no path argument to read, so the command string is read instead. One real run did
+    `find /tmp -name "*.py"` and the audit saw nothing."""
+    f = call("bash", {"command": 'find /tmp -name "*.py" -path "*/xarray/*" | head -50'})
+    assert f["shell_paths_outside"] == ["/tmp"]
+    assert f["outside_workspace"] == [], "kept apart: one is a named argument, the other a parsed string"
+
+
+def test_a_shell_command_inside_the_workspace_is_not_flagged():
+    f = call("bash", {"command": f"cd {WS} && python -m pytest tests/test_x.py"})
+    assert f is None
+
+
+def test_directories_every_checkout_touches_are_not_flagged():
+    """Reading /proc or writing to /dev/null is not a run leaving its workspace, and flagging it would make the
+    check noise."""
+    for cmd in ("cat /proc/cpuinfo", "python -c 'x' 2>/dev/null", "ls /usr/lib/python3",
+                "echo hi > /dev/null"):
+        assert call("bash", {"command": cmd}) is None, cmd
+
+
+def test_a_bare_root_in_a_command_is_not_read_as_a_path():
+    """A slash appears in flags, regexes and arithmetic. Treating every one as a directory would flag almost
+    everything."""
+    assert call("bash", {"command": "python -c 'print(3/4)'"}) is None
+    assert call("bash", {"command": "grep -E 'a/b|c' file.txt"}) is None
+
+
+def test_a_glob_pattern_is_not_read_as_an_absolute_path():
+    """`*/xarray/*` was being read as the directory `/xarray/`. A pattern and a path look identical from the right,
+    so the exclusion is on what precedes the slash."""
+    f = call("bash", {"command": 'find . -path "*/xarray/*" -name "*.py"'})
+    assert f is None
+    f2 = call("bash", {"command": 'grep -rn "x" */src/*.py'})
+    assert f2 is None
+
+
+def test_a_relative_path_in_a_shell_command_is_not_read_as_absolute():
+    """Two real commands: `find . -path ./tests -prune` was read as the directory `/tests`, and
+    `find . -path ./.git -prune` as `/.git`."""
+    for cmd in (f'cd {WS} && find . -path ./tests -prune -o -name "*.py" -print',
+                f'cd {WS} && find . -path ./.git -prune -o -type f -print'):
+        assert call("bash", {"command": cmd}) is None, cmd
+
+
+def test_a_scratch_file_written_outside_the_workspace_is_caught():
+    """A real run wrote /tmp/test_typehints.py and ran a tool against it. That is work happening outside the
+    directory the run is supposed to be confined to, and no named argument records it."""
+    f = call("bash", {"command": f"cd {WS} && cat > /tmp/test_typehints.py << 'EOF'\nclass C: pass\nEOF"})
+    assert f["shell_paths_outside"] == ["/tmp/test_typehints.py"]
