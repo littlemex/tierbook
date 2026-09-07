@@ -185,12 +185,15 @@ def test_a_chain_is_only_offered_when_the_request_can_reject_the_artifact():
 
 def test_cost_is_per_incoming_request_not_per_solved_task():
     # Per-solve would smuggle a second quality objective in after non-inferiority already constrained it.
+    # Taken on a metered tier, so the subject stays per-request-versus-per-solve and does not also depend on
+    # how a fixed hourly reservation combines with a token card.
     tiers = registry()
-    arr = policy.Arrangement(("self-hosted-a",), "outright")
-    per_request = policy._cost_per_request(tiers, arr, "agentic-coding", 616)
-    o = tiers["self-hosted-a"].outcome("agentic-coding")
+    arr = policy.Arrangement(("api-cheap-a",), "outright")
+    per_request, basis = policy._cost_per_request(tiers, arr, "agentic-coding", 616)
+    o = tiers["api-cheap-a"].outcome("agentic-coding")
     assert per_request == pytest.approx(o["bill_usd"] / o["attempted"]
-                                        + tiers["self-hosted-a"].amortised_cost_per_task(616), rel=1e-9)
+                                        + tiers["api-cheap-a"].retry_premium, rel=1e-9)
+    assert basis is None, "a gateway authored this charge, so nothing needs qualifying"
 
 
 def test_the_decision_carries_the_registry_version_so_it_can_be_replayed():
@@ -267,3 +270,140 @@ def test_a_spent_budget_stops_the_walk():
     ep = policy.run(("a", "b", "c"), execute, budget_usd=1.5)
     assert len(ep.attempts) == 2
     assert "budget" in ep.stopped_because
+
+
+# --- an unmeasured spend is refused, never priced at zero ------------------------------------------
+
+
+def test_an_absent_bill_is_priced_from_the_rate_card_and_says_so():
+    """The record already carries what pricing needs -- a rate card and the token legs that were observed --
+    so a missing gateway charge is not a missing cost. It is a cost from a different authority, and the
+    difference is stated rather than hidden."""
+    tiers = registry()
+    t = tiers["api-cheap-a"]
+    o = t.outcome("agentic-coding")
+    del o["bill_usd"]
+    o["tokens"] = {"fresh_in": 1_000_000, "cached_in": 0, "cache_write": 0, "out": 100_000}
+    spend, basis = policy._family_spend(t, "agentic-coding")
+    assert basis == "rate_card_and_observed_tokens"
+    assert spend == pytest.approx(t.token_cost(1_000_000, 0, 100_000, 0), rel=1e-9)
+    _, note = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
+                                       "agentic-coding", 616)
+    assert note and "no gateway authored this charge" in note
+
+
+def test_a_gateway_bill_wins_over_the_rate_card_when_both_exist():
+    """Cost truth belongs to the billing gateway: it is what the money left through. A rate card is a model
+    of that, and a model must not overrule the thing it models."""
+    tiers = registry()
+    t = tiers["api-cheap-a"]
+    o = t.outcome("agentic-coding")
+    o["tokens"] = {"fresh_in": 10 ** 9, "cached_in": 0, "cache_write": 0, "out": 10 ** 9}
+    spend, basis = policy._family_spend(t, "agentic-coding")
+    assert basis == "gateway_bill" and spend == pytest.approx(o["bill_usd"])
+
+
+def test_neither_a_bill_nor_tokens_is_refused_rather_than_treated_as_free():
+    """The defect this replaces. An absent `bill_usd` read as $0.00 makes a candidate free, and free wins a
+    cost objective by construction -- so forgetting to measure would have been the cheapest thing a
+    candidate could do."""
+    tiers = registry()
+    o = tiers["api-cheap-a"].outcome("agentic-coding")
+    del o["bill_usd"]
+    o.pop("tokens", None)
+    spend, why = policy._family_spend(tiers["api-cheap-a"], "agentic-coding")
+    assert spend is None
+    assert "not zero spend" in why and "unmeasured spend" in why
+    cost, note = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
+                                          "agentic-coding", 616)
+    assert cost == float("inf"), "excluded for want of a figure, not made free by its absence"
+    assert "unmeasured spend" in note
+
+
+def test_an_absent_token_leg_is_refused_rather_than_summed_as_zero():
+    """Same rule one level down: three legs summed where four were billed reports a total below what was
+    paid, and the dropped leg is the one that only appears on long threads."""
+    tiers = registry()
+    o = tiers["api-cheap-a"].outcome("agentic-coding")
+    del o["bill_usd"]
+    o["tokens"] = {"fresh_in": 1000, "cached_in": None, "out": 10}
+    spend, why = policy._family_spend(tiers["api-cheap-a"], "agentic-coding")
+    assert spend is None and "cached_in" in why and "not a zero leg" in why
+
+
+def test_a_candidate_excluded_for_want_of_a_figure_does_not_read_as_expensive():
+    """An incident review cares which one it was: no measurement, or a measurement that came out high."""
+    tiers = registry()
+    o = tiers["api-cheap-a"].outcome("agentic-coding")
+    del o["bill_usd"]
+    o.pop("tokens", None)
+    d = policy.assign_family(tiers, "agentic-coding", "api-strong-a", margin=0.40, alpha=0.05,
+                             realised_tasks_per_hour=616, today=TODAY)
+    entry = next(c for c in d.ranked if list(c.arrangement.tiers) == ["api-cheap-a"])
+    assert entry.cost_per_request == float("inf")
+    assert "cost not computed" in entry.note
+
+
+def test_a_fixed_cost_candidate_is_not_charged_for_its_hour_twice():
+    """The schema says a non-null hourly price makes the effective rate `max(token rates, hourly / realised
+    tasks per hour)`. The code summed them, which bills one GPU twice and inflates precisely the candidate
+    the owner has decided to keep. The two figures describe one machine: the per-token card for a self-hosted
+    engine is that same hour divided by throughput at saturation."""
+    tiers = registry()
+    t = tiers["self-hosted-a"]
+    o = t.outcome("agentic-coding")
+    cost, basis = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
+                                           "agentic-coding", 616)
+    token_side = o["bill_usd"] / o["attempted"]
+    hour_side = t.amortised_cost_per_task(616)
+    assert cost == pytest.approx(max(token_side, hour_side) + t.retry_premium, rel=1e-9)
+    assert cost < token_side + hour_side, "the sum is the defect this replaces"
+    assert "bills the GPU twice" in basis
+    # Which side bound and at what occupancy, because that is the whole content of the figure: an hour spread
+    # over an idle machine is an experimenter's cost, not a deployment's.
+    assert "binds at $" in basis and "concurrency" in basis and "tasks/hour" in basis
+
+
+def test_the_hour_binds_when_the_machine_is_idler_than_the_card_assumed():
+    """Which figure binds is not a preference. A card measured at saturation understates the cost of a
+    machine nobody is keeping busy, so the amortised share is the larger number exactly then -- and `max`
+    picks it without anyone choosing."""
+    tiers = registry()
+    t = tiers["self-hosted-a"]
+    o = t.outcome("agentic-coding")
+    idle, busy = 1.0, 100_000.0
+    cost_idle, _ = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
+                                            "agentic-coding", idle)
+    cost_busy, _ = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
+                                            "agentic-coding", busy)
+    assert cost_idle == pytest.approx(t.amortised_cost_per_task(idle) + t.retry_premium, rel=1e-9)
+    assert cost_busy == pytest.approx(o["bill_usd"] / o["attempted"] + t.retry_premium, rel=1e-9)
+    assert cost_idle > cost_busy
+
+
+def test_an_idle_fixed_cost_candidate_is_infinite_not_cheap():
+    """The switch that keeps a rented machine out of an assignment when nothing keeps it busy. Unchanged by
+    the above, and checked here because the no-double-charge branch is where it now lives."""
+    tiers = registry()
+    tiers["self-hosted-a"].record["price_card"]["hourly_fixed_usd"] = 15.21742
+    cost, basis = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
+                                           "agentic-coding", None)
+    assert cost == float("inf")
+    # "inf" is the finding, not a formatting accident, so it is stated in words rather than printed as a
+    # number a reader might take for a large price.
+    assert "spread over no work" in basis and "unbounded cost per request" in basis
+
+
+def test_a_fixed_cost_candidate_with_no_token_figure_rests_on_its_hour_and_says_so():
+    """Not a refusal: an hourly reservation IS a cost figure, and `max` can only ignore an unmeasured token
+    side, never make anything cheaper. But the figure then rests on one leg of a two-leg comparison, and a
+    reader has to be told which."""
+    tiers = registry()
+    o = tiers["self-hosted-a"].outcome("agentic-coding")
+    del o["bill_usd"]
+    o.pop("tokens", None)
+    cost, basis = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
+                                          "agentic-coding", 616)
+    assert cost == pytest.approx(tiers["self-hosted-a"].amortised_cost_per_task(616)
+                                 + tiers["self-hosted-a"].retry_premium, rel=1e-9)
+    assert "hourly reservation alone" in basis and "was not available to compare against" in basis

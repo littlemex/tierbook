@@ -468,26 +468,107 @@ class Decision:
     objective: str = "cost"
 
 
+def _family_spend(t: Tier, family: str) -> tuple[float | None, str]:
+    """What this tier's family cost in total, and on whose authority.
+
+    Two authorities, in order, and the order is the project's rule about cost: **a gateway's charge wins
+    whenever one exists**, because the gateway is what the money actually left through. Only when no charge
+    was authored is the figure derived from the tier's own rate card and the token legs that were observed.
+
+    Neither present is a refusal, never a zero. An earlier version read an absent `bill_usd` as $0.00, and a
+    free candidate wins a cost objective by construction -- so a record that simply forgot to state its spend
+    would have been selected *because* it forgot. It survived only because the one cohort that hit it had a
+    single candidate, where a wrong cost changes no decision.
+    """
+    o = t.outcome(family) or {}
+    bill = o.get("bill_usd")
+    if bill is not None:
+        return float(bill), "gateway_bill"
+    tok = o.get("tokens") or {}
+    if tok:
+        absent = [k for k in ("fresh_in", "cached_in", "out") if tok.get(k) is None]
+        if absent:
+            return None, (f"token legs {absent} are absent from {t.id!r} on {family!r}, and an absent leg is "
+                          "not a zero leg -- the total would be below what was paid")
+        return t.token_cost(int(tok["fresh_in"]), int(tok["cached_in"]), int(tok["out"]),
+                            int(tok.get("cache_write") or 0)), "rate_card_and_observed_tokens"
+    return None, (f"{t.id!r} states neither a gateway bill nor observed token legs for {family!r}, so it has "
+                  "no spend figure. That is not zero spend: it is unmeasured spend, and treating it as free "
+                  "would make forgetting to measure the cheapest thing a candidate can do")
+
+
 def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str,
-                      realised_tasks_per_hour: float | None) -> float:
-    """Expected spend per *incoming request*, not per solved task.
+                      realised_tasks_per_hour: float | None) -> tuple[float, str | None]:
+    """Expected spend per *incoming request*, not per solved task, and a refusal instead of a guess.
 
     Per-solve would smuggle a second quality objective in after non-inferiority has already constrained
     quality: an arrangement that solves less looks cheaper per solve while costing the same per request.
     """
     total = 0.0
     reach = 1.0
+    bases = []
     for tid in arr.tiers:
         t = tiers[tid]
         o = t.outcome(family) or {}
         n = o.get("attempted") or 0
         if not n:
-            return math.inf
-        per_request = (o.get("bill_usd") or 0.0) / n
-        total += reach * (per_request + t.retry_premium + t.amortised_cost_per_task(realised_tasks_per_hour))
+            return math.inf, f"{tid!r} attempted nothing on {family!r}"
+        amortised = t.amortised_cost_per_task(realised_tasks_per_hour)
+        if t.record["price_card"].get("hourly_fixed_usd"):
+            # `max`, not `+`, and the schema said so all along: "non-null makes this tier's effective rate
+            # max(token rates, hourly / realised tasks per hour)". They are two descriptions of ONE machine --
+            # the per-token card for a self-hosted engine is that same hour divided by throughput at
+            # saturation -- so summing them bills the GPU twice, and it inflates precisely the candidate the
+            # owner has decided to keep. `max` is the binding one: realised throughput never exceeds
+            # saturation, so the amortised share is the larger figure exactly when the machine is idler than
+            # the card assumed, which is when the card understates it.
+            spend, basis = _family_spend(t, family)
+            per_request = None if spend is None else spend / n
+            if per_request is None:
+                bases.append("hourly_reservation_amortised_over_measured_throughput")
+            else:
+                # Which side binds, and at what occupancy, because that is the whole content of the figure.
+                # The hour binds when the machine is idler than the card assumed, and a reader who cannot see
+                # that will take an idle experimenter's cost for the deployment's.
+                _, conc = _family_latency_seconds(t.outcome(family) or {})
+                which = "hourly reservation" if amortised >= per_request else "per-token rates"
+                # An idle fixed-cost candidate has an infinite amortised share, which is the switch that keeps
+                # a rented machine out of an assignment when nothing keeps it busy. It is stated as such
+                # rather than formatted as a number, because "inf" is the finding.
+                hour = ("unbounded: no throughput was realised, so the hour is spread over no work"
+                        if amortised == math.inf else
+                        f"${amortised:.6f} at {realised_tasks_per_hour:.1f} tasks/hour measured at "
+                        f"concurrency {conc}")
+                bound = max(per_request, amortised)
+                bases.append(
+                    f"hourly_or_tokens:{which} binds at "
+                    + ("an unbounded cost per request" if bound == math.inf else f"${bound:.6f} per request")
+                    + f" (hour {hour}; tokens ${per_request:.6f})")
+            total += reach * (max(per_request or 0.0, amortised) + t.retry_premium)
+        else:
+            spend, basis = _family_spend(t, family)
+            if spend is None:
+                return math.inf, basis
+            bases.append(basis)
+            total += reach * (spend / n + t.retry_premium + amortised)
         solved = (o.get("solved") or 0) / n
         reach *= max(0.0, 1.0 - solved)
-    return total
+    # A figure derived from a rate card is not the same object as a figure a gateway authored, and a reader
+    # comparing two arrangements has to be able to see which one they are looking at.
+    if any(b == "hourly_reservation_amortised_over_measured_throughput" for b in bases):
+        # `max` can only ever ignore an unmeasured token side, never make anything cheaper, so this is safe
+        # rather than a hole -- but a reader has to know the figure rests on one leg of a two-leg comparison.
+        return total, ("a fixed-cost candidate priced on its hourly reservation alone: it states no gateway "
+                       "bill and no observed token legs for this family, so the token side of "
+                       "max(token rates, hourly / throughput) was not available to compare against")
+    binding = [b for b in bases if b.startswith("hourly_or_tokens:")]
+    if binding:
+        return total, ("a fixed-cost candidate priced at whichever binds; the two are never added, because "
+                       "they describe the same machine and summing them bills the GPU twice. "
+                       + "; ".join(b.split(":", 1)[1] for b in binding))
+    derived = [b for b in bases if b != "gateway_bill"]
+    return total, (None if not derived else
+                   "priced from the rate card and the observed token legs; no gateway authored this charge")
 
 
 def _family_latency_seconds(o: dict) -> tuple[float | None, int]:
@@ -661,9 +742,15 @@ def assign_family(
         lcb, note = _quality(tiers, arr, family, reference, alpha)
         certified = lcb is not None and lcb >= -margin
         tph, refusal = throughput_for(tiers[arr.head], family, realised_tasks_per_hour)
-        cost = math.inf if refusal else _cost_per_request(tiers, arr, family, tph)
+        cost, basis = (math.inf, None) if refusal else _cost_per_request(tiers, arr, family, tph)
         if refusal:
             note = f"{note}; cost not computed: {refusal}"
+        elif cost == math.inf and basis:
+            # Excluded for want of a spend figure rather than for being expensive, and the two must not read
+            # the same: one is a measurement, the other is a gap in one.
+            note = f"{note}; cost not computed: {basis}"
+        elif basis:
+            note = f"{note}; {basis}"
         ranked.append(Candidate(arr, lcb, cost, certified, note,
                                 _latency_per_request(tiers, arr, family)))
     # One objective, chosen explicitly. Certification comes first in the key either way: the margin is a
