@@ -276,10 +276,11 @@ def test_a_spent_budget_stops_the_walk():
 
 
 def test_gateway_metered_tokens_are_priced_at_a_declared_card_and_the_basis_says_so():
-    """A change of position the measurement forced. The gateway in front of this deployment was measured: its
-    ledger moved 22,009 units for 22,008 input plus 1 output token, and 623 for 23 input plus 600 output. It
-    counts tokens, unweighted, identically across models -- a meter, not a bill. Waiting for a dollar figure it
-    does not have leaves the framework unable to rank anything.
+    """A change of position a measurement forced, though it establishes less than it first appeared to. The
+    ledger moved 22,009 units for 22,008 input plus 1 output token, and 623 for 23 input plus 600 output. Two
+    points fit any two-parameter linear meter, so this does not show it counts tokens rather than money -- what
+    it shows is that the unit does not distinguish input from output, and a unit blind to that ratio cannot be
+    converted to dollars, because that ratio is where most of a card's structure lives.
 
     What was forbidden is inventing the QUANTITY. The quantity here is gateway-authored; the card is a contract
     someone signed, exactly like the reservation price."""
@@ -295,7 +296,7 @@ def test_gateway_metered_tokens_are_priced_at_a_declared_card_and_the_basis_says
                                           "agentic-coding")
     assert cost != float("inf")
     assert "The tokens are settled; the dollars are not" in note
-    assert "counts tokens rather than money" in note
+    assert "does not distinguish input from output" in note
 
 
 def test_a_settled_charge_still_wins_over_a_declared_card():
@@ -983,3 +984,60 @@ def test_a_saving_from_unpaired_cohorts_is_refused():
     v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=10.06,
                           alternative_certified=True)
     assert v["usd_per_slot_second"] is None and "not paired" in v["reason"]
+
+
+def test_a_zero_or_nonfinite_occupancy_is_refused_rather_than_dividing():
+    """Zero divides, a negative inverts the ranking, and a NaN propagates silently through a sort."""
+    tiers = registry()
+    for bad in (0, -1.0, float("nan"), float("inf")):
+        v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=tiers["api-strong-a"],
+                              seconds_per_task=bad, alternative_certified=True)
+        assert v["usd_per_slot_second"] is None
+        assert "is not a duration a task can consume" in v["reason"]
+
+
+def test_equal_attempt_counts_do_not_pass_for_pairing():
+    """Equal counts prove equal sizes. Two unrelated cohorts of one size would produce a difference between means
+    of different work."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    box.outcome("agentic-coding")["reserved_charge_kind"] = "reservation_plus_metered"
+    box.outcome("agentic-coding")["cohort"] = "cohort-A"
+    tiers["api-strong-a"].outcome("agentic-coding")["cohort"] = "cohort-B"
+    v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=10.06,
+                          alternative_certified=True)
+    assert v["usd_per_slot_second"] is None
+    assert "different item cohorts" in v["reason"] and "would pass a count check" in v["reason"]
+
+
+def test_exactly_zero_saving_is_indifference_not_a_loss():
+    """Calling it a loss would foreclose the decision something else should make."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    o = box.outcome("agentic-coding")
+    o["reserved_charge_kind"] = "reservation_plus_metered"
+    o["cohort"] = tiers["api-strong-a"].outcome("agentic-coding")["cohort"] = "same"
+    o["attempted"] = tiers["api-strong-a"].outcome("agentic-coding")["attempted"]
+    o["bill_usd"] = tiers["api-strong-a"].outcome("agentic-coding")["bill_usd"]
+    o["latency"] = {"unit": "seconds_per_task", "mean": 10.0, "concurrency_when_measured": 1}
+    order = policy.capacity_priority(
+        box, {"agentic-coding": None}, alternatives={"agentic-coding": tiers["api-strong-a"]},
+        seconds_per_task=10.06, certified={"agentic-coding": True})
+    assert order["do_not_admit"] == []
+    assert order["financially_indifferent"][0]["family"] == "agentic-coding"
+    assert "cost does not decide it" in order["financially_indifferent"][0]["reason"]
+
+
+def test_the_break_even_reports_every_leg_and_the_equation():
+    """Output share alone cannot convert the threshold to a card with distinct fresh, cached, cache-write and
+    output rates."""
+    tiers = registry()
+    tiers["api-strong-a"].outcome("agentic-coding")["tokens"] = {
+        "fresh_in": 1_000_000, "cached_in": 500_000, "cache_write": 100_000, "out": 200_000}
+    v = policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
+                               window_hours=1.0)
+    assert v["alternative_legs"] == {"fresh_in": 1_000_000, "cached_in": 500_000,
+                                     "cache_write": 100_000, "out": 200_000}
+    assert "p_fresh_in" in v["price_equation"] and "p_out" in v["price_equation"]
+    assert "substitute a real card" in v["price_equation"]
+    assert any("really a plane over four leg" in a for a in v["assumes"])

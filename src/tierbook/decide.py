@@ -444,10 +444,14 @@ def _capacity_from_curve(points: list | None, latency_p95_slo_s: float | None = 
 
     An earlier version looked for a knee in throughput under a declared marginal-gain fraction, and the real
     probe showed why that cannot work. Throughput went 22,908 tasks/hour at 64 in flight to 23,035 at 128 -- half
-    a percent -- and then to 27,861 at 256, a further 21 percent. That is non-monotone evidence, not evidence
-    that capacity stops at 64: the rule stopped at the first dip and ignored the recovery, so it reported the
-    dip. And any fraction that would have stopped there is a number nobody measured, which is the configured
-    threshold this module exists to avoid, wearing the word "declared".
+    a percent -- and then to 27,861 at 256, a further 21 percent.
+
+    Note what that is and is not, because an earlier statement of it here was wrong: the throughput itself is
+    monotone increasing. What is non-monotone is the MARGINAL gain -- near-flat, then twenty-one percent -- which
+    is anti-concave and physically odd for a batching engine, and is at least as consistent with a two-round
+    measurement window as with a real curve. Either way the rule stopped at the first flat step and reported it
+    as capacity, and any fraction that stops there is a number nobody measured: the configured threshold this
+    module exists to avoid, wearing the word "declared".
 
     What is genuinely available is a constraint the operator states for other purposes anyway: the p95 latency
     this family must meet. Under it the bound is the highest probed concurrency whose p95 still fits -- past that
@@ -468,12 +472,19 @@ def _capacity_from_curve(points: list | None, latency_p95_slo_s: float | None = 
         shape = ", ".join(f"c={int(pt['concurrency'])}: {pt.get('tasks_per_hour')}/h p95 "
                           f"{pt.get('p95_latency_s')}s" for pt in sorted(usable, key=lambda x: x["concurrency"]))
         return None, ("a service curve exists but no p95 latency constraint was declared for this family, and "
-                      "throughput alone does not locate a bound: the real probe rose half a percent from 64 to "
-                      "128 in flight and then 21 percent from 128 to 256, so the first flat step is not the "
-                      f"limit. Declare the p95 this family must meet. The frontier measured was {shape}")
-    within = [pt for pt in sorted(usable, key=lambda x: x["concurrency"])
-              if pt.get("p95_latency_s") is not None and pt["p95_latency_s"] <= latency_p95_slo_s
-              and (pt.get("failed") or 0) == 0]
+                      "throughput alone does not locate a bound: on the real probe the marginal gain went "
+                      "half a percent from 64 to 128 in flight and then 21 percent from 128 to 256, so the "
+                      "first flat step is not the limit. Declare the p95 this family must meet. The frontier "
+                      f"measured was {shape}")
+    # Contiguous from the bottom: a point that meets the target above one that does not is reported rather than
+    # jumped to, because a bound with a hole under it is not a bound.
+    within = []
+    for pt in sorted(usable, key=lambda x: x["concurrency"]):
+        ok = (pt.get("p95_latency_s") is not None and pt["p95_latency_s"] <= latency_p95_slo_s
+              and (pt.get("failed") or 0) == 0)
+        if not ok:
+            break
+        within.append(pt)
     if not within:
         return None, (f"no probed concurrency met the declared p95 of {latency_p95_slo_s:.2f}s without failures; "
                       "the lowest probed point already misses it, so this candidate has no usable occupancy for "
@@ -483,10 +494,18 @@ def _capacity_from_curve(points: list | None, latency_p95_slo_s: float | None = 
     censored = ("" if best["concurrency"] < top else
                 f". CENSORED: {int(best['concurrency'])} is the highest concurrency probed, so the true bound is "
                 "at least this and possibly higher -- run the probe further before treating it as a limit")
+    higher_ok = [pt for pt in sorted(usable, key=lambda x: x["concurrency"])
+                 if pt["concurrency"] > best["concurrency"] and pt.get("p95_latency_s") is not None
+                 and pt["p95_latency_s"] <= latency_p95_slo_s]
+    non_monotone = ("" if not higher_ok else
+                    f". NOTE: {[int(pt['concurrency']) for pt in higher_ok]} also met the target, above a point "
+                    "that did not, so the constraint is not monotone in occupancy here and the highest "
+                    "contiguous point was taken")
     return float(best["concurrency"]), (
-        f"derived from a measured service curve and the declared p95 of {latency_p95_slo_s:.2f}s: "
-        f"{int(best['concurrency'])} in flight is the highest probed occupancy that still met it "
-        f"(p95 {best.get('p95_latency_s')}s, {best.get('tasks_per_hour')} tasks/hour)" + censored)
+        f"a TESTED OPERATING BOUND, not a physical capacity: {int(best['concurrency'])} in flight is the highest "
+        f"probed occupancy whose OBSERVED SAMPLE p95 met the declared {latency_p95_slo_s:.2f}s "
+        f"(p95 {best.get('p95_latency_s')}s, {best.get('tasks_per_hour')} tasks/hour). One short run, no "
+        "repetition and no interval, so 'met' means the sample met it" + censored + non_monotone)
 
 
 

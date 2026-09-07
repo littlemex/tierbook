@@ -501,13 +501,24 @@ def _family_spend(t: Tier, family: str) -> tuple[float | None, str]:
 
     **A settled charge wins.** If the gateway authored a dollar figure, that is what the money was.
 
-    **Otherwise: gateway-authored tokens priced at a declared card.** This is a change of position and the
-    measurement forced it. The governing document assumed the gateway quotes every candidate in the objective's
-    unit, so an absent charge was a refusal. Then the gateway in front of this deployment was measured: its
-    ledger moved by 22,009 units for 22,008 input plus 1 output token, and by 623 for 23 input plus 600 output.
-    It counts TOKENS, unweighted, identically for input and output and identically across models. It is a meter,
-    not a bill, and it has no dollar figure to give -- so a rule that waits for one leaves the framework unable
-    to rank anything in the deployment it was built for.
+    **Otherwise: gateway-authored tokens priced at a declared card.** This is a change of position and a
+    measurement forced it, though the measurement establishes less than it first appeared to. The governing
+    document assumed the gateway quotes every candidate in the objective's unit, so an absent charge was a
+    refusal. Then the gateway in front of this deployment was measured: its ledger moved 22,009 units for 22,008
+    input plus 1 output token, and 623 for 23 input plus 600 output.
+
+    What that shows is narrower than "it counts tokens": two points fit any two-parameter linear meter exactly,
+    and a money ledger denominated in micro-dollars at one rate for both legs would produce the same entries. It
+    does show the unit is **1:1 with total tokens for this model and does not distinguish input from output**,
+    which is enough for the decision here -- a unit blind to the input/output ratio cannot be converted to
+    dollars, because that ratio is where most of a card's structure lives. An attempt to settle it by metering a
+    differently priced model was contaminated by concurrent traffic on the same ledger and is not reported.
+
+    So the position stated everywhere below is the narrow one both reviews arrived at independently: **no
+    monetary settlement was supplied to this framework.** Not that the gateway meters no money, and not that no
+    dollar figure exists -- a gateway can report token usage immediately and settle dollars elsewhere or later,
+    and no audit of its quote, invoice or export surfaces has been done. What would settle it is the gateway's
+    own unit metadata or an invoice reconciled against the ledger.
 
     The distinction that keeps this from being the reconstruction the rule forbade: what was forbidden is
     *inventing the quantity*. The quantity here is gateway-authored and settled; the card is a contract someone
@@ -566,9 +577,12 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str) -> 
     ranked as though that were exogenous.
 
     It is the *wrong quantity for a routing decision*. Given the reservation is kept -- and it is, by explicit
-    decision -- the marginal charge of sending one more request to a box below capacity is zero: the bill
-    arrives either way. Consuming its capacity has a queueing and option cost, which this project's own scope
-    classifies as scheduling utility and never as financial cost.
+    decision -- the marginal charge of sending one more request to a box below capacity is the FIXED component's
+    zero plus whatever the contract also meters. Under `reservation_only` that is nothing, because the bill
+    arrives either way; under `reservation_plus_metered` it is not, which is why the kind is declared and read
+    rather than the zero being asserted generally. Consuming capacity also has a queueing and option cost, which
+    this project's own scope classifies as scheduling utility and never as financial cost -- and which
+    `slot_value` prices separately rather than folding into this total.
 
     And it *inverts the purpose*. At the first real cohort the average came out $0.250665 against a token side
     of $0.038934, purely because one experimenter at concurrency 1 left the machine idle. A router that
@@ -646,8 +660,9 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str) -> 
         notes.append(
             f"{', '.join(sorted(imputed))} priced by applying a declared price card to token counts the "
             "gateway metered. The tokens are settled; the dollars are not, because the gateway in front of "
-            "this deployment counts tokens rather than money -- it moved 623 units for 23 input plus 600 "
-            "output tokens, unweighted. Credits, minimums, rounding and price changes are outside this figure")
+            "this deployment meters in a unit that does not distinguish input from output -- it moved 623 units "
+            "for 23 input plus 600 output tokens -- and a unit blind to that ratio cannot be converted to "
+            "dollars. Credits, minimums, rounding and price changes are outside this figure")
     if reserved:
         notes.append(
             f"{', '.join(sorted(reserved))} is reserved, so its marginal charge per request is nothing while "
@@ -796,6 +811,11 @@ def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
         return {"usd_per_slot_second": None,
                 "reason": "how much capacity a task consumes at the concurrency in use is unmeasured, so the "
                           "occupancy a saving costs is unknown. `occupancy_at` derives it from the probe"}
+    if not (isinstance(seconds_per_task, (int, float)) and math.isfinite(seconds_per_task)
+            and seconds_per_task > 0):
+        # Zero divides, a negative inverts the ranking, and a NaN propagates silently through a sort.
+        return {"usd_per_slot_second": None,
+                "reason": f"an occupancy of {seconds_per_task!r} is not a duration a task can consume"}
     # A saving is only a saving if the alternative would have done the job. Passed in rather than inferred from
     # the record: whether two candidates are interchangeable on a family is the compiler's finding, and sniffing
     # for evidence fields here would be a second, weaker answer to a question already answered elsewhere.
@@ -837,6 +857,14 @@ def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
                     "reason": f"the two sides were measured on different numbers of attempts ({n} for "
                               f"{alternative.id!r}, {rn} for {reserved.id!r}), so their means are not paired and "
                               "the difference is not a saving on the same work"}
+        mine, theirs = reserved.cohort(family), alternative.cohort(family)
+        if not mine or not theirs or mine != theirs:
+            # Equal counts prove equal sizes, not the same items. Two unrelated cohorts of the same size pass a
+            # count check and produce a difference between means of different work.
+            return {"usd_per_slot_second": None,
+                    "reason": f"the two sides carry {'no' if not (mine and theirs) else 'different'} item "
+                              f"cohorts for {family!r}, so equal attempt counts do not make their means paired: "
+                              "two unrelated cohorts of one size would pass a count check"}
         own = own_spend / rn
     avoided = spend / n - own
     return {
@@ -866,7 +894,13 @@ def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
 
 def break_even_price(reserved: Tier, alternative: Tier, family: str, *, window_hours: float | None,
                      family_share: float | None = None) -> dict:
-    """The alternative's price at which the two arms cost the same, derived without knowing any price.
+    """A blended-price threshold at which the two arms cost the same, derived without knowing any price.
+
+    Called a threshold and not a comparison, because that is what it is: one scalar on a locus. The alternative's
+    charge has four legs with their own rates, so the true equality is a plane in that space, and this reports
+    the point on it where all four are priced alike -- together with every leg, so a reader holding a real
+    two-part or four-part card can substitute and solve. A single number is the right summary only at the mix
+    that was observed.
 
     The most useful thing that can be said when the price card is not obtainable, and here it was not: the
     gateway in front of this deployment meters tokens and not money, and the cloud pricing API carries no entry
@@ -942,6 +976,15 @@ def break_even_price(reserved: Tier, alternative: Tier, family: str, *, window_h
         "reserved_own_meter_usd": round(own_meter, 6),
         "alternative_tokens": total,
         "alternative_output_share": round(out_tok / total, 6),
+        # Every leg, because output share alone cannot convert this threshold to a card with distinct fresh,
+        # cached, cache-write and output rates. With these a reader solves the real equality themselves.
+        "alternative_legs": {k: int(tok.get(k) or 0)
+                             for k in ("fresh_in", "cached_in", "cache_write", "out")},
+        "price_equation": (f"reserved side ${bill:.6f} = "
+                           + " + ".join(f"{int(tok.get(k) or 0)}/1e6 * p_{k}"
+                                        for k in ("fresh_in", "cached_in", "cache_write", "out"))
+                           + ". The scalar below is the solution when every p is equal; substitute a real card "
+                             "to solve for whichever leg is unknown"),
         "window_hours": window_hours,
         "family_share": share,
         "reason": (f"the reserved arm cost ${bill:.6f} over {window_hours:.2f} hours, and the alternative used "
@@ -952,8 +995,8 @@ def break_even_price(reserved: Tier, alternative: Tier, family: str, *, window_h
         "assumes": [
             "the two arms did the same work, which the paired item set makes true of the tasks and not of the "
             "token counts: a different model tokenizes differently and takes a different number of turns",
-            "one blended price, which exists only at this mix; convert with the reported output share for a "
-            "two-part card",
+            "one blended price, which exists only at this mix. The equality is really a plane over four leg "
+            "rates and this is one point on it; the legs are reported so a real card can be substituted",
             "the window is the window the reservation was actually held for, and the reservation served nothing "
             "else in it unless a family share says otherwise",
         ],
@@ -1006,8 +1049,16 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
                   or (len(own_only) == len(scored) and len(concs) == 1 and None not in concs))
     # A negative saving is not a low priority, it is a candidate that should not be admitted at all -- even
     # uncontended. Sorting it to the bottom of a list a scheduler reads would still offer it a slot.
-    do_not_admit = [x for x in scored if x["usd_per_slot_second"] <= 0]
+    do_not_admit = [x for x in scored if x["usd_per_slot_second"] < 0]
+    indifferent = [x for x in scored if x["usd_per_slot_second"] == 0]
     scored = [x for x in scored if x["usd_per_slot_second"] > 0]
+    # Comparability is recomputed over what is left. Judged before the inadmissible families were separated, a
+    # single loss-making family with an odd denominator could make the remaining one incomparable with itself.
+    own_only = [x for x in scored if x["occupancy_source"] == "own_measurement"]
+    concs = {x["occupancy_concurrency"] for x in own_only}
+    all_borrowed = bool(scored) and not own_only
+    comparable = (len(scored) <= 1
+                  or (len(own_only) == len(scored) and len(concs) == 1 and None not in concs))
     if comparable:
         scored.sort(key=lambda x: -x["usd_per_slot_second"])
     return {
@@ -1022,6 +1073,13 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
                           "reason": "using the reserved candidate costs more than the alternative for this "
                                     "family, so a slot spent here loses money even when nothing is contended"}
                          for x in do_not_admit],
+        # Exactly zero is financial indifference, not a loss. Something else -- latency, reliability, or a
+        # deliberate exploration policy -- decides, and calling it a loss would foreclose that.
+        "financially_indifferent": [{"family": x["family"],
+                                     "reason": "the box and the alternative cost the same for this family, so "
+                                               "cost does not decide it: latency, reliability or an exploration "
+                                               "policy does"}
+                                    for x in indifferent],
         "not_comparable_because": (
             None if comparable else
             ("every family borrowed one constant occupancy figure, so this would rank by per-request saving "

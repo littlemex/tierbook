@@ -33,7 +33,8 @@ def pt(c, tph, p95, failed=0):
 #: A probe where p95 crosses 20 s above 8 in flight, so 8 is the last occupancy that meets the constraint.
 CURVE = [pt(1, 60, 3.0), pt(2, 118, 5.0), pt(4, 230, 9.0), pt(8, 420, 18.0), pt(16, 415, 40.0)]
 
-#: The real probe, whose throughput is non-monotone: +0.55% from 64 to 128 and then +20.95% from 128 to 256.
+#: The real probe. Its throughput is monotone increasing; what is non-monotone is the MARGINAL gain -- +0.55%
+#: from 64 to 128 and then +20.95% from 128 to 256 -- which is anti-concave and suspect for a batching engine.
 REAL = [pt(16, 7957.3, 8.71), pt(32, 16024.5, 12.01), pt(64, 22908.1, 17.46),
         pt(128, 23034.9, 34.13), pt(256, 27860.7, 46.57)]
 
@@ -67,7 +68,9 @@ def test_the_bound_is_where_the_measured_curve_meets_the_declared_latency_constr
     p = policy(["box"], curve=CURVE, slo=20.0)
     assert p.can_ever_fire is True and p.gaps == []
     when = D.as_dict(p)["rules"][0]["when"]
-    assert any("inflight:box < 8.0" in w and "declared p95 of 20.00s" in w for w in when)
+    assert any("inflight:box < 8.0" in w and "declared 20.00s" in w for w in when)
+    # Named for what it is: one short run's sample, not a physical capacity.
+    assert any("TESTED OPERATING BOUND, not a physical capacity" in w for w in when)
 
 
 def test_a_tighter_constraint_moves_the_bound_down():
@@ -83,7 +86,10 @@ def test_a_throughput_knee_is_not_used_because_the_real_curve_has_none():
     bound, why = D._capacity_from_curve(REAL, None)
     assert bound is None
     assert "throughput alone does not locate a bound" in why
-    assert "first flat step is not the limit" in why
+    assert "the marginal gain went" in why and "first flat step is not the limit" in why
+    # And the throughput itself is monotone, which an earlier statement of this got wrong.
+    tph = [pt["tasks_per_hour"] for pt in REAL]
+    assert tph == sorted(tph), "monotone increasing; it is the marginal gain that is not"
     # With the constraint the answer is a real occupancy, and it is not 64 by coincidence of a dip.
     assert D._capacity_from_curve(REAL, 20.0)[0] == 64.0
     assert D._capacity_from_curve(REAL, 40.0)[0] == 128.0
@@ -279,3 +285,12 @@ def test_opposed_equalities_count_as_disjoint():
         D.Rule((D.Guard("available:box", "==", False, derived_from="x"),), ("b",), "down"),
     ), ("strong",))
     assert p.overlaps == []
+
+
+def test_a_point_meeting_the_target_above_one_that_does_not_is_reported_not_jumped_to():
+    """A bound with a hole under it is not a bound, and the constraint is not guaranteed monotone in occupancy on
+    a batching engine."""
+    holed = [pt(1, 60, 3.0), pt(2, 118, 25.0), pt(4, 230, 9.0)]
+    bound, why = D._capacity_from_curve(holed, 20.0)
+    assert bound == 1.0
+    assert "[4] also met the target" in why and "not monotone in occupancy" in why
