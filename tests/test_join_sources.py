@@ -606,3 +606,18 @@ def test_a_colliding_candidate_id_is_refused_rather_than_overwriting(tmp_path):
                            capture_output=True, text=True, timeout=120)
     assert again.returncode != 0
     assert "already exists in this registry" in (again.stdout + again.stderr)
+
+
+def test_the_run_manifest_is_keyed_by_run_group(tmp_path):
+    """Without it, a second sweep over the same instances overwrote the first, and a baseline's
+    workspace-to-trace mapping was gone by the time an analysis wanted it -- it had to be recovered from a returned
+    tar's filename. A manifest a later run can silently replace is not a record."""
+    sys.path.insert(0, str(ROOT / "harness"))
+    import sweep_agents as sw
+
+    a = sw.manifest_path(tmp_path, "astropy__astropy-14365", "box-qwen-1")
+    b = sw.manifest_path(tmp_path, "astropy__astropy-14365", "box-qwen-2")
+    assert a != b
+    assert a.name == "runs-astropy__astropy-14365-box-qwen-1.json"
+    # And with no group the old spelling is kept, because manifests already on disk carry it.
+    assert sw.manifest_path(tmp_path, "x", None).name == "runs-x.json"

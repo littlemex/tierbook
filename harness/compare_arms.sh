@@ -49,6 +49,20 @@ if [ -n "$BOX_OUTCOMES_2" ]; then
 fi
 
 echo
+echo "=== 1b. did each run stay inside its own workspace? ==="
+# A pass condition rather than a query somebody remembers to run. An outcome cannot say this: a run that wandered,
+# was refused and gave up looks like one with nothing to say, and one that wandered and recovered looks like a
+# success. Both happened in one 24-item cohort.
+python3 "$HERE/workspace_audit.py" --traces "$BOX_TRACES" --outcomes "$BOX_OUTCOMES" \
+  --manifests "$(dirname "$BOX_OUTCOMES")" --out "$STAGE/workspace-audit-box.json" || AUDIT_BOX=failed
+python3 "$HERE/workspace_audit.py" --traces "$API_TRACES" --outcomes "$API_OUTCOMES" \
+  --manifests "$(dirname "$API_OUTCOMES")" --out "$STAGE/workspace-audit-api.json" || AUDIT_API=failed
+# Reported, not fatal: an arm measured before this check existed will fail it, and refusing to compare two
+# recorded cohorts because of that would discard the measurements rather than describe them. The verdict is in
+# the artifact and in the line above.
+echo "    workspace audit: box=${AUDIT_BOX:-clean} api=${AUDIT_API:-clean}"
+
+echo
 echo "=== 2. the gateway's aggregate against the sum of its own replies ==="
 echo "    (a reconciliation within one authority, not an independent check)"
 python3 "$HERE/crosscheck_ledger.py" --before "$LEDGER_BEFORE" --after "$LEDGER_AFTER" \

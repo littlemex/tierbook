@@ -85,7 +85,11 @@ def sweep_one(a, instance: str) -> dict:
             rec["outcome"] = f"{step} failed"
             return rec
 
-    manifest = Path(a.workdir) / f"runs-{instance}.json"
+    # The run group is in the name. Without it a second sweep over the same instances overwrote the first, and
+    # the workspace-to-trace mapping for a baseline was gone by the time an analysis wanted it -- the workspace had
+    # to be recovered from a returned tar's filename instead. A manifest that a later run can silently replace is
+    # not a record.
+    manifest = manifest_path(Path(a.workdir), instance, a.run_group)
     outcomes = Path(a.outcomes)
     drive = [
         sys.executable, str(HERE / "agent_drive.py"),
@@ -143,6 +147,11 @@ def sweep_one(a, instance: str) -> dict:
     rec["outcome"] = "done"
     rec["ended"] = time.time()
     return rec
+
+
+def manifest_path(workdir: Path, instance: str, run_group: str | None) -> Path:
+    """Where one instance's run manifest goes, keyed so a later sweep cannot overwrite an earlier one."""
+    return workdir / (f"runs-{instance}-{run_group}.json" if run_group else f"runs-{instance}.json")
 
 
 def write_task(a, instance: str) -> bool:

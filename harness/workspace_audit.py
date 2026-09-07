@@ -146,6 +146,8 @@ def main() -> int:
                     help="directory holding the driver's runs-*.json, for the workspace of each trace")
     ap.add_argument("--out")
     a = ap.parse_args()
+    # Both spellings: sweeps before the run group was added to the name wrote `runs-{instance}.json`, and those
+    # manifests are still the only record of where those runs worked.
     manifests = sorted(Path(a.manifests).glob("runs-*.json")) if a.manifests else []
     res = audit(Path(a.traces), Path(a.outcomes), manifests)
 
