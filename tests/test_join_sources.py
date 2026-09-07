@@ -218,3 +218,103 @@ def test_crosscheck_reports_a_small_difference_without_flagging_it(tmp_path):
                      tolerance=1.10)
     assert res["within_tolerance"] is True
     assert res["legs"]["fresh_in"]["ratio"] == 1.05
+
+
+# --- which runs are this cohort's, by two independent means ---------------------------------------
+
+
+def run_cli(tmp_path, outcomes, traces, *extra):
+    out = tmp_path / f"joined-{len(list(tmp_path.iterdir()))}.json"
+    argv = ["join_sources", "--outcomes", str(outcomes), "--traces", str(traces),
+            "--out", str(out), *extra]
+    old = sys.argv
+    sys.argv = argv
+    try:
+        code = js.main()
+    finally:
+        sys.argv = old
+    return code, out
+
+
+def test_another_groups_rows_are_excluded_and_named(tmp_path):
+    """The guard's purpose: an orphaned driver from an aborted sweep must not pose as this cohort's."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1}),
+                                     span("t2", "opencode.llm", start=1, legs={"out": 1})])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [
+        {"trace_id": "t1", "item_id": "i1", "state": "solved", "run_group": "mine"},
+        {"trace_id": "t2", "item_id": "i1", "state": "solved", "run_group": "orphan"},
+    ])
+    code, out = run_cli(tmp_path, outcomes, traces, "--run-group", "mine")
+    doc = json.loads(out.read_text())
+    assert code == 0
+    assert doc["selection"]["selected"] == 1
+    assert doc["selection"]["other_groups_excluded"][0]["run_group"] == "orphan"
+    assert doc["trials"]["trials_per_item"] == 1
+
+
+def test_an_unstamped_row_is_excluded_by_default_and_named(tmp_path):
+    """A row with no stamp is real data, so it is named rather than silently dropped -- but admitting it
+    without being asked would defeat the guard it is missing."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1}),
+                                     span("t2", "opencode.llm", start=1, legs={"out": 1})])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [
+        {"trace_id": "t1", "item_id": "i1", "state": "solved", "run_group": "mine"},
+        {"trace_id": "t2", "item_id": "i2", "state": "solved"},
+    ])
+    code, out = run_cli(tmp_path, outcomes, traces, "--run-group", "mine")
+    doc = json.loads(out.read_text())
+    sel = doc["selection"]
+    assert sel["selected"] == 1
+    assert sel["unstamped"][0]["item_id"] == "i2" and sel["unstamped_admitted"] is False
+    assert code == 0, "one selected row joined, so coverage is complete over what was selected"
+
+
+def test_admitting_an_unstamped_row_records_that_it_was_an_assertion(tmp_path):
+    """Because it is: the driver did not stamp it, the operator said it belonged. A reader of the output has
+    to be able to tell those apart."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1}),
+                                     span("t2", "opencode.llm", start=1, legs={"out": 1})])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [
+        {"trace_id": "t1", "item_id": "i1", "state": "solved", "run_group": "mine"},
+        {"trace_id": "t2", "item_id": "i2", "state": "solved"},
+    ])
+    code, out = run_cli(tmp_path, outcomes, traces, "--run-group", "mine", "--admit-unstamped")
+    sel = json.loads(out.read_text())["selection"]
+    assert code == 0 and sel["selected"] == 2
+    assert sel["unstamped_admitted"] is True
+    assert "not on the driver's stamp" in sel["unstamped_note"]
+
+
+def test_a_duplicate_trial_is_refused_even_with_no_stamps_anywhere(tmp_path, capsys):
+    """The invariant, independent of the stamp. The stamp is intent and a mid-flight edit can drop it; two
+    rows for one (item, candidate) is visible in the data regardless, and it is the shape of the duplicate
+    that reached a ledger once before."""
+    traces = write_traces(tmp_path, [span("t1", "opencode.llm", start=1, legs={"out": 1}),
+                                     span("t2", "opencode.llm", start=1, legs={"out": 1}),
+                                     span("t3", "opencode.llm", start=1, legs={"out": 1})])
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", [
+        {"trace_id": "t1", "item_id": "i1", "state": "solved"},
+        {"trace_id": "t2", "item_id": "i1", "state": "incorrect"},
+        {"trace_id": "t3", "item_id": "i2", "state": "solved"},
+    ])
+    code, out = run_cli(tmp_path, outcomes, traces)
+    assert code == 4
+    printed = capsys.readouterr().out
+    assert "REFUSED" in printed and "not uniform" in printed and "i1" in printed
+    tr = json.loads(out.read_text())["trials"]
+    assert tr["uniform"] is False and tr["trials_per_item"] is None
+
+
+def test_a_repeated_sweep_is_uniform_and_reports_its_own_number(tmp_path):
+    """Two trials of every item is a legitimate sweep, and the number belongs in the record rather than a
+    hardcoded 1 -- describing a repeated sweep as single-trial is the same error as the duplicate above,
+    read from the other side."""
+    spans, rows = [], []
+    for i, (item, tid) in enumerate([("i1", "t1"), ("i1", "t2"), ("i2", "t3"), ("i2", "t4")]):
+        spans.append(span(tid, "opencode.llm", start=1, legs={"out": 1}))
+        rows.append({"trace_id": tid, "item_id": item, "state": "solved", "run_group": "mine"})
+    traces = write_traces(tmp_path, spans)
+    outcomes = write_jsonl(tmp_path, "outcomes.jsonl", rows)
+    code, out = run_cli(tmp_path, outcomes, traces, "--run-group", "mine")
+    assert code == 0
+    assert json.loads(out.read_text())["trials"]["trials_per_item"] == 2

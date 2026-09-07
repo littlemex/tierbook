@@ -110,6 +110,16 @@ def from_joined(a, doc: dict, rate: dict) -> int:
     demoted to metadata -- which is the laundering that would hide an agent-model affinity inside a model's
     score.
     """
+    # Read from the join rather than asserted here. A sweep with --repeat produces several rows per item and
+    # a hardcoded 1 would describe it as single-trial, which is the same class of error as an orphaned
+    # driver's extra row: a count in a header that nobody counted.
+    trials = (doc.get("trials") or {})
+    if trials and not trials.get("uniform", True):
+        raise SystemExit(f"[FAIL] the join reports non-uniform trials per item {trials.get('observed')}. A "
+                         "record asserts one number and these rows do not have one; fix the rows named in "
+                         "the join output first.")
+    trials_per_item = trials.get("trials_per_item") or 1
+
     per: dict[str, dict] = {}
     for row in doc["rows"]:
         c = row.get("candidate") or {}
@@ -154,7 +164,7 @@ def from_joined(a, doc: dict, rate: dict) -> int:
                               "patch is applied only after the candidate's diff is taken",
             "subject": f"agent-{agent}",
             "family": a.family,
-            "trials_per_item": 1,
+            "trials_per_item": trials_per_item,
             "produced_at": "2026-09-07",
         }
         lines = [json.dumps(header, sort_keys=True)]
@@ -222,7 +232,10 @@ def from_joined(a, doc: dict, rate: dict) -> int:
                 "source": f"measured rate card for the self-hosted engine, read from {Path(a.tiers).name}",
                 "fresh_in": rate["fresh_in"], "cached_in": rate["cache_read"],
                 "cache_write": rate["cache_write"], "output": rate["out"],
-                "hourly_fixed_usd": None,
+                # Present iff a reservation price was supplied. Its presence is what makes this candidate
+                # fixed-cost to the compiler, and its absence is honest rather than a zero: an unpriced hour
+                # is not a free hour.
+                "hourly_fixed_usd": a.hourly_fixed_usd,
                 "cache_hit_rate_observed": round(legs["cached_in"] / total_in, 4) if total_in else None,
                 "reusable_cache_tokens": None,
             },
@@ -240,9 +253,16 @@ def from_joined(a, doc: dict, rate: dict) -> int:
                     "attempted": len(p["items"]),
                     "suite": "SWE-bench Verified, pilot-subset.json (stratified on repository and "
                              "difficulty with a fixed seed, chosen before any of this ran)",
-                    "runs_per_item": 1,
+                    "runs_per_item": trials_per_item,
                     "evidence": {"path": f"evidence/{ev_name}", "digest": f"sha256:{digest}"},
                     "tokens": dict(legs),
+                    # The same figure as the record's top-level `latency`, written here as well because it
+                    # belongs to the pair. The compiler needs a per-family latency to turn an hourly
+                    # reservation into a cost per request and refuses to borrow one from another family --
+                    # the same tier ran 94 seconds a task on one family and 13 on another. These wall times
+                    # were observed on THIS family, so this is where they belong; without it a fixed-cost
+                    # candidate has no computable cost and drops off the frontier for a filing reason.
+                    "latency": _latency(p["wall"]),
                 }
             },
         }
@@ -268,6 +288,12 @@ def main() -> int:
     ap.add_argument("--tiers", default=str(HERE / "tiers.function-calling.json"),
                     help="where the self-hosted rate card is read from, rather than restated here")
     ap.add_argument("--commit", default=None, help="the sweep's commit, for provenance")
+    ap.add_argument("--hourly-fixed-usd", type=float, default=None,
+                    help="the reservation price of the self-hosted candidate, in USD per hour. A POLICY "
+                         "INPUT: it is a contract someone signed, not something observation supplies, so it "
+                         "is passed rather than guessed. It is also what identifies a candidate as "
+                         "fixed-cost, and without it the amortised cost kind has nothing to compute from "
+                         "and the compiler cannot recognise the candidate as self-hosted at all")
     a = ap.parse_args()
 
     rate = json.loads(Path(a.tiers).read_text())["self_hosted"]["rate"]

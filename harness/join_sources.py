@@ -21,6 +21,15 @@ against a stated window, by whoever computes the frontier.
 the rows that happened to join reads as complete, and that is the failure this refuses. Coverage is reported
 and a shortfall names the rows that are missing rather than the count.
 
+**Which runs are this cohort's is decided here, and by two independent means.** The driver stamps a
+`run_group` on every row so an orphaned driver from an aborted sweep cannot pose as this one's -- that is the
+*intent*, and it can be lost: a sweep already running keeps executing the code it started with while each
+child driver it spawns picks up the newer file, so one cohort here came out with the stamp present on 15 rows
+and absent on 8. A stamp that a mid-flight edit can silently drop is not enough on its own, so the *invariant*
+is checked too: a record asserts how many trials each item had, and this counts them. Two rows for one
+(item, candidate) when one was asserted is the shape of the duplicate that reached a ledger once before, and
+it is visible in the data whether or not anybody stamped anything.
+
 SCOPE (see ../SCOPE.md, which governs this file): an instrument. It supplies parameters and states what it
 cannot support; it decides nothing.
 """
@@ -102,9 +111,22 @@ def read_traces(path: Path) -> dict[str, dict]:
     return dict(by_trace)
 
 
-def read_outcomes(path: Path) -> dict[str, dict]:
-    """Outcomes keyed by trace id. Written by whoever ran the task and applied its oracle."""
-    out = {}
+def read_outcomes(path: Path, *, run_group: str | None = None,
+                  admit_unstamped: bool = False) -> tuple[dict[str, dict], dict]:
+    """Outcomes keyed by trace id, restricted to one cohort when one is named.
+
+    Returns `(selected, selection)`. Three populations, kept apart because collapsing any two of them loses
+    the thing the selection is for:
+
+    - `run_group == the requested group` -- this cohort, always in.
+    - another group                      -- another invocation's business, out, and counted.
+    - no group at all                    -- written by a driver that did not stamp. Out by default and
+                                            named, because admitting it silently would defeat the guard; in
+                                            with `admit_unstamped`, and then recorded as admitted on the
+                                            operator's word rather than on the driver's stamp, so a reader
+                                            of the output can tell which it was.
+    """
+    rows, other, unstamped = {}, [], []
     for line in path.read_text(errors="replace").splitlines():
         line = line.strip()
         if not line:
@@ -113,9 +135,32 @@ def read_outcomes(path: Path) -> dict[str, dict]:
             r = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if r.get("trace_id"):
-            out[r["trace_id"]] = r
-    return out
+        if not r.get("trace_id"):
+            continue
+        if run_group is None:
+            rows[r["trace_id"]] = r
+            continue
+        g = r.get("run_group")
+        if g == run_group:
+            rows[r["trace_id"]] = r
+        elif g is None:
+            unstamped.append({"trace_id": r["trace_id"], "item_id": r.get("item_id")})
+            if admit_unstamped:
+                rows[r["trace_id"]] = r
+        else:
+            other.append({"trace_id": r["trace_id"], "item_id": r.get("item_id"), "run_group": g})
+    selection = {
+        "run_group": run_group,
+        "selected": len(rows),
+        "other_groups_excluded": other,
+        "unstamped": unstamped,
+        "unstamped_admitted": bool(unstamped) and admit_unstamped,
+        **({"unstamped_note":
+            "these rows carry no run_group and were admitted on the operator's word, not on the driver's "
+            "stamp. Their membership in this cohort is an assertion, not an observation"}
+           if unstamped and admit_unstamped else {}),
+    }
+    return rows, selection
 
 
 def read_charges(path: Path | None) -> dict[str, dict]:
@@ -138,6 +183,24 @@ def read_charges(path: Path | None) -> dict[str, dict]:
         if r.get("trace_id"):
             out[r["trace_id"]] = r
     return out
+
+
+def trials_per_item(rows: list[dict]) -> dict:
+    """How many trials each (item, candidate) actually got, and whether that is one number.
+
+    The ledger's records assert a `trials_per_item`, and an assertion nobody counts is how a duplicate row
+    from an orphaned driver became a second trial of one item while the header still said one. Counted from
+    the joined rows, so it holds whether or not the driver stamped a cohort.
+    """
+    counts: dict[tuple, list[str]] = defaultdict(list)
+    for r in rows:
+        agent = (r.get("candidate") or {}).get("agent")
+        counts[(r.get("item_id"), agent)].append(r["trace_id"])
+    seen = sorted({len(v) for v in counts.values()})
+    uneven = [{"item_id": k[0], "agent": k[1], "trials": len(v), "trace_ids": sorted(v)}
+              for k, v in sorted(counts.items(), key=lambda kv: str(kv[0])) if len(v) != (seen[0] if seen else 0)]
+    return {"observed": seen, "uniform": len(seen) <= 1,
+            "trials_per_item": seen[0] if len(seen) == 1 else None, "uneven": uneven}
 
 
 def join(outcomes: dict, traces: dict, charges: dict, *, metered_providers: set[str]) -> dict:
@@ -187,6 +250,9 @@ def join(outcomes: dict, traces: dict, charges: dict, *, metered_providers: set[
             "rate": round(len(rows) / n, 4) if n else None,
             "unjoined": unjoined,
         },
+        # Counted, not asserted. A consumer that writes a `trials_per_item` into a record reads it from here
+        # rather than hardcoding one, so a repeated sweep cannot be described as a single-trial one.
+        "trials": trials_per_item(rows),
     }
 
 
@@ -198,23 +264,43 @@ def main() -> int:
     ap.add_argument("--metered-providers", default="",
                     help="comma-separated provider names whose charge the gateway authors. A provider not "
                          "listed is treated as fixed-cost, so its absence of a charge is not a shortfall")
+    ap.add_argument("--run-group", help="restrict to one sweep invocation's rows. Without it every row in "
+                                       "the file is taken, which is right for a file written by one sweep "
+                                       "and wrong for one that outlived an aborted run")
+    ap.add_argument("--admit-unstamped", action="store_true",
+                    help="also take rows that carry no run_group. They exist: a sweep already running keeps "
+                         "executing the code it started with, so a stamp added mid-flight appears only on "
+                         "the children spawned after it. Their membership is then an assertion and is "
+                         "recorded as one")
     ap.add_argument("--min-coverage", type=float, default=1.0,
                     help="below this, no cost figure is produced. Default 1.0 on purpose: a cost over the "
                          "rows that happened to join reads as complete")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
-    res = join(read_outcomes(Path(a.outcomes)), read_traces(Path(a.traces)),
+    outcomes, selection = read_outcomes(Path(a.outcomes), run_group=a.run_group,
+                                        admit_unstamped=a.admit_unstamped)
+    res = join(outcomes, read_traces(Path(a.traces)),
                read_charges(Path(a.charges) if a.charges else None),
                metered_providers={p for p in a.metered_providers.split(",") if p})
+    res["selection"] = selection
     cov = res["coverage"]
     Path(a.out).write_text(json.dumps(res, indent=1) + "\n")
+
+    if a.run_group:
+        print(f"run_group {a.run_group}: {selection['selected']} rows selected, "
+              f"{len(selection['other_groups_excluded'])} from other groups excluded, "
+              f"{len(selection['unstamped'])} unstamped "
+              f"({'admitted' if selection['unstamped_admitted'] else 'excluded'})")
+        for u in selection["unstamped"][:8]:
+            print(f"    unstamped: {u['trace_id'][:16]}… (item {u.get('item_id')})")
 
     rate = "n/a" if cov["rate"] is None else f"{cov['rate']:.1%}"
     print(f"outcomes {cov['outcomes']}  joined {cov['joined']}  coverage {rate}")
     metered = [r for r in res["rows"] if r["cost"]["kind"] == METERED]
     fixed = [r for r in res["rows"] if r["cost"]["kind"] == AMORTISED]
-    print(f"  metered rows {len(metered)}  fixed-cost rows {len(fixed)}")
+    print(f"  metered rows {len(metered)}  fixed-cost rows {len(fixed)}  "
+          f"trials/item {res['trials']['trials_per_item']}")
     if cov["unjoined"]:
         print(f"  {len(cov['unjoined'])} unjoined, named in the output:")
         for u in cov["unjoined"][:8]:
@@ -223,6 +309,15 @@ def main() -> int:
     if missing_legs:
         print(f"  WARNING: token legs absent from some spans: {missing_legs}. Absent is not zero; the "
               "producer's vocabulary may have changed")
+    tr = res["trials"]
+    if not tr["uniform"]:
+        print(f"\n[REFUSED] trials per item are not uniform: {tr['observed']}. A record asserts one number "
+              "here, and these rows do not have one. The rows below are the ones that differ -- an orphaned "
+              "driver's row from an aborted sweep looks exactly like this:")
+        for u in tr["uneven"][:8]:
+            print(f"    {u['item_id']} / {u['agent']}: {u['trials']} trials {[t[:12] for t in u['trace_ids']]}")
+        return 4
+
     if cov["rate"] is not None and cov["rate"] < a.min_coverage:
         print(f"\n[REFUSED] coverage {cov['rate']:.1%} is below --min-coverage {a.min_coverage:.1%}. No cost "
               "figure is produced: a cost summed over the joined subset reads as complete.")
