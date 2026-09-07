@@ -39,3 +39,13 @@ The Python file is embedded in a ConfigMap by the deploy step, so the pod needs 
     kubectl -n <ns> apply -f deploy/gw-shim/gw-shim.yaml
 
 Point an agent at `http://gw-shim:8000/v1` with any api key; the real one lives in the secret.
+
+## Replicates, not one run
+
+The first run through this shim used the version before the hardening below, because the ConfigMap had not been
+re-applied. The provider in use sends none of the fields that hardening closed -- checked against 300 captured
+requests -- so that run is not invalid, but several of the checks were simply not active in it.
+
+That is not a reason to discard it. With 24 items and one run per arm, binomial noise is worth two or three
+tasks, so a single run could not have supported a difference anyway. The hardened re-run is the replicate, and
+the pair is what any claim rests on.
