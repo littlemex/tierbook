@@ -159,7 +159,7 @@ def test_a_reply_cut_off_at_the_cap_is_cost_only(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen",
                         lambda *a, **k: _fake(json.dumps(payload).encode()))
     r = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=8,
-                 timeout=5)
+                 timeout=5, from_wire=True)
     assert r["comparable_as"] == "cost_only" and "scoring the cap" in r["comparable_note"]
     assert r["legs"]["out"] == 8
 
@@ -171,7 +171,7 @@ def test_a_complete_reply_is_comparable_as_both(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen",
                         lambda *a, **k: _fake(json.dumps(payload).encode()))
     r = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=99,
-                 timeout=5)
+                 timeout=5, from_wire=True)
     assert r["comparable_as"] == "cost_and_answer" and "comparable_note" not in r
 
 
@@ -186,7 +186,7 @@ def test_the_disjoint_cache_convention_is_not_subtracted_twice(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen",
                         lambda *a, **k: _fake(json.dumps(payload).encode()))
     r = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=9,
-                 timeout=5)
+                 timeout=5, from_wire=True)
     assert r["legs"] == {"fresh_in": 100, "cached_in": 900, "cache_write": 50, "out": 5}
 
 
@@ -199,7 +199,7 @@ def test_the_subset_convention_subtracts_so_the_legs_do_not_double_count(monkeyp
     monkeypatch.setattr(urllib.request, "urlopen",
                         lambda *a, **k: _fake(json.dumps(payload).encode()))
     r = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=9,
-                 timeout=5)
+                 timeout=5, from_wire=True)
     assert r["legs"] == {"fresh_in": 50, "cached_in": 900, "cache_write": 50, "out": 5}
 
 
@@ -211,15 +211,50 @@ def test_repricing_recorded_legs_needs_no_call():
     a different card is arithmetic on them."""
     legs = {"fresh_in": 1_000_000, "cached_in": 1_000_000, "cache_write": 0, "out": 100_000}
     card = {"fresh_in": 1.0, "cached_in": 0.1, "cache_write": 1.25, "output": 10.0}
-    assert tj.reprice(legs, card) == pytest.approx(1.0 + 0.1 + 1.0)
+    r = tj.reprice(legs, card)
+    assert r["usd"] == pytest.approx(1.0 + 0.1 + 1.0)
+    assert r["caveats"] == [], "same model, complete card: nothing to qualify"
 
 
-def test_an_absent_rate_is_charged_as_fresh_rather_than_free():
-    """Unmeasured is not free -- the same rule the rest of this project applies, held here so a card missing
-    its cache line cannot make a cached turn look cheap."""
+def test_an_absent_rate_is_charged_as_fresh_and_the_direction_is_stated():
+    """Unmeasured is not free. But substituting fresh for a cache WRITE under-charges it, because a write is
+    commonly billed above fresh -- so the figure says it is not a floor rather than implying one."""
     legs = {"fresh_in": 0, "cached_in": 1_000_000, "cache_write": 1_000_000, "out": 0}
     card = {"fresh_in": 2.0, "cached_in": None, "cache_write": None, "output": 1.0}
-    assert tj.reprice(legs, card) == pytest.approx(4.0)
+    r = tj.reprice(legs, card)
+    assert r["usd"] == pytest.approx(4.0)
+    assert any("UNDER-charges" in c and "not a floor" in c for c in r["caveats"])
+
+
+def test_repricing_across_models_carries_the_bound_that_the_legs_are_not_that_models():
+    """The misuse the owner's requirement invites. Token counts are tokenizer-dependent and 10-30% differences
+    between vocabularies are ordinary, so this is not arithmetic across models."""
+    r = tj.reprice({"fresh_in": 1000, "cached_in": 0, "cache_write": 0, "out": 10},
+                   {"fresh_in": 1.0, "cached_in": 0.1, "cache_write": 1.25, "output": 10.0},
+                   same_model=False)
+    assert r["same_model"] is False
+    assert any("different tokenizer" in c for c in r["caveats"])
+
+
+def test_a_cold_cache_charges_the_cached_leg_as_fresh():
+    """`cached_in` describes the warmth of one serving cache at one moment, not a property of the request. A
+    provider that has never served the prefix starts cold."""
+    legs = {"fresh_in": 0, "cached_in": 1_000_000, "cache_write": 0, "out": 0}
+    card = {"fresh_in": 2.0, "cached_in": 0.1, "cache_write": 1.25, "output": 1.0}
+    warm = tj.reprice(legs, card)
+    cold = tj.reprice(legs, card, cold_cache=True)
+    assert warm["usd"] == pytest.approx(0.1) and cold["usd"] == pytest.approx(2.0)
+    assert any("nothing cached" in c for c in cold["caveats"])
+
+
+def test_the_replay_refusal_names_the_bounded_claims_it_is_not_foreclosing():
+    """The refusal was right and overclaimed: prefix replay to the first divergence IS identified, and the
+    general correction is a gap in this project rather than a law of nature."""
+    with pytest.raises(NotImplementedError) as e:
+        tj.replay_whole_run()
+    msg = str(e.value)
+    assert "replay the PREFIX" in msg and "diverged at" in msg
+    assert "logged selection probabilities" in msg and "gap in this project" in msg
 
 
 class _fake:
@@ -245,7 +280,7 @@ def test_a_reask_with_no_tools_against_a_tool_answered_turn_is_input_side_only(m
                "choices": [{"finish_reason": "length", "message": {"content": "prose " * 100}}]}
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _fake(json.dumps(payload).encode()))
     r = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=4096,
-                 timeout=5, stored_reply_used_tools=True)
+                 timeout=5, stored_reply_used_tools=True, from_wire=True)
     assert r["comparable_as"] == "input_side_only"
     assert "not a comparison" in r["comparable_note"] and "tool schemas" in r["comparable_note"]
 
@@ -269,7 +304,7 @@ def test_offering_the_tool_schemas_makes_the_output_side_comparable(monkeypatch)
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _fake(json.dumps(payload).encode()))
     r = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=4096,
                  timeout=5, tools=[{"type": "function", "function": {"name": "bash"}}],
-                 stored_reply_used_tools=True)
+                 stored_reply_used_tools=True, from_wire=True)
     assert r["comparable_as"] == "cost_and_answer"
     assert r["tool_calls"] == ["bash"] and r["tools_offered"] is True
 
@@ -344,9 +379,8 @@ def test_the_replayed_request_is_the_one_with_tools_and_the_shortest_history(tmp
     ]))
     req = tj.request_from_tap(log, prompt)
     assert len(req["messages"]) == 1 and req["tools"]
-    assert req["_selected_from"] == {"matched": 3, "with_tool_schemas": 2, "messages": 1,
-                                     "rule": req["_selected_from"]["rule"]}
-    assert "history only grows" in req["_selected_from"]["rule"]
+    assert req["_selected_from"]["matched"] == 3 and req["_selected_from"]["with_tool_schemas"] == 2
+    assert "Correct only for the FIRST turn" in req["_selected_from"]["rule"]
 
 
 def test_when_no_match_carries_tool_schemas_the_shortest_is_taken_and_counted(tmp_path):
@@ -360,3 +394,110 @@ def test_when_no_match_carries_tool_schemas_the_shortest_is_taken_and_counted(tm
     ]))
     req = tj.request_from_tap(log, "p")
     assert req["_selected_from"]["with_tool_schemas"] == 0 and len(req["messages"]) == 1
+
+
+def test_a_reconstructed_context_is_not_comparable_on_either_side(monkeypatch):
+    """The claim this replaces said the input side was like-for-like. It is not: the store keeps tool CALLS and
+    not tool RESULTS, and the observed request carried those results -- usually most of its tokens."""
+    import urllib.request
+    payload = {"model": "M", "usage": {"prompt_tokens": 100, "completion_tokens": 8},
+               "choices": [{"finish_reason": "stop", "message": {"content": "x"}}]}
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _fake(json.dumps(payload).encode()))
+    r = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=9,
+                 timeout=5)
+    assert r["context_from"] == "session_store"
+    assert r["comparable_as"] == "reconstructed_context_only"
+    assert "tool CALLS and not tool RESULTS" in r["comparable_note"]
+
+
+def test_an_assistant_message_carrying_only_tool_calls_is_not_dropped(monkeypatch):
+    """Dropped, it orphans the tool results that follow it, and the replayed request is structurally different
+    from the wire one -- so "varies one thing" was false while that held."""
+    import urllib.request
+    sent = {}
+
+    def capture(req, *a, **k):
+        sent.update(json.loads(req.data))
+        return _fake(json.dumps({"model": "M", "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                                 "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}]}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", capture)
+    wire = [
+        {"role": "user", "content": "do it"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "bash"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "output"},
+    ]
+    tj.reask(wire, endpoint="http://x/v1", model="M", max_tokens=9, timeout=5, from_wire=True)
+    roles = [m["role"] for m in sent["messages"]]
+    assert roles == ["user", "assistant", "tool"], "the tool-call turn and its result both survive"
+    assert sent["messages"][1]["tool_calls"][0]["id"] == "c1"
+    assert sent["messages"][2]["tool_call_id"] == "c1", "the pairing is what makes the request valid"
+
+
+def test_the_observed_sampling_is_reused_and_defaults_are_named(monkeypatch):
+    """A candidate is (model, endpoint, decoding and tool policy). Hardcoding a temperature changes the
+    candidate and then reports the result as that candidate's."""
+    import urllib.request
+    sent = {}
+
+    def capture(req, *a, **k):
+        sent.update(json.loads(req.data))
+        return _fake(json.dumps({"model": "M", "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                                 "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}]}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", capture)
+    r = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=9,
+                 timeout=5, from_wire=True, sampling={"temperature": 0.7, "top_p": 0.9})
+    assert sent["temperature"] == 0.7 and sent["top_p"] == 0.9
+    assert "decoding_defaulted" not in r
+
+    r2 = tj.reask([{"role": "user", "content": "x"}], endpoint="http://x/v1", model="M", max_tokens=9,
+                  timeout=5, from_wire=True)
+    assert r2["decoding_defaulted"] == {"temperature": 0}
+
+
+def test_asking_for_a_later_turn_without_a_depth_would_replay_the_first(tmp_path):
+    """The defect: the prompt appears in every later request of the thread, carried in its history, so "fewest
+    messages" always selects the request nearest the start. Asked for turn 7 the earlier version replayed turn
+    0 and then reported it as turn 7."""
+    log = tmp_path / "tap.jsonl"
+    rows = []
+    for depth in (1, 5, 9):
+        rows.append({"request": {"model": "M", "tools": [{"function": {"name": "bash"}}],
+                                 "messages": [{"role": "user", "content": "the prompt"}]
+                                             + [{"role": "assistant", "content": f"m{i}"}
+                                                for i in range(depth - 1)]}})
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    shallow = tj.request_from_tap(log, "the prompt")
+    assert len(shallow["messages"]) == 1
+    assert "Correct only for the FIRST turn" in shallow["_selected_from"]["rule"]
+
+    deep = tj.request_from_tap(log, "the prompt", want_depth=9)
+    assert len(deep["messages"]) == 9 and deep["_selected_from"]["depth_distance"] == 0
+
+    near = tj.request_from_tap(log, "the prompt", want_depth=6)
+    assert len(near["messages"]) == 5 and near["_selected_from"]["depth_distance"] == -1, \
+        "the closest available, and the distance is reported so nobody reads it as that turn's request"
+
+
+def test_a_system_message_does_not_make_every_depth_look_one_short(tmp_path):
+    """Only one side has it. The wire request carries a system message the session store never saw, so counting
+    it fired the "not that turn's request" warning on the normal case."""
+    log = tmp_path / "tap.jsonl"
+    log.write_text(json.dumps({"request": {"model": "M", "tools": [{"function": {"name": "bash"}}],
+                                           "messages": [{"role": "system", "content": "you are"},
+                                                        {"role": "user", "content": "the prompt"}]}}) + "\n")
+    req = tj.request_from_tap(log, "the prompt", want_depth=1)
+    assert req["_selected_from"]["depth_distance"] == 0
+    assert req["_selected_from"]["non_system_messages"] == 1 and req["_selected_from"]["messages"] == 2
+
+
+def test_a_non_ascii_needle_does_not_reject_a_utf8_log(tmp_path):
+    """`json.dumps` escapes non-ASCII by default, so an escaped-only match rejects every line of a log written
+    with `ensure_ascii=False` -- and that failure looks exactly like "never captured"."""
+    log = tmp_path / "tap.jsonl"
+    log.write_text(json.dumps({"request": {"model": "M", "tools": [{"function": {"name": "bash"}}],
+                                           "messages": [{"role": "user", "content": "日本語の指示"}]}},
+                              ensure_ascii=False) + "\n", encoding="utf-8")
+    assert tj.request_from_tap(log, "日本語の指示") is not None
