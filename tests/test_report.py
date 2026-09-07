@@ -260,3 +260,36 @@ def test_the_uncertified_detail_does_not_deny_that_a_margin_is_a_threshold():
     d = report.self_hosted_answer(e, report.frontier_for(e), self_hosted_ids={"box"})["detail"]
     assert "wider non-inferiority margin" in d
     assert "not a knob to turn until the answer changes" in d
+
+
+def test_a_candidate_a_stated_constraint_removed_says_so_rather_than_reporting_a_frontier():
+    """The actionable answer, and it is not about the frontier: relax the constraint, or improve the candidate
+    against it. A candidate removed before ranking has no frontier position to report."""
+    e = entry(["dear"], ranked=[ranked("dear", 0.0, 0.5)])
+    e["excluded_by_constraint"] = {"box": "p95 of 900 ms exceeds the stated SLO of 500 ms"}
+    ans = report.self_hosted_answer(e, report.frontier_for(e), self_hosted_ids={"box"})
+    assert ans["usable"] is False and ans["reason"] == "excluded_by_constraint"
+    assert "exceeds the stated SLO" in ans["detail"]
+
+
+def test_a_cost_the_compiler_refused_to_compute_survives_the_json_round_trip():
+    """JSON has no infinity, so the compiler's "excluded for want of a spend figure" arrives as a null. Without
+    the marker it is indistinguishable from a cost that was never applicable, and only one of the two must be
+    kept off a frontier."""
+    fr = report.frontier_for(entry(["a"], ranked=[
+        {"arrangement": ["unpriced"], "kind": "outright", "quality_lcb": 0.9,
+         "cost_per_request": None, "cost_not_computed": True, "certified": True},
+        ranked("a", 0.0, 0.10),
+    ]))
+    by = {p["candidate"]: p for p in fr}
+    assert by["unpriced"]["on_frontier"] is False
+    assert "excluded it for want of one" in by["unpriced"]["frontier_note"]
+
+
+def test_dominated_is_stated_as_a_comparison_of_bounds():
+    """A lower bound from a small sample can sit above one from a large sample without the true rates being
+    ordered that way, and `self_hosted_answer` ACTS on this comparison."""
+    e = entry(["a"], ranked=[ranked("box", -0.5, 0.9), ranked("a", 0.0, 0.1)])
+    d = report.self_hosted_answer(e, report.frontier_for(e), self_hosted_ids={"box"})
+    assert d["reason"] == "dominated"
+    assert "comparison of BOUNDS" in d["detail"] and "not about which candidate is better" in d["detail"]

@@ -37,6 +37,7 @@ NOT_USABLE_REASONS = (
     "not_priced",               # its cost could not be computed, so it is not comparable at all
     "dominated",                # another candidate is at least as good on both axes
     "no_record",                # nothing measured it on this family
+    "excluded_by_constraint",   # a stated constraint removed it before ranking (an SLO, a completion floor)
 )
 
 DEGENERATE, ARRANGEMENT, UNSUPPORTED = "degenerate", "arrangement", "unsupported"
@@ -52,10 +53,15 @@ def _on_frontier(points: list[dict]) -> list[dict]:
     out = []
     for p in points:
         q, c = p.get("quality_lcb"), p.get("cost_per_request")
+        if p.get("cost_not_computed"):
+            out.append({**p, "on_frontier": False,
+                        "frontier_note": "no cost figure: the compiler excluded it for want of one, so it is "
+                                         "not a point on any frontier"})
+            continue
         if q is None or c is None:
             out.append({**p, "on_frontier": False, "frontier_note": "no comparable bound or cost"})
             continue
-        if c == float("inf"):
+        if c == float("inf") or p.get("cost_not_computed"):
             # An infinite cost is the compiler's way of saying "excluded for want of a spend figure". Left in,
             # such a point participates in dominance and -- with the best bound -- lands ON the frontier, so a
             # candidate nobody priced would be presented as a Pareto option. That is the same "forgetting to
@@ -83,6 +89,10 @@ def frontier_for(entry: dict) -> list[dict]:
         "quality_lcb": r.get("quality_lcb"),
         "cost_per_request": r.get("cost_per_request"),
         "certified": r.get("certified"),
+        # JSON cannot carry infinity, so the compiler's "excluded for want of a spend figure" arrives as a
+        # null plus this marker. Without reading it, that candidate is indistinguishable from one whose cost
+        # was never applicable -- and only one of the two must be kept off a frontier.
+        "cost_not_computed": bool(r.get("cost_not_computed")),
         # Carried because a cost figure without its basis invites the reader to take it as the deployment's.
         # The number this project produced first was $0.25 per request, six times the token side, entirely
         # because one experimenter at concurrency 1 left the GPU idle -- true, and useless to anyone who does
@@ -120,6 +130,16 @@ def self_hosted_answer(entry: dict, frontier: list[dict], *, self_hosted_ids: se
     if not self_hosted_ids:
         return {"usable": False, "reason": "no_record",
                 "detail": "no candidate in this registry is marked self-hosted"}
+    # A constraint the operator stated is a different answer from anything about the frontier, and it is the
+    # actionable one: relax the constraint, or improve the candidate against it. Checked first because a
+    # candidate that was removed before ranking has no frontier position to report.
+    barred = {k: v for k, v in (entry.get("excluded_by_constraint") or {}).items() if k in self_hosted_ids}
+    if barred:
+        return {"usable": False, "reason": "excluded_by_constraint",
+                "candidates": sorted(barred),
+                "detail": "removed before ranking by a constraint stated by the operator: "
+                          + "; ".join(f"{k} {v}" for k, v in sorted(barred.items()))}
+
     chosen = set(entry.get("chosen") or [])
     hit = sorted(self_hosted_ids & chosen)
     if hit:
@@ -155,7 +175,8 @@ def self_hosted_answer(entry: dict, frontier: list[dict], *, self_hosted_ids: se
                           "Two things would change the answer and both are the operator's to state: more "
                           "evidence, or a wider non-inferiority margin -- which is a decision about how much "
                           "accuracy the saving is worth, not a knob to turn until the answer changes"}
-    if all(p.get("cost_per_request") is None or p["cost_per_request"] == float("inf") for p in mine):
+    if all(p.get("cost_not_computed") or p.get("cost_per_request") is None
+           or p["cost_per_request"] == float("inf") for p in mine):
         return {"usable": False, "reason": "not_priced",
                 "candidates": sorted(p["candidate"] for p in mine),
                 "detail": "certified on quality but its cost could not be computed, so it cannot be compared "
@@ -168,8 +189,10 @@ def self_hosted_answer(entry: dict, frontier: list[dict], *, self_hosted_ids: se
                           "becomes the choice if the operator moves along the frontier"}
     return {"usable": False, "reason": "dominated",
             "candidates": sorted(p["candidate"] for p in mine),
-            "detail": "another candidate is at least as good on both cost and quality, so nothing is gained "
-                      "by routing here"}
+            "detail": "another candidate is at least as good on both cost and quality. Read as a comparison of "
+                      "BOUNDS, which is what it is: a lower bound from a small sample can sit above one from a "
+                      "large sample without the true rates being ordered that way, so this is a statement about "
+                      "what the evidence shows and not about which candidate is better"}
 
 
 def annotate(table: dict, *, self_hosted_ids: set[str], economics: dict | None = None,

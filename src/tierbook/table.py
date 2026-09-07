@@ -41,6 +41,9 @@ def _decision_json(d: Decision) -> dict:
         "margin": d.margin,
         "alpha": d.alpha,
         "registry_version": d.registry_version,
+        # Which constraint removed which candidate, as data. `why` says it in prose for a human; a program
+        # reading only prose cannot tell "excluded by the SLO" from "lost on cost".
+        "excluded_by_constraint": {k: v for k, v in (d.excluded or ())},
         # Every candidate, not just the winner. A reader deciding whether to trust this entry needs to see
         # what it beat and by how much.
         "ranked": [
@@ -48,7 +51,12 @@ def _decision_json(d: Decision) -> dict:
                 "arrangement": list(c.arrangement.tiers),
                 "kind": c.arrangement.kind,
                 "quality_lcb": c.quality_lcb,
+                # inf becomes None because JSON has no infinity, and the marker beside it says WHICH kind of
+                # absence this is: a cost the compiler refused to compute for want of a figure, versus one that
+                # was never applicable. Collapsed to a bare None the two read identically, and only one of them
+                # means "do not put this candidate on a frontier".
                 "cost_per_request": (None if c.cost_per_request == float("inf") else round(c.cost_per_request, 6)),
+                "cost_not_computed": c.cost_per_request == float("inf"),
                 # Both objectives are shown whichever one was optimised, so a reader can see what the choice
                 # gave up on the axis nobody selected.
                 "seconds_to_accepted": (None if c.latency_ms_per_request == float("inf")

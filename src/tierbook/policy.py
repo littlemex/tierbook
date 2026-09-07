@@ -475,6 +475,10 @@ class Decision:
     alpha: float
     why: str
     objective: str = "cost"
+    #: Candidates a stated constraint removed before ranking, and which constraint. Structured as well as
+    #: written into `why`, because a reader downstream cannot parse prose: the report has to be able to say
+    #: "the box was excluded by the latency SLO" rather than "the box is not on the frontier".
+    excluded: tuple = ()
 
 
 def _family_spend(t: Tier, family: str) -> tuple[float | None, str]:
@@ -876,13 +880,15 @@ def assign_family(
         if excluded:
             why = f"{why}. Excluded by constraint: " + "; ".join(f"{k} {v}" for k, v in excluded.items())
         return Decision(family, reference, ref_only, False, tuple(ranked),
-                        registry_version(tiers), margin, alpha, why, objective)
+                        registry_version(tiers), margin, alpha, why, objective,
+                        tuple(sorted(excluded.items())))
     unit = "per request" if objective == "cost" else "to an accepted answer"
     why = f"certified within the margin and lowest {objective} {unit}; {best.note}"
     if excluded:
         why += ". Excluded by constraint: " + "; ".join(f"{k} {v}" for k, v in excluded.items())
     return Decision(family, reference, best.arrangement, True, tuple(ranked),
-                    registry_version(tiers), margin, alpha, why, objective)
+                    registry_version(tiers), margin, alpha, why, objective,
+                    tuple(sorted(excluded.items())))
 
 
 def compile_table(
