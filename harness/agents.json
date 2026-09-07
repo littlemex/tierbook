@@ -1,137 +1,140 @@
 {
-  "_comment": [
-    "How to give one task to each coding agent without a branch per agent in the driver.",
-    "",
-    "Every invocation here was verified by running it: the four agents in this cluster have four",
-    "different non-interactive front doors and one of them refuses to run at all without an explicit",
-    "session id. That is the whole reason this file exists as data -- the differences are facts about",
-    "someone else's CLI, and encoding them as code would put four `if agent ==` branches in the middle",
-    "of the measurement.",
-    "",
-    "`argv` is a template. `{prompt}` is the task text, `{session}` a per-run identifier, `{workspace}`",
-    "the run's directory and `{model}` the single model below. A fresh session per run is not hygiene, it",
-    "is the experiment: hermes was observed sending 258 input tokens on one call and 15,510 on the next",
-    "because the second inherited the first, so a run that reuses a session measures the previous run.",
-    "",
-    "MODEL: one value, at the top, referenced only by the agents that need to be told. It used to be",
-    "absent here on the reasoning that the Service alias owns the model and an agent naming its own would",
-    "let the driver break the one thing this comparison holds constant. That reasoning was right about the",
-    "goal and wrong about the mechanism: hermes keeps its model in pod-local state under /opt/data, which",
-    "is the node's ephemeral disk, so every pod restart silently reverted it to a model the alias does not",
-    "serve and every call would have 404ed. Depending on invisible per-pod state is worse than one",
-    "explicit value used by all of them.",
-    "",
-    "`preflight` proves the agent can reach the alias and resolve that model. The driver runs it before any",
-    "measurement and refuses to continue if it fails, because a manifest full of 404s looks like a result.",
-    "",
-    "AUTONOMY: two of the four needed a flag before they would edit anything, and both failures looked",
-    "like capability results. qwen-code sat at an approval prompt for the driver's full twenty-minute",
-    "timeout; hermes explained the fix in prose and touched no files. Neither is a fact about the model --",
-    "the model was identical -- and a comparison run without these flags would have reported two agents as",
-    "unable to do the task. Any agent added here needs its autonomy flag found the same way, and the check",
-    "AUTONOMY AND PLACEMENT: three of the four needed a flag before they would edit the tree they were",
-    "given, and every failure looked like a capability result. qwen-code sat at an approval prompt for the",
-    "driver's full twenty-minute timeout. hermes first answered in prose and edited nothing, then with",
-    "--yolo went and edited a Django tree of its own making under /opt/data/work, because it restores its",
-    "configured cwd and ignores the directory it was started in. The model was identical in all of these.",
-    "A comparison run without these flags would have reported two of four agents as unable to do the task.",
-    "Any agent added here needs the same two questions answered -- will it act without asking, and will it",
-    "act HERE -- and the check for both is whether the returned tree differs from the staged one.",
-    "",
-    "`pre` is a list of argv run in the pod before the task, for an agent that cannot be told where to",
-    "work on the command line. It exists for exactly one agent and is written as a general field rather",
-    "than a special case, because the next agent added will have its own version of the same problem."
-  ],
-  "agents": {
-    "opencode": {
-      "deployment": "opencode",
-      "argv": [
-        "opencode",
-        "run",
-        "--agent",
-        "{agent_definition}",
-        "{prompt}"
-      ],
-      "workspace": "/tmp/run-{session}",
-      "notes": "`--agent` is always passed, even for the default definition: the telemetry only carries `agent.name` when a definition was named, and a candidate tuple whose first element reads `unknown` is not a candidate. **Nothing is copied into the run workspace.** An earlier version put the telemetry plugin's `node_modules` there via `pre`, and the scorer then saw thousands of edited `.test.ts` files and failed the run for editing its own examiner. The plugin belongs in the agent's global config directory; a workspace holds the task and nothing else, because everything in it lands in the diff.",
-      "preflight": [
-        "opencode",
-        "run",
-        "--agent",
-        "{agent_definition}",
-        "reply with exactly: PREFLIGHT_OK"
-      ],
-      "agent_definition": "build"
-    },
-    "qwen-code": {
-      "deployment": "qwen-code",
-      "argv": [
-        "qwen",
-        "-y",
-        "-p",
-        "{prompt}"
-      ],
-      "workspace": "/tmp/run-{session}",
-      "notes": "-p is the non-interactive flag and -y is required WITH it: without -y every tool call waits for an approval that cannot arrive, and the run sits at the prompt until the driver's timeout. Twenty minutes of that looked exactly like an agent that could not solve the task.",
-      "preflight": [
-        "qwen",
-        "-y",
-        "-p",
-        "reply with exactly: PREFLIGHT_OK"
-      ]
-    },
-    "hermes": {
-      "deployment": "hermes",
-      "argv": [
-        "hermes",
-        "-m",
-        "{model}",
-        "--yolo",
-        "-z",
-        "{prompt}"
-      ],
-      "workspace": "/tmp/run-{session}",
-      "notes": "The hardest of the four to place. -z is the non-interactive prompt, --yolo bypasses approval, and -m is passed every call because its persisted config sits on the node's ephemeral disk and resets on restart. It also RESTORES terminal.cwd from that config and ignores both the directory it was started in and --in, so it built its own Django tree under /opt/data/work and edited that -- scoring zero while having done the task elsewhere. `pre` writes the run's workspace into the config first. Runs are sequential, so mutating a shared pod's config per run is safe here and is checked by the returned tree differing from the staged one.",
-      "preflight": [
-        "hermes",
-        "-m",
-        "{model}",
-        "--yolo",
-        "-z",
-        "reply with exactly: PREFLIGHT_OK"
-      ],
-      "pre": [
-        [
-          "hermes",
-          "config",
-          "set",
-          "terminal.cwd",
-          "{workspace}"
-        ]
-      ]
-    },
-    "openclaw": {
-      "deployment": "openclaw",
-      "argv": [
-        "openclaw",
-        "agent",
-        "-m",
-        "{prompt}",
-        "--session-id",
-        "{session}",
-        "--json"
-      ],
-      "workspace": "/tmp/run-{session}",
-      "notes": "Refuses to run without --session-id, --to or --agent. Tries the Gateway first and falls back to an embedded agent; both paths reach the alias.",
-      "preflight": [
-        "openclaw",
-        "agent",
-        "-m",
-        "reply with exactly: PREFLIGHT_OK",
-        "--session-id",
-        "{session}"
-      ]
-    }
+ "_comment": [
+  "How to give one task to each coding agent without a branch per agent in the driver.",
+  "",
+  "Every invocation here was verified by running it: the four agents in this cluster have four",
+  "different non-interactive front doors and one of them refuses to run at all without an explicit",
+  "session id. That is the whole reason this file exists as data -- the differences are facts about",
+  "someone else's CLI, and encoding them as code would put four `if agent ==` branches in the middle",
+  "of the measurement.",
+  "",
+  "`argv` is a template. `{prompt}` is the task text, `{session}` a per-run identifier, `{workspace}`",
+  "the run's directory and `{model}` the single model below. A fresh session per run is not hygiene, it",
+  "is the experiment: hermes was observed sending 258 input tokens on one call and 15,510 on the next",
+  "because the second inherited the first, so a run that reuses a session measures the previous run.",
+  "",
+  "MODEL: one value, at the top, referenced only by the agents that need to be told. It used to be",
+  "absent here on the reasoning that the Service alias owns the model and an agent naming its own would",
+  "let the driver break the one thing this comparison holds constant. That reasoning was right about the",
+  "goal and wrong about the mechanism: hermes keeps its model in pod-local state under /opt/data, which",
+  "is the node's ephemeral disk, so every pod restart silently reverted it to a model the alias does not",
+  "serve and every call would have 404ed. Depending on invisible per-pod state is worse than one",
+  "explicit value used by all of them.",
+  "",
+  "`preflight` proves the agent can reach the alias and resolve that model. The driver runs it before any",
+  "measurement and refuses to continue if it fails, because a manifest full of 404s looks like a result.",
+  "",
+  "AUTONOMY: two of the four needed a flag before they would edit anything, and both failures looked",
+  "like capability results. qwen-code sat at an approval prompt for the driver's full twenty-minute",
+  "timeout; hermes explained the fix in prose and touched no files. Neither is a fact about the model --",
+  "the model was identical -- and a comparison run without these flags would have reported two agents as",
+  "unable to do the task. Any agent added here needs its autonomy flag found the same way, and the check",
+  "AUTONOMY AND PLACEMENT: three of the four needed a flag before they would edit the tree they were",
+  "given, and every failure looked like a capability result. qwen-code sat at an approval prompt for the",
+  "driver's full twenty-minute timeout. hermes first answered in prose and edited nothing, then with",
+  "--yolo went and edited a Django tree of its own making under /opt/data/work, because it restores its",
+  "configured cwd and ignores the directory it was started in. The model was identical in all of these.",
+  "A comparison run without these flags would have reported two of four agents as unable to do the task.",
+  "Any agent added here needs the same two questions answered -- will it act without asking, and will it",
+  "act HERE -- and the check for both is whether the returned tree differs from the staged one.",
+  "",
+  "`pre` is a list of argv run in the pod before the task, for an agent that cannot be told where to",
+  "work on the command line. It exists for exactly one agent and is written as a general field rather",
+  "than a special case, because the next agent added will have its own version of the same problem."
+ ],
+ "agents": {
+  "opencode": {
+   "deployment": "opencode",
+   "argv": [
+    "opencode",
+    "run",
+    "--agent",
+    "{agent_definition}",
+    "--model",
+    "{model}",
+    "{prompt}"
+   ],
+   "workspace": "/tmp/run-{session}",
+   "notes": "`--agent` is always passed, even for the default definition: the telemetry only carries `agent.name` when a definition was named, and a candidate tuple whose first element reads `unknown` is not a candidate. **Nothing is copied into the run workspace.** An earlier version put the telemetry plugin's `node_modules` there via `pre`, and the scorer then saw thousands of edited `.test.ts` files and failed the run for editing its own examiner. The plugin belongs in the agent's global config directory; a workspace holds the task and nothing else, because everything in it lands in the diff. `--model` is passed explicitly too, and for the same reason as `--agent`: the config's default is a property of the pod rather than of the run, so a two-arm comparison in which one arm inherited it would differ in a way nothing recorded. With it, the candidate the driver asked for is the candidate the telemetry reports.",
+   "preflight": [
+    "opencode",
+    "run",
+    "--agent",
+    "{agent_definition}",
+    "reply with exactly: PREFLIGHT_OK"
+   ],
+   "agent_definition": "build"
   },
-  "model": "Qwen/Qwen3.6-35B-A3B"
+  "qwen-code": {
+   "deployment": "qwen-code",
+   "argv": [
+    "qwen",
+    "-y",
+    "-p",
+    "{prompt}"
+   ],
+   "workspace": "/tmp/run-{session}",
+   "notes": "-p is the non-interactive flag and -y is required WITH it: without -y every tool call waits for an approval that cannot arrive, and the run sits at the prompt until the driver's timeout. Twenty minutes of that looked exactly like an agent that could not solve the task.",
+   "preflight": [
+    "qwen",
+    "-y",
+    "-p",
+    "reply with exactly: PREFLIGHT_OK"
+   ]
+  },
+  "hermes": {
+   "deployment": "hermes",
+   "argv": [
+    "hermes",
+    "-m",
+    "{model}",
+    "--yolo",
+    "-z",
+    "{prompt}"
+   ],
+   "workspace": "/tmp/run-{session}",
+   "notes": "The hardest of the four to place. -z is the non-interactive prompt, --yolo bypasses approval, and -m is passed every call because its persisted config sits on the node's ephemeral disk and resets on restart. It also RESTORES terminal.cwd from that config and ignores both the directory it was started in and --in, so it built its own Django tree under /opt/data/work and edited that -- scoring zero while having done the task elsewhere. `pre` writes the run's workspace into the config first. Runs are sequential, so mutating a shared pod's config per run is safe here and is checked by the returned tree differing from the staged one.",
+   "preflight": [
+    "hermes",
+    "-m",
+    "{model}",
+    "--yolo",
+    "-z",
+    "reply with exactly: PREFLIGHT_OK"
+   ],
+   "pre": [
+    [
+     "hermes",
+     "config",
+     "set",
+     "terminal.cwd",
+     "{workspace}"
+    ]
+   ]
+  },
+  "openclaw": {
+   "deployment": "openclaw",
+   "argv": [
+    "openclaw",
+    "agent",
+    "-m",
+    "{prompt}",
+    "--session-id",
+    "{session}",
+    "--json"
+   ],
+   "workspace": "/tmp/run-{session}",
+   "notes": "Refuses to run without --session-id, --to or --agent. Tries the Gateway first and falls back to an embedded agent; both paths reach the alias.",
+   "preflight": [
+    "openclaw",
+    "agent",
+    "-m",
+    "reply with exactly: PREFLIGHT_OK",
+    "--session-id",
+    "{session}"
+   ]
+  }
+ },
+ "model": "vllm-local/Qwen/Qwen3.6-35B-A3B",
+ "_model_note": "Provider-qualified, because the agent now names it. The metered arm is `gw/claude-haiku-4-5` on the same agent definition: one element of the candidate tuple changes and the harness does not."
 }

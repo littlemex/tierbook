@@ -226,6 +226,10 @@ def main() -> int:
                     help="append one JSONL row per run: trace_id, item_id and the run's own exit state. "
                          "The oracle's verdict is added later by whoever scores it")
     ap.add_argument("--item-id", help="the task's id, carried into the outcomes rows")
+    ap.add_argument("--model", default=None,
+                    help="override the model in agents.json. This is how a second arm is run: one element of "
+                         "the candidate tuple changes and nothing else does, so the two runs are a comparison "
+                         "rather than two experiments")
     ap.add_argument("--run-group",
                     help="an id for the invocation that launched this driver, written on every outcomes "
                          "row. Killing a sweep does not kill its already-launched driver, and an orphan "
@@ -241,7 +245,7 @@ def main() -> int:
     prompt = args.task or Path(args.task_file).read_text()
 
     doc = json.loads(Path(args.spec).read_text())
-    spec, model = doc["agents"], doc["model"]
+    spec, model = doc["agents"], (args.model or doc["model"])
     names = args.agents.split(",") if args.agents else sorted(spec)
     missing = [n for n in names if n not in spec]
     if missing:

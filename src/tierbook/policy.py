@@ -497,19 +497,23 @@ class Decision:
 
 
 def _family_spend(t: Tier, family: str) -> tuple[float | None, str]:
-    """What the gateway charged for this tier's family, and nothing else.
+    """What this tier's family cost, and on whose authority. Two authorities, both of them stated.
 
-    **One authority, not two.** The governing document is explicit that this project reads the gateway's quotes
-    and *never reconstructs charge*, and that the gateway quotes every candidate in the objective's unit
-    including the fixed-cost tier. An earlier version fell back to the tier's own rate card and observed token
-    legs when no charge existed, and called that "the project's rule about cost" -- which inverted the rule it
-    cited. A reconstruction omits credits, minimums, rounding, retries, delayed settlement and price changes,
-    so it is not money that left; ranking on it launders an estimate into a settled figure.
+    **A settled charge wins.** If the gateway authored a dollar figure, that is what the money was.
 
-    So a missing charge is a refusal. What it refuses is narrower than it looks: a candidate with no gateway
-    charge cannot be *ranked on cost*, which is a statement about this cohort's instrumentation rather than
-    about the candidate. `imputed_spend` computes the rate-card figure for reporting, labelled as imputed, and
-    the ranking does not see it.
+    **Otherwise: gateway-authored tokens priced at a declared card.** This is a change of position and the
+    measurement forced it. The governing document assumed the gateway quotes every candidate in the objective's
+    unit, so an absent charge was a refusal. Then the gateway in front of this deployment was measured: its
+    ledger moved by 22,009 units for 22,008 input plus 1 output token, and by 623 for 23 input plus 600 output.
+    It counts TOKENS, unweighted, identically for input and output and identically across models. It is a meter,
+    not a bill, and it has no dollar figure to give -- so a rule that waits for one leaves the framework unable
+    to rank anything in the deployment it was built for.
+
+    The distinction that keeps this from being the reconstruction the rule forbade: what was forbidden is
+    *inventing the quantity*. The quantity here is gateway-authored and settled; the card is a contract someone
+    signed, exactly like the reservation price, and applying a stated price to a metered quantity is what every
+    invoice does. What must not happen is the label going missing, so the basis travels with the figure and the
+    report prints it.
 
     Absent is never zero. Read as $0.00, a record that simply forgot to state its spend wins a cost objective
     by construction -- forgetting to measure would be the cheapest thing a candidate can do.
@@ -518,23 +522,20 @@ def _family_spend(t: Tier, family: str) -> tuple[float | None, str]:
     bill = o.get("bill_usd")
     if bill is not None:
         return float(bill), "gateway_bill"
-    tok = o.get("tokens") or {}
-    if tok:
-        return None, (f"{t.id!r} has observed token legs for {family!r} but no gateway charge. Cost truth "
-                      "belongs to the gateway, so those legs cannot be turned into a ranking figure here: a "
-                      "rate-card reconstruction omits credits, minimums, rounding and price changes. Route the "
-                      "candidate through the gateway, or read `imputed_spend` as the estimate it is")
-    return None, (f"{t.id!r} states neither a gateway charge nor observed token legs for {family!r}, so it has "
-                  "no spend figure. That is not zero spend: it is unmeasured spend, and treating it as free "
-                  "would make forgetting to measure the cheapest thing a candidate can do")
+    usd, why = imputed_spend(t, family)
+    if usd is not None:
+        return usd, "declared_card_on_gateway_tokens"
+    return None, (f"{t.id!r} has no settled charge for {family!r} and no priceable token legs either: {why}. "
+                  "That is not zero spend, it is unmeasured spend, and treating it as free would make "
+                  "forgetting to measure the cheapest thing a candidate can do")
 
 
 def imputed_spend(t: Tier, family: str) -> tuple[float | None, str]:
-    """The rate-card figure for a family's observed token legs. For REPORTING, never for ranking.
+    """A family's gateway-metered token legs priced at this tier's declared card.
 
-    Kept because it answers a real question -- roughly what would this traffic be charged at these rates -- and
-    separated because the answer is an estimate. It is not what the gateway billed, and the objective must not
-    be able to reach it: that separation is the whole point of having two functions.
+    Kept as its own function so the basis cannot be lost: a caller that wants the number has to go through the
+    name that says what it is. It is not a settled charge -- it omits credits, minimums, rounding, retries and
+    price changes -- and everything that consumes it says so.
     """
     tok = (t.outcome(family) or {}).get("tokens") or {}
     if not tok:
@@ -586,9 +587,9 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str) -> 
     contains those attempts counts them twice. For a purely reserved arrangement the term is the only nonzero
     quantity here, so getting it wrong would decide box-against-box comparisons on its own.
 
-    Every figure that enters this total is a gateway charge. A candidate with no charge is refused rather than
-    priced from its own rate card: cost truth belongs to the gateway, and a reconstruction ranked as though it
-    were settled is how an estimate becomes a decision.
+    Every quantity that enters this total is gateway-authored. Not every one of them is money: the gateway in
+    front of this deployment meters tokens rather than dollars, so a declared price card converts them, and the
+    basis says which candidates that applies to. What is refused is a candidate whose quantity nobody metered.
 
     - **A fixed bill is not reach-weighted.** A reservation does not shrink because only a fifth of requests
       reach that stage. Only variable charges are multiplied by `reach`, and placing a reserved tier late in a
@@ -599,7 +600,7 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str) -> 
     """
     total = 0.0
     reach = 1.0
-    reserved = []
+    reserved, imputed = [], []
     for tid in arr.tiers:
         t = tiers[tid]
         o = t.outcome(family) or {}
@@ -634,11 +635,19 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str) -> 
             spend, basis = _family_spend(t, family)
             if spend is None:
                 return math.inf, basis
+            if basis != "gateway_bill":
+                imputed.append(tid)
             total += reach * (spend / n + _retry_term(t, family))
         solved = (o.get("solved") or 0) / n
         reach *= max(0.0, 1.0 - solved)
 
     notes = []
+    if imputed:
+        notes.append(
+            f"{', '.join(sorted(imputed))} priced by applying a declared price card to token counts the "
+            "gateway metered. The tokens are settled; the dollars are not, because the gateway in front of "
+            "this deployment counts tokens rather than money -- it moved 623 units for 23 input plus 600 "
+            "output tokens, unweighted. Credits, minimums, rounding and price changes are outside this figure")
     if reserved:
         notes.append(
             f"{', '.join(sorted(reserved))} is reserved, so its marginal charge per request is nothing while "

@@ -100,6 +100,7 @@ def sweep_one(a, instance: str) -> dict:
         # later joined on.
         "--outcomes", str(outcomes), "--item-id", instance,
         "--run-group", a.run_group,
+        *(("--model", a.model) if a.model else ()),
     ]
     if a.otlp_endpoint:
         drive += ["--otlp-endpoint", a.otlp_endpoint]
@@ -193,6 +194,8 @@ def main() -> int:
                     help="where the agent exports its telemetry. This sweep produces no telemetry itself")
     ap.add_argument("--span-attributes", default="tenant=default-org")
     ap.add_argument("--agents", help="comma-separated subset passed through to the driver")
+    ap.add_argument("--model", default=None,
+                    help="passed through to the driver, so a second arm differs only in the model")
     ap.add_argument("--run-group", default=None,
                     help="id for this invocation, defaulting to a fresh one. Written on every outcomes row "
                          "so an orphaned driver from an aborted sweep cannot be mistaken for this one's")

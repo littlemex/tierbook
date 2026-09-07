@@ -275,38 +275,49 @@ def test_a_spent_budget_stops_the_walk():
 # --- an unmeasured spend is refused, never priced at zero ------------------------------------------
 
 
-def test_an_absent_gateway_charge_is_refused_not_reconstructed():
-    """The governing document says this project reads the gateway's quotes and never reconstructs charge. An
-    earlier version fell back to the rate card and called that the project's rule about cost, which inverted
-    the rule it cited: a reconstruction omits credits, minimums, rounding and price changes, so ranking on it
-    launders an estimate into a settled figure."""
+def test_gateway_metered_tokens_are_priced_at_a_declared_card_and_the_basis_says_so():
+    """A change of position the measurement forced. The gateway in front of this deployment was measured: its
+    ledger moved 22,009 units for 22,008 input plus 1 output token, and 623 for 23 input plus 600 output. It
+    counts tokens, unweighted, identically across models -- a meter, not a bill. Waiting for a dollar figure it
+    does not have leaves the framework unable to rank anything.
+
+    What was forbidden is inventing the QUANTITY. The quantity here is gateway-authored; the card is a contract
+    someone signed, exactly like the reservation price."""
     tiers = registry()
     t = tiers["api-cheap-a"]
     o = t.outcome("agentic-coding")
     del o["bill_usd"]
     o["tokens"] = {"fresh_in": 1_000_000, "cached_in": 0, "cache_write": 0, "out": 100_000}
-    spend, why = policy._family_spend(t, "agentic-coding")
-    assert spend is None
-    assert "Cost truth belongs to the gateway" in why and "Route the candidate through the gateway" in why
+    spend, basis = policy._family_spend(t, "agentic-coding")
+    assert basis == "declared_card_on_gateway_tokens"
+    assert spend == pytest.approx(t.token_cost(1_000_000, 0, 100_000, 0), rel=1e-9)
     cost, note = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
                                           "agentic-coding")
-    assert cost == float("inf"), "unrankable on cost, which is a fact about the instrumentation"
+    assert cost != float("inf")
+    assert "The tokens are settled; the dollars are not" in note
+    assert "counts tokens rather than money" in note
 
 
-def test_the_imputed_figure_exists_for_reporting_and_the_objective_cannot_reach_it():
-    """The separation is the point of having two functions: the estimate answers a real question and must not
-    be able to become a decision."""
+def test_a_settled_charge_still_wins_over_a_declared_card():
     tiers = registry()
     t = tiers["api-cheap-a"]
     o = t.outcome("agentic-coding")
+    o["tokens"] = {"fresh_in": 10 ** 9, "cached_in": 0, "cache_write": 0, "out": 10 ** 9}
+    spend, basis = policy._family_spend(t, "agentic-coding")
+    assert basis == "gateway_bill" and spend == pytest.approx(o["bill_usd"])
+
+
+def test_a_candidate_nobody_metered_at_all_is_still_refused():
+    """The refusal that remains, and the one that matters: an unmetered quantity, not an unpriced one."""
+    tiers = registry()
+    o = tiers["api-cheap-a"].outcome("agentic-coding")
     del o["bill_usd"]
-    o["tokens"] = {"fresh_in": 1_000_000, "cached_in": 0, "cache_write": 0, "out": 100_000}
-    usd, why = policy.imputed_spend(t, "agentic-coding")
-    assert usd == pytest.approx(t.token_cost(1_000_000, 0, 100_000, 0), rel=1e-9)
-    assert "Not a settled charge" in why
+    o.pop("tokens", None)
+    spend, why = policy._family_spend(tiers["api-cheap-a"], "agentic-coding")
+    assert spend is None and "unmeasured spend" in why
     cost, _ = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
                                        "agentic-coding")
-    assert cost == float("inf"), "the objective did not see the imputed figure"
+    assert cost == float("inf")
 
 
 def test_a_gateway_bill_wins_over_the_rate_card_when_both_exist():
