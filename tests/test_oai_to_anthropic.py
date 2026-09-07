@@ -61,17 +61,68 @@ def test_history_is_not_shrunk():
     assert c > 10 * a, "twenty turns must not translate to nearly the same bytes as one"
 
 
-def test_an_unknown_field_is_refused_rather_than_dropped():
-    """A parameter dropped in translation changes the candidate, which is the defect this exists to prevent."""
-    with pytest.raises(ValueError) as e:
-        shim.to_anthropic({"model": "m", "messages": [], "some_new_knob": 1})
-    assert "refusing rather than dropping" in str(e.value)
+def test_only_fields_that_are_translated_are_accepted():
+    """An earlier version of this set listed ten fields it accepted and never translated -- among them
+    `parallel_tool_calls`, which changes agent behaviour -- so the file contradicted the fail-closed claim in its
+    own docstring. Every one of them is now refused by name."""
+    for field in ("some_new_knob", "response_format", "presence_penalty", "frequency_penalty", "user",
+                  "parallel_tool_calls", "reasoning_effort", "logprobs", "n", "seed"):
+        with pytest.raises(ValueError) as e:
+            shim.to_anthropic({"model": "m", "messages": [], field: 1})
+        assert field in str(e.value)
+        assert "not translated here" in str(e.value) and "changes the candidate" in str(e.value)
 
 
-def test_a_field_that_cannot_be_honoured_is_refused_by_name():
+def test_the_translated_set_is_exactly_what_the_code_handles():
+    """The invariant that broke: a field in the accept list with no translation beside it."""
+    assert shim.TRANSLATED == {"model", "messages", "tools", "tool_choice", "max_tokens",
+                               "max_completion_tokens", "temperature", "top_p", "stream", "stream_options",
+                               "stop"}
+
+
+def test_an_unknown_message_role_is_refused_rather_than_becoming_a_user_turn():
+    for role in ("developer", "function", "nonsense"):
+        with pytest.raises(ValueError) as e:
+            shim.to_anthropic({"model": "m", "messages": [{"role": role, "content": "x"}]})
+        assert "is not translated here" in str(e.value) and "a different message" in str(e.value)
+
+
+def test_a_content_block_that_is_not_text_is_refused_rather_than_vanishing():
     with pytest.raises(ValueError) as e:
-        shim.to_anthropic({"model": "m", "messages": [], "response_format": {"type": "json_object"}})
-    assert "response_format" in str(e.value) and "change the candidate" in str(e.value)
+        shim.to_anthropic({"model": "m", "messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]})
+    assert "image_url" in str(e.value) and "dropped silently" in str(e.value)
+
+
+def test_tool_choice_required_is_translated_and_an_unknown_one_is_refused():
+    body, _ = shim.to_anthropic({"model": "m", "messages": [{"role": "user", "content": "x"}],
+                                 "tool_choice": "required"})
+    assert body["tool_choice"] == {"type": "any"}
+    with pytest.raises(ValueError) as e:
+        shim.to_anthropic({"model": "m", "messages": [{"role": "user", "content": "x"}],
+                           "tool_choice": "something-new"})
+    assert "would let the model choose differently than the caller asked" in str(e.value)
+
+
+def test_a_tool_call_or_result_missing_its_id_is_refused():
+    with pytest.raises(ValueError) as e:
+        shim.to_anthropic({"model": "m", "messages": [
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"type": "function", "function": {"name": "f", "arguments": "{}"}}]}]})
+    assert "cannot be paired with its result" in str(e.value)
+    with pytest.raises(ValueError) as e2:
+        shim.to_anthropic({"model": "m", "messages": [{"role": "tool", "content": "out"}]})
+    assert "cannot be paired with its call" in str(e2.value)
+
+
+def test_a_tool_with_no_name_or_an_untranslated_type_is_refused():
+    with pytest.raises(ValueError):
+        shim.to_anthropic({"model": "m", "messages": [{"role": "user", "content": "x"}],
+                           "tools": [{"type": "function", "function": {"description": "no name"}}]})
+    with pytest.raises(ValueError) as e:
+        shim.to_anthropic({"model": "m", "messages": [{"role": "user", "content": "x"}],
+                           "tools": [{"type": "web_search"}]})
+    assert "tool type" in str(e.value)
 
 
 def test_consecutive_same_role_turns_are_merged_not_dropped():
@@ -82,34 +133,59 @@ def test_consecutive_same_role_turns_are_merged_not_dropped():
     assert any("merged" in n for n in notes)
 
 
-def test_unparseable_tool_arguments_are_carried_not_silently_emptied():
-    body, _ = shim.to_anthropic({"model": "m", "messages": [
-        {"role": "assistant", "content": None,
-         "tool_calls": [{"id": "c", "type": "function", "function": {"name": "f", "arguments": "{not json"}}]}]})
-    assert body["messages"][0]["content"][0]["input"] == {"_unparsed_arguments": "{not json"}
+def test_unparseable_tool_arguments_are_refused_not_rewritten():
+    """Rewriting them into a placeholder produced a DIFFERENT tool invocation that looks valid to the model."""
+    with pytest.raises(ValueError) as e:
+        shim.to_anthropic({"model": "m", "messages": [
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"id": "c", "type": "function",
+                             "function": {"name": "f", "arguments": "{not json"}}]}]})
+    assert "unparseable arguments" in str(e.value)
+    assert "a different invocation than the agent chose" in str(e.value)
 
 
 def test_a_reply_keeps_its_tool_calls_and_the_gateways_usage():
-    out = shim.to_openai({
+    out, notes = shim.to_openai({
         "id": "msg_1", "model": "claude-haiku-4-5", "stop_reason": "tool_use",
         "content": [{"type": "text", "text": "running"},
                     {"type": "tool_use", "id": "t1", "name": "bash", "input": {"cmd": "ls"}}],
         "usage": {"input_tokens": 1234, "output_tokens": 56, "cache_read_input_tokens": 900},
     }, "m")
     choice = out["choices"][0]
-    assert choice["finish_reason"] == "tool_calls"
+    assert choice["finish_reason"] == "tool_calls" and notes == []
     assert choice["message"]["tool_calls"][0]["function"]["name"] == "bash"
+    assert choice["message"]["tool_calls"][0]["index"] == 0, "streaming reconstruction keys on it"
     assert json.loads(choice["message"]["tool_calls"][0]["function"]["arguments"]) == {"cmd": "ls"}
-    # The gateway's own counts, under the disjoint cache convention the Anthropic surface uses -- the same
-    # convention the ledger reads, so the legs are not double-subtracted downstream.
-    assert out["usage"] == {"prompt_tokens": 1234, "completion_tokens": 56, "total_tokens": 1290,
-                            "cache_read_input_tokens": 900}
+    # Disjoint, as the Anthropic surface reports it -- and the gross total beside it, because a bare
+    # prompt_tokens excluding cache legs is exactly the shape that made the broken arm look like it sent nothing.
+    assert out["usage"]["prompt_tokens"] == 1234
+    assert out["usage"]["cache_read_input_tokens"] == 900
+    assert out["usage"]["billed_input_tokens"] == 2134
+    assert "disjoint" in out["usage"]["convention"]
 
 
 def test_a_truncated_reply_reports_length_not_stop():
-    out = shim.to_openai({"stop_reason": "max_tokens", "content": [{"type": "text", "text": "cut"}],
-                          "usage": {"input_tokens": 1, "output_tokens": 2}}, "m")
+    out, _ = shim.to_openai({"stop_reason": "max_tokens", "content": [{"type": "text", "text": "cut"}],
+                             "usage": {"input_tokens": 1, "output_tokens": 2}}, "m")
     assert out["choices"][0]["finish_reason"] == "length"
+
+
+def test_an_unmapped_stop_reason_is_named_rather_than_flattened_to_stop():
+    """`stop` for an unknown reason is the one mapping that can turn a refusal into an apparently normal
+    answer."""
+    out, notes = shim.to_openai({"stop_reason": "refusal", "content": [{"type": "text", "text": "no"}],
+                                 "usage": {}}, "m")
+    assert out["choices"][0]["finish_reason"] == "stop"
+    assert any("stop_reason 'refusal' is not a reason this maps" in n for n in notes)
+
+
+def test_a_reply_block_with_no_representation_is_named_not_dropped_in_silence():
+    """Thinking, redacted thinking, a server tool result or a citation used to vanish, so the caller saw a shorter
+    answer and no reason for it."""
+    out, notes = shim.to_openai({"stop_reason": "end_turn", "usage": {}, "content": [
+        {"type": "thinking", "thinking": "..."}, {"type": "text", "text": "answer"}]}, "m")
+    assert out["choices"][0]["message"]["content"] == "answer"
+    assert any("type 'thinking' has no representation here" in n for n in notes)
 
 
 def test_the_default_output_cap_is_not_silently_tiny():

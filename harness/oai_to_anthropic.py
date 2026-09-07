@@ -34,15 +34,20 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-#: Fields of an OpenAI request this understands. Anything else is refused rather than ignored: a parameter
-#: dropped in translation changes the candidate, which is the whole defect this exists to prevent.
-KNOWN = {"model", "messages", "tools", "tool_choice", "max_tokens", "max_completion_tokens", "temperature",
-         "top_p", "stream", "stream_options", "stop", "seed", "n", "presence_penalty", "frequency_penalty",
-         "user", "response_format", "parallel_tool_calls", "logprobs", "top_logprobs", "reasoning_effort"}
+#: Fields this actually TRANSLATES. Everything else is refused by name, including fields a caller might expect
+#: to be harmless. An earlier version of this set listed ten fields it accepted and never translated -- among
+#: them `parallel_tool_calls`, which changes agent behaviour -- so the file contradicted the fail-closed claim in
+#: its own docstring. A review caught it; the run in flight was unaffected only because the provider in use sends
+#: none of them, which is luck rather than design. Adding one here means writing the translation for it.
+TRANSLATED = {"model", "messages", "tools", "tool_choice", "max_tokens", "max_completion_tokens", "temperature",
+              "top_p", "stream", "stream_options", "stop"}
 
-#: Refused outright, because honouring them would need real work and pretending to honour them would be the
-#: silent drop this file exists to stop.
-UNSUPPORTED = {"response_format", "logprobs", "top_logprobs", "n", "seed"}
+#: Message roles this understands. An unrecognised role used to become a user turn, which mistranslates a
+#: `developer` or legacy `function` message into something with different meaning.
+ROLES = {"system", "user", "assistant", "tool"}
+
+#: Content block types this understands, in a message. An image or a refusal block used to vanish.
+CONTENT_BLOCKS = {None, "text"}
 
 
 def _text_of(content) -> str:
@@ -65,13 +70,21 @@ def to_anthropic(req: dict) -> tuple[dict, list[str]]:
     conversation the model receives is not the conversation the agent has.
     """
     notes = []
-    unknown = sorted(set(req) - KNOWN)
-    if unknown:
-        raise ValueError(f"unsupported request fields {unknown}: refusing rather than dropping them silently")
-    bad = sorted(set(req) & UNSUPPORTED)
-    if bad:
-        raise ValueError(f"fields {bad} are not translated here; a request that needs them must not be sent "
-                         "through this face, because honouring them partially would change the candidate")
+    untranslated = sorted(set(req) - TRANSLATED)
+    if untranslated:
+        raise ValueError(f"fields {untranslated} are not translated here. Refused rather than accepted and "
+                         "ignored: a parameter dropped in translation changes the candidate, which is the defect "
+                         "this face exists to prevent. Adding one means writing its translation")
+    for m in req.get("messages") or []:
+        if m.get("role") not in ROLES:
+            raise ValueError(f"message role {m.get('role')!r} is not translated here; it would otherwise become "
+                             "a user turn, which is a different message")
+        c = m.get("content")
+        if isinstance(c, list):
+            odd = sorted({str(b.get("type")) for b in c if isinstance(b, dict)
+                          and b.get("type") not in CONTENT_BLOCKS})
+            if odd:
+                raise ValueError(f"content blocks {odd} are not translated here and would be dropped silently")
 
     system_chunks, msgs = [], []
     for m in req.get("messages") or []:
@@ -80,6 +93,8 @@ def to_anthropic(req: dict) -> tuple[dict, list[str]]:
             system_chunks.append(_text_of(m.get("content")))
             continue
         if role == "tool":
+            if not m.get("tool_call_id"):
+                raise ValueError("a tool result with no tool_call_id cannot be paired with its call")
             # Anthropic carries a tool result as a user turn, and the id is what pairs it with the call.
             msgs.append({"role": "user", "content": [{
                 "type": "tool_result", "tool_use_id": m.get("tool_call_id"),
@@ -92,10 +107,15 @@ def to_anthropic(req: dict) -> tuple[dict, list[str]]:
                 blocks.append({"type": "text", "text": text})
             for tc in m.get("tool_calls") or []:
                 fn = tc.get("function") or {}
+                if not tc.get("id") or not fn.get("name"):
+                    raise ValueError("a tool call with no id or no name cannot be paired with its result")
                 try:
                     args = json.loads(fn.get("arguments") or "{}")
-                except json.JSONDecodeError:
-                    args = {"_unparsed_arguments": fn.get("arguments")}
+                except json.JSONDecodeError as e:
+                    # Rewriting them into a placeholder produced a DIFFERENT tool invocation that looks valid to
+                    # the model. Refused instead.
+                    raise ValueError(f"tool call {tc.get('id')!r} has unparseable arguments ({e}); rewriting "
+                                     "them would send a different invocation than the agent chose") from None
                 blocks.append({"type": "tool_use", "id": tc.get("id"), "name": fn.get("name"), "input": args})
             if not blocks:
                 # An assistant turn with neither text nor a call carries nothing; dropping it is safe and
@@ -130,55 +150,89 @@ def to_anthropic(req: dict) -> tuple[dict, list[str]]:
         body["stop_sequences"] = req["stop"] if isinstance(req["stop"], list) else [req["stop"]]
     tools = []
     for t in req.get("tools") or []:
+        if t.get("type") not in (None, "function"):
+            raise ValueError(f"tool type {t.get('type')!r} is not translated here")
         fn = t.get("function") or {}
-        tools.append({"name": fn.get("name"), "description": fn.get("description") or "",
+        if not fn.get("name"):
+            raise ValueError("a tool with no name cannot be declared")
+        tools.append({"name": fn["name"], "description": fn.get("description") or "",
                       "input_schema": fn.get("parameters") or {"type": "object", "properties": {}}})
     if tools:
         body["tools"] = tools
     tc = req.get("tool_choice")
-    if isinstance(tc, str) and tc in ("auto", "none"):
-        body["tool_choice"] = {"type": "auto"} if tc == "auto" else {"type": "none"}
-    elif isinstance(tc, dict) and (tc.get("function") or {}).get("name"):
-        body["tool_choice"] = {"type": "tool", "name": tc["function"]["name"]}
+    if tc is not None:
+        if tc == "auto":
+            body["tool_choice"] = {"type": "auto"}
+        elif tc == "none":
+            body["tool_choice"] = {"type": "none"}
+        elif tc == "required":
+            body["tool_choice"] = {"type": "any"}
+        elif isinstance(tc, dict) and (tc.get("function") or {}).get("name"):
+            body["tool_choice"] = {"type": "tool", "name": tc["function"]["name"]}
+        else:
+            raise ValueError(f"tool_choice {tc!r} is not translated here; omitting it would let the model choose "
+                             "differently than the caller asked")
     return body, notes
 
 
-def to_openai(doc: dict, model: str) -> dict:
-    """Translate the reply back, keeping tool calls and the usage the gateway reported."""
-    text, calls = [], []
-    for block in doc.get("content") or []:
-        if block.get("type") == "text":
+#: Reply stop reasons this maps. An unknown one used to become "stop", which conceals a refusal, a pause or a
+#: safety termination behind the same word a normal completion uses.
+FINISH = {"end_turn": "stop", "stop_sequence": "stop", "max_tokens": "length", "tool_use": "tool_calls"}
+
+
+def to_openai(doc: dict, model: str) -> tuple[dict, list[str]]:
+    """Translate the reply back, keeping tool calls and the usage the gateway reported.
+
+    Returns the body and anything the translation could not represent. A block type this does not know used to be
+    dropped without trace -- thinking, redacted thinking, a server tool result, a citation -- so the caller saw a
+    shorter answer and no reason for it.
+    """
+    text, calls, notes = [], [], []
+    for i, block in enumerate(doc.get("content") or []):
+        kind = block.get("type")
+        if kind == "text":
             text.append(block.get("text") or "")
-        elif block.get("type") == "tool_use":
-            calls.append({"id": block.get("id"), "type": "function",
+        elif kind == "tool_use":
+            calls.append({"index": len(calls), "id": block.get("id"), "type": "function",
                           "function": {"name": block.get("name"),
                                        "arguments": json.dumps(block.get("input") or {})}})
+        else:
+            notes.append(f"reply block {i} of type {kind!r} has no representation here and was not forwarded")
     u = doc.get("usage") or {}
     stop = doc.get("stop_reason")
-    finish = {"end_turn": "stop", "stop_sequence": "stop", "max_tokens": "length",
-              "tool_use": "tool_calls"}.get(stop, "stop")
+    finish = FINISH.get(stop)
+    if finish is None:
+        # Surfaced rather than flattened. `stop` for an unknown reason is the one mapping that can turn a refusal
+        # into an apparently normal answer.
+        notes.append(f"stop_reason {stop!r} is not a reason this maps; reported as 'stop' and named here")
+        finish = "stop"
     msg = {"role": "assistant", "content": ("\n".join(text) or None)}
     if calls:
         msg["tool_calls"] = calls
         finish = "tool_calls"
-    return {
+    fresh = int(u.get("input_tokens") or 0)
+    cache_read = int(u.get("cache_read_input_tokens") or 0)
+    cache_write = int(u.get("cache_creation_input_tokens") or 0)
+    out = {
         "id": doc.get("id") or "chatcmpl-shim",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": doc.get("model") or model,
         "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
-        # The gateway's own counts, carried through under the names the caller expects. Cache legs are reported
-        # under the disjoint convention, which is what the Anthropic surface uses.
+        # The gateway's own counts, under the disjoint convention the Anthropic surface uses: `prompt_tokens` is
+        # the fresh leg only. That is exactly the shape that made the broken arm look like it sent nothing, so the
+        # gross total is carried too, under a name of its own, for any consumer that reads one number.
         "usage": {
-            "prompt_tokens": int(u.get("input_tokens") or 0),
+            "prompt_tokens": fresh,
             "completion_tokens": int(u.get("output_tokens") or 0),
-            "total_tokens": int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0),
-            **({"cache_read_input_tokens": u["cache_read_input_tokens"]}
-               if u.get("cache_read_input_tokens") is not None else {}),
-            **({"cache_creation_input_tokens": u["cache_creation_input_tokens"]}
-               if u.get("cache_creation_input_tokens") is not None else {}),
+            "total_tokens": fresh + int(u.get("output_tokens") or 0),
+            "billed_input_tokens": fresh + cache_read + cache_write,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_write,
+            "convention": "disjoint: prompt_tokens excludes the cache legs beside it",
         },
     }
+    return out, notes
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -243,10 +297,11 @@ class Handler(BaseHTTPRequestHandler):
             self._record(req, None, notes + [f"unreachable: {e}"], refused=True)
             return
 
-        out = to_openai(doc, req.get("model") or "gateway")
-        self._record(req, out, notes)
+        out, reply_notes = to_openai(doc, req.get("model") or "gateway")
+        notes = notes + reply_notes
         if not want_stream:
             self._json(200, out)
+            self._record(req, out, notes, delivered=True)
             return
         # One complete reply, emitted as the two chunks a streaming client needs. Nothing is synthesised that
         # the reply did not contain.
@@ -263,12 +318,21 @@ class Handler(BaseHTTPRequestHandler):
                 "model": out["model"],
                 "choices": [{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}],
                 "usage": out["usage"]}
-        for chunk in (first, last):
-            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+        delivered = True
+        try:
+            for chunk in (first, last):
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError) as e:
+            # Recorded as undelivered. Logging before the write made a client that hung up look like a completed
+            # call, which is the one thing a request log must not get wrong about its own record.
+            delivered = False
+            notes.append(f"client disconnected before the reply was delivered: {e}")
+        self._record(req, out, notes, delivered=delivered)
 
-    def _record(self, req: dict, out: dict | None, notes: list, refused: bool = False):
+    def _record(self, req: dict, out: dict | None, notes: list, refused: bool = False,
+                delivered: bool | None = None):
         """What was forwarded, in the shape that made the earlier failure obvious once someone looked."""
         if not self.log_path:
             return
@@ -282,14 +346,21 @@ class Handler(BaseHTTPRequestHandler):
             "assistant_tool_calls": sum(len(m.get("tool_calls") or []) for m in msgs),
             "tools_offered": len(req.get("tools") or []),
             "refused": refused,
+            "delivered": delivered,
+            # The ordered role sequence, not just a count: a history that stops growing is visible in the count,
+            # but a history whose SHAPE changed is only visible here.
+            "roles": [m.get("role") for m in msgs],
             "notes": notes,
             "usage": (out or {}).get("usage"),
         }
         try:
             with open(self.log_path, "a") as fh:
                 fh.write(json.dumps(row) + "\n")
-        except OSError:
-            pass
+        except OSError as e:
+            # Not swallowed. An audit record that can vanish silently is not an audit record, and a run whose
+            # verification depends on it should stop rather than continue unlogged.
+            print(f"[FAIL] could not write the audit record: {e}", file=sys.stderr, flush=True)
+            raise
 
 
 def main() -> int:
