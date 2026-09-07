@@ -1,17 +1,26 @@
-"""Compare the gateway's own ledger against the sum of the per-call usage it reported.
+"""Reconcile the gateway's aggregate ledger against the sum of the per-call usage it reported.
 
-Two independent views of one quantity, which is how this project found every real defect in its accounting so
-far -- a fourth spelling of a cache-write leg, two conventions for one number, and an arm whose requests carried
-no history. This is the check that was available last time and was not run.
-
-The two views:
+**A reconciliation, not a cross-check, and the difference is not pedantic.** Both figures come from the gateway's
+own accounting, so a systematic error in that accounting produces perfect agreement here. A review caught the
+overclaim -- this file had been described as two independent views, while its own text said "the same authority
+at two granularities". What it can find is a bookkeeping gap: traffic outside the run, replies that went
+unrecorded, or a leg the aggregate counts and the replies do not. What it cannot find is the gateway being wrong
+about tokens.
 
     ledger      the gateway's usage figure, read before and after a run        (the gateway, aggregate)
     per call    the usage each reply reported, summed                          (the gateway, per request)
 
-They are the same authority at two granularities, so a disagreement is not a matter of opinion: either something
-consumed the ledger that was not part of this run, or replies were not all recorded, or the ledger counts
-something the replies do not report. Each of those is worth knowing and none of them is an average.
+A genuinely independent view would be a different producer: the agent's own telemetry, the translator's byte and
+message counts, or an invoice generated outside this path. Those exist in this project and are compared
+elsewhere; this file is the cheap consistency step, and it is worth running because two of the three defects
+found in this project's accounting were bookkeeping gaps of exactly this kind.
+
+A disagreement is never averaged: either something consumed the ledger that was not part of this run, or replies
+were not all recorded, and those point in opposite directions.
+
+**The ledger is a rolling window**, so a delta is attributable to a run only if the interval is shorter than that
+window and nothing else consumed it. Entries expiring between the two reads move the delta down with no traffic
+at all, which is a second way a contaminated reading can look clean.
 
 The ledger figure has a property worth stating because it decides how this is used: it is a rolling window over
 the account, so any other traffic in the same window lands in it. A delta is attributable to a run only if
@@ -27,16 +36,24 @@ import json
 from pathlib import Path
 
 
-def sum_calls(path: Path) -> dict:
-    """Sum what the replies reported, over the requests the translator forwarded."""
+def sum_calls(path: Path, keep: set[str] | None = None) -> dict:
+    """Sum what the replies reported, over the requests the translator forwarded.
+
+    An unparseable line is counted and named rather than skipped: an audit instrument that silently ignores what
+    it cannot read is reporting a total over an unknown subset.
+    """
     fresh = read = write = out = calls = refused = undelivered = 0
-    for line in path.read_text(errors="replace").splitlines():
+    unparseable = []
+    for n, line in enumerate(path.read_text(errors="replace").splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
         try:
             r = json.loads(line)
         except json.JSONDecodeError:
+            unparseable.append(n)
+            continue
+        if keep is not None and r.get("trace_id") not in keep:
             continue
         if r.get("refused"):
             refused += 1
@@ -50,6 +67,7 @@ def sum_calls(path: Path) -> dict:
         out += int(u.get("completion_tokens") or 0)
         calls += 1
     return {"calls": calls, "refused": refused, "undelivered": undelivered,
+            "unparseable_lines": unparseable,
             "fresh_in": fresh, "cached_in": read, "cache_write": write, "out": out,
             "total": fresh + read + write + out}
 
@@ -73,7 +91,11 @@ def compare(ledger_delta: int, calls: dict, *, tolerance: float) -> dict:
         "calls": calls["calls"],
         "refused": calls["refused"],
         "undelivered": calls["undelivered"],
-        "reading": ("the ledger exceeds the replies, which is what other traffic in the same window looks like"
+        "not_an_independent_check": ("both figures come from the gateway's own accounting, so a systematic error "
+                                    "there produces agreement here. This finds bookkeeping gaps, not a wrong "
+                                    "meter"),
+        "reading": ("the ledger exceeds the replies, which is what other traffic in the same window looks like, "
+                    "or entries expiring from a rolling window"
                     if gap > 0 else
                     "the replies exceed the ledger, which is what an unrecorded ledger update or a "
                     "double-counted reply looks like" if gap < 0 else
@@ -89,10 +111,22 @@ def main() -> int:
     ap.add_argument("--tolerance", type=float, default=0.02,
                     help="fractional difference treated as agreement. Not a pass mark: the gap is reported "
                          "either way, because a small gap and a large one have different causes")
+    ap.add_argument("--trace-ids", default=None,
+                    help="file of trace ids, one per line, restricting the sum to one cohort. Without it every "
+                         "parseable record is summed, which is right for a log written by one run and wrong for "
+                         "one that outlived another")
     ap.add_argument("--out")
     a = ap.parse_args()
 
-    calls = sum_calls(Path(a.requests))
+    keep = None
+    if a.trace_ids:
+        keep = {x.strip() for x in Path(a.trace_ids).read_text().splitlines() if x.strip()}
+    calls = sum_calls(Path(a.requests), keep)
+    if calls["unparseable_lines"]:
+        # Fail closed. A total over an unknown subset is not a total, and this is the one file whose job is to
+        # notice that.
+        raise SystemExit(f"[FAIL] {len(calls['unparseable_lines'])} unparseable line(s) in {a.requests} at "
+                        f"{calls['unparseable_lines'][:8]}; a reconciliation over an unknown subset is not one")
     res = compare(a.after - a.before, calls, tolerance=a.tolerance)
     print(f"ledger delta {res['ledger_delta']:,}   per-call sum {res['per_call_total']:,}   "
           f"ratio {res['ratio']}")

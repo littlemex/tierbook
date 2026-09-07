@@ -1,7 +1,8 @@
-"""Two views of one quantity, and the readings a single view would have permitted.
+"""A reconciliation within one authority, and the readings it does and does not license.
 
-This check was available when an arm was declared valid on one view alone, and not running it is how a run whose
-requests carried no history got as far as a reported solve count.
+It was described as two independent views until a review pointed out that both figures come from the gateway's
+own accounting, so a systematic error there produces agreement. What it finds is a bookkeeping gap, and two of
+the three defects found in this project's accounting were exactly that.
 """
 import json
 import sys
@@ -36,6 +37,7 @@ def test_a_ledger_above_the_replies_reads_as_other_traffic(tmp_path):
     res = cc.compare(1110, cc.sum_calls(p), tolerance=0.02)
     assert res["gap"] == 1000 and res["within_tolerance"] is False
     assert "other traffic in the same window" in res["reading"]
+    assert "entries expiring from a rolling window" in res["reading"]
 
 
 def test_replies_above_the_ledger_read_as_an_accounting_gap(tmp_path):
@@ -67,3 +69,29 @@ def test_an_undelivered_reply_is_counted_and_still_summed(tmp_path):
     p = log(tmp_path, [{"delivered": False, "usage": usage(fresh=10, out=1)}])
     got = cc.sum_calls(p)
     assert got["undelivered"] == 1 and got["total"] == 11
+
+
+def test_the_result_says_it_is_not_an_independent_check():
+    """The overclaim a review caught: both figures come from one authority, so agreement proves no meter right."""
+    res = cc.compare(10, {"total": 10, "calls": 1, "refused": 0, "undelivered": 0,
+                          "fresh_in": 10, "cached_in": 0, "cache_write": 0, "out": 0}, tolerance=0.02)
+    assert "systematic error" in res["not_an_independent_check"]
+    assert "not a wrong" in res["not_an_independent_check"]
+
+
+def test_an_unparseable_line_is_counted_and_named(tmp_path):
+    """An audit instrument that silently ignores what it cannot read reports a total over an unknown subset."""
+    p = tmp_path / "requests.jsonl"
+    p.write_text('{"usage": {"prompt_tokens": 5}}\nnot json at all\n{"usage": {"completion_tokens": 1}}\n')
+    got = cc.sum_calls(p)
+    assert got["unparseable_lines"] == [2] and got["total"] == 6
+
+
+def test_the_sum_can_be_restricted_to_one_cohort(tmp_path):
+    """Without it every record is summed, which is right for a log written by one run and wrong for one that
+    outlived another."""
+    p = tmp_path / "requests.jsonl"
+    p.write_text('{"trace_id": "a", "usage": {"prompt_tokens": 10}}\n'
+                 '{"trace_id": "b", "usage": {"prompt_tokens": 999}}\n')
+    assert cc.sum_calls(p)["total"] == 1009
+    assert cc.sum_calls(p, {"a"})["total"] == 10
