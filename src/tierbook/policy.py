@@ -1004,7 +1004,8 @@ def break_even_price(reserved: Tier, alternative: Tier, family: str, *, window_h
 
 
 def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
-                      seconds_per_task: float | None, certified: dict | None = None) -> dict:
+                      seconds_per_task: float | None, certified: dict | None = None,
+                      interleaved: dict | None = None, shape_for_family: dict | None = None) -> dict:
     """The order families should be admitted to a contended reserved candidate, highest slot value first.
 
     Emitted as an order rather than applied, because admitting a request is a scheduling act and this project
@@ -1012,7 +1013,15 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
     says why -- not because it is worth least, but because nothing here can rank it, and putting it first would
     be ranking it on an absence.
 
-    **Occupancy is per family where it was measured.** The probe's figure describes the shape the probe replayed,
+    **An interleaved measurement is preferred over everything else**, and it is the only source that makes the
+    families comparable: shapes measured one at a time sit at different operating points, so their capacities
+    cannot be divided into savings and ranked. `interleaved` is the output of the mixed-traffic probe and
+    `shape_for_family` maps a family to the label it was measured under. Measured on this deployment, two shapes
+    at 64 in flight came out 9.455 and 0.770 slot-seconds a task -- a factor of twelve -- so this is not a
+    refinement, it is the difference between a ranking and a guess.
+
+    **Failing that, occupancy is per family where it was measured.** The probe's figure describes the shape it
+    replayed,
     and a prefill-heavy agent turn does not occupy a batching engine for as long as a short retail turn -- the
     same "throughput is a property of the pair" that the curve's own note makes, one level in. So each family's
     own recorded latency on the reserved candidate is preferred, and the probe's figure is the fallback, labelled
@@ -1020,12 +1029,20 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
     """
     scored, unranked = [], []
     for family in sorted(families):
+        label = (shape_for_family or {}).get(family)
+        mixed, _mixed_why = occupancy_per_shape(interleaved, label) if label else (None, "")
         own, conc = _family_latency_seconds(reserved.outcome(family) or {})
-        secs = own if own is not None else seconds_per_task
+        if mixed is not None:
+            secs, source = mixed, "interleaved_at_one_operating_point"
+            at = (interleaved or {}).get("concurrency")
+        elif own is not None:
+            secs, source, at = own, "own_measurement", conc
+        else:
+            secs, source, at = seconds_per_task, "borrowed_from_probe", "the probe's"
         v = slot_value(reserved, family, alternative=alternatives.get(family), seconds_per_task=secs,
                        alternative_certified=(certified or {}).get(family))
-        v["occupancy_source"] = "own_measurement" if own is not None else "borrowed_from_probe"
-        v["occupancy_concurrency"] = conc if own is not None else "the probe's"
+        v["occupancy_source"] = source
+        v["occupancy_concurrency"] = at
         if v["usd_per_slot_second"] is None:
             unranked.append({"family": family, "reason": v["reason"]})
         else:
@@ -1054,11 +1071,16 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
     scored = [x for x in scored if x["usd_per_slot_second"] > 0]
     # Comparability is recomputed over what is left. Judged before the inadmissible families were separated, a
     # single loss-making family with an odd denominator could make the remaining one incomparable with itself.
-    own_only = [x for x in scored if x["occupancy_source"] == "own_measurement"]
-    concs = {x["occupancy_concurrency"] for x in own_only}
-    all_borrowed = bool(scored) and not own_only
+    # Comparable when every denominator came from one place at one operating point. An interleaved set qualifies
+    # by construction, which is the point of measuring that way.
+    good = [x for x in scored if x["occupancy_source"] in ("interleaved_at_one_operating_point",
+                                                          "own_measurement")]
+    concs = {x["occupancy_concurrency"] for x in good}
+    sources = {x["occupancy_source"] for x in good}
+    all_borrowed = bool(scored) and not good
     comparable = (len(scored) <= 1
-                  or (len(own_only) == len(scored) and len(concs) == 1 and None not in concs))
+                  or (len(good) == len(scored) and len(sources) == 1 and len(concs) == 1
+                      and None not in concs))
     if comparable:
         scored.sort(key=lambda x: -x["usd_per_slot_second"])
     return {
@@ -1085,7 +1107,7 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
             ("every family borrowed one constant occupancy figure, so this would rank by per-request saving "
              "with no occupancy information at all -- less than the mixed case would carry"
              if all_borrowed else
-             f"occupancy was measured for {len(own_only)} of {len(scored) + len(do_not_admit)} families, at "
+             f"occupancy was measured for {len(good)} of {len(scored) + len(do_not_admit)} families, at "
              f"concurrencies {sorted(str(c) for c in concs)}. A saving per second is a ranking only when every "
              "second was measured the same way, at one operating point, on the reserved candidate")),
         "note": ("highest saving per second of occupancy first, when the denominators are comparable. Families "

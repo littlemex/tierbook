@@ -1041,3 +1041,46 @@ def test_the_break_even_reports_every_leg_and_the_equation():
     assert "p_fresh_in" in v["price_equation"] and "p_out" in v["price_equation"]
     assert "substitute a real card" in v["price_equation"]
     assert any("really a plane over four leg" in a for a in v["assumes"])
+
+
+def test_an_interleaved_measurement_is_preferred_and_makes_the_set_comparable():
+    """Shapes measured one at a time sit at different operating points, so their capacities cannot be divided
+    into savings and ranked. An interleaved set qualifies by construction."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    box.outcome("agentic-coding")["latency"] = {"unit": "seconds_per_task", "mean": 40.0,
+                                               "concurrency_when_measured": 8}
+    il = {"concurrency": 64, "transient_gap": 0.063,
+          "per_shape": {"agentic": {"slot_seconds_per_task": 9.455},
+                        "retail": {"slot_seconds_per_task": 0.77}}}
+    order = policy.capacity_priority(
+        box, {"agentic-coding": None, "tool-agent-user-retail": None},
+        alternatives={f: tiers["api-strong-a"] for f in ("agentic-coding", "tool-agent-user-retail")},
+        seconds_per_task=10.06,
+        certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")},
+        interleaved=il, shape_for_family={"agentic-coding": "agentic",
+                                          "tool-agent-user-retail": "retail"})
+    by = {x["family"]: x for x in order["scored"]}
+    # The interleaved figure wins over the family's own recorded latency, which was taken elsewhere.
+    assert by["agentic-coding"]["seconds_per_task"] == pytest.approx(9.455)
+    assert by["agentic-coding"]["occupancy_source"] == "interleaved_at_one_operating_point"
+    assert by["tool-agent-user-retail"]["seconds_per_task"] == pytest.approx(0.77)
+    assert order["comparable"] is True
+    # And the shape that occupies the engine for a twelfth of the time ranks first on the same saving.
+    assert order["order"][0] == "tool-agent-user-retail"
+
+
+def test_a_family_absent_from_the_interleaved_run_falls_back_and_breaks_comparability():
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    il = {"concurrency": 64, "per_shape": {"agentic": {"slot_seconds_per_task": 9.455}}}
+    order = policy.capacity_priority(
+        box, {"agentic-coding": None, "tool-agent-user-retail": None},
+        alternatives={f: tiers["api-strong-a"] for f in ("agentic-coding", "tool-agent-user-retail")},
+        seconds_per_task=10.06,
+        certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")},
+        interleaved=il, shape_for_family={"agentic-coding": "agentic"})
+    srcs = {x["family"]: x["occupancy_source"] for x in order["scored"]}
+    assert srcs["agentic-coding"] == "interleaved_at_one_operating_point"
+    assert srcs["tool-agent-user-retail"] == "own_measurement"
+    assert order["comparable"] is False and "at one operating point" in order["not_comparable_because"]

@@ -183,6 +183,8 @@ def cmd_compile(args) -> int:
     # rule holds the cheapest candidate is the one there is least reason to trust.
     # REPLICATES. A bound from a single probe run is refused, because repeating this deployment's own probe moved
     # p95 at 64 in flight from 17.5 s to 45.7 s. `--service-curve` is repeatable; each occurrence is one run.
+    interleaved = json.loads(Path(args.interleaved).read_text()) if args.interleaved else None
+    shape_for_family = (json.loads(args.shape_for_family) if args.shape_for_family else None)
     runs = []
     for path in (args.service_curve or []):
         probe = json.loads(Path(path).read_text())
@@ -234,6 +236,7 @@ def cmd_compile(args) -> int:
             alternatives={fam: tiers.get(families[fam]) for fam in (table.get("families") or {})
                           if families.get(fam) not in self_hosted},
             seconds_per_task=seconds_at_bound,
+            interleaved=interleaved, shape_for_family=shape_for_family,
             # Whether the alternative is interchangeable on a family is the compiler's own finding, read from
             # the table rather than re-derived: a second, weaker answer to a question already answered is how
             # two parts of one program come to disagree.
@@ -465,6 +468,13 @@ def main(argv: list[str] | None = None) -> int:
                         "this deployment's probe moved p95 at 64 in flight from 17.5 s to 45.7 s, so one run does "
                         "not measure a property of the candidate. Without agreeing runs the guard is emitted "
                         "unmeasured, no rule can fire, and the missing measurement is named")
+    c.add_argument("--interleaved", default=None,
+                   help="the mixed-traffic probe's output (harness/service_curve.py --interleave), which gives "
+                        "each request shape's occupancy at ONE operating point. The only source that makes "
+                        "families comparable: shapes measured separately sit at different operating points, and "
+                        "two real shapes at 64 in flight differed by a factor of twelve")
+    c.add_argument("--shape-for-family", default=None,
+                   help="JSON map of family to the shape label it was measured under in that probe")
     c.add_argument("--capacity-p95-slo-s", type=float, default=None,
                    help="the p95 seconds this family must meet, used to locate the occupancy bound on the "
                         "measured curve. Defaults to the objective's own latency SLO when a config supplies "
