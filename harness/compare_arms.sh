@@ -16,6 +16,10 @@ set -euo pipefail
 
 BOX_OUTCOMES=${BOX_OUTCOMES:?}
 BOX_TRACES=${BOX_TRACES:?}
+# Optional second run of the SAME candidate on the SAME items. Without it the comparison rests on one draw, and
+# the caveat is a sentence rather than a measurement.
+BOX_OUTCOMES_2=${BOX_OUTCOMES_2:-}
+BOX_TRACES_2=${BOX_TRACES_2:-}
 API_OUTCOMES=${API_OUTCOMES:?}
 API_TRACES=${API_TRACES:?}
 API_RUN_GROUP=${API_RUN_GROUP:?}
@@ -39,6 +43,11 @@ python3 "$HERE/join_sources.py" --outcomes "$BOX_OUTCOMES" --traces "$BOX_TRACES
 python3 "$HERE/join_sources.py" --outcomes "$API_OUTCOMES" --traces "$API_TRACES" \
   --run-group "$API_RUN_GROUP" --no-metered-candidates --out "$STAGE/joined-api.json"
 
+if [ -n "$BOX_OUTCOMES_2" ]; then
+  python3 "$HERE/join_sources.py" --outcomes "$BOX_OUTCOMES_2" --traces "$BOX_TRACES_2" \
+    --no-metered-candidates --out "$STAGE/joined-box-2.json"
+fi
+
 echo
 echo "=== 2. the gateway's aggregate against the sum of its own replies ==="
 echo "    (a reconciliation within one authority, not an independent check)"
@@ -58,10 +67,25 @@ PYTHONPATH="$HERE/../src" python3 -m tierbook.cli compile \
   --margin 5 --window-hours "$WINDOW_HOURS" --min-items 20 \
   --out "$STAGE/policy.json" --report "$STAGE/policy.md"
 
+if [ -n "$BOX_OUTCOMES_2" ]; then
+  echo
+  echo "=== 4b. does the self-hosted arm reproduce itself? ==="
+  python3 "$HERE/replicates.py" --joined "$STAGE/joined-box.json" --joined "$STAGE/joined-box-2.json" \
+    --out "$STAGE/replicates-box.json"
+else
+  echo
+  echo "=== 4b. SKIPPED: no second run of the self-hosted arm was given, so this comparison rests on one draw ==="
+fi
+
 echo
 echo "=== 5. the paired comparison, which is the only one these tasks support ==="
 python3 "$HERE/paired_arms.py" --a "$STAGE/joined-box.json" --b "$STAGE/joined-api.json" \
   --out "$STAGE/paired.json"
+
+echo
+echo "=== 5b. where the tokens went, which is what the break-even is made of ==="
+python3 "$HERE/token_split.py" --joined "$STAGE/joined-box.json" --label "self-hosted" \
+  --joined "$STAGE/joined-api.json" --label "metered" --out "$STAGE/token-split.json"
 
 echo
 echo "=== 6. the price at which the two arms cost the same ==="
