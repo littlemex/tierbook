@@ -189,7 +189,7 @@ def test_cost_is_per_incoming_request_not_per_solved_task():
     # how a fixed hourly reservation combines with a token card.
     tiers = registry()
     arr = policy.Arrangement(("api-cheap-a",), "outright")
-    per_request, basis = policy._cost_per_request(tiers, arr, "agentic-coding", 616)
+    per_request, basis = policy._cost_per_request(tiers, arr, "agentic-coding")
     o = tiers["api-cheap-a"].outcome("agentic-coding")
     assert per_request == pytest.approx(o["bill_usd"] / o["attempted"]
                                         + tiers["api-cheap-a"].retry_premium, rel=1e-9)
@@ -289,7 +289,7 @@ def test_an_absent_gateway_charge_is_refused_not_reconstructed():
     assert spend is None
     assert "Cost truth belongs to the gateway" in why and "Route the candidate through the gateway" in why
     cost, note = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
-                                          "agentic-coding", 616)
+                                          "agentic-coding")
     assert cost == float("inf"), "unrankable on cost, which is a fact about the instrumentation"
 
 
@@ -305,7 +305,7 @@ def test_the_imputed_figure_exists_for_reporting_and_the_objective_cannot_reach_
     assert usd == pytest.approx(t.token_cost(1_000_000, 0, 100_000, 0), rel=1e-9)
     assert "Not a settled charge" in why
     cost, _ = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
-                                       "agentic-coding", 616)
+                                       "agentic-coding")
     assert cost == float("inf"), "the objective did not see the imputed figure"
 
 
@@ -332,7 +332,7 @@ def test_neither_a_bill_nor_tokens_is_refused_rather_than_treated_as_free():
     assert spend is None
     assert "not zero spend" in why and "unmeasured spend" in why
     cost, note = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a",), "outright"),
-                                          "agentic-coding", 616)
+                                          "agentic-coding")
     assert cost == float("inf"), "excluded for want of a figure, not made free by its absence"
     assert "unmeasured spend" in note
 
@@ -376,7 +376,7 @@ def test_a_reserved_candidate_contributes_no_marginal_charge():
     t = tiers["self-hosted-a"]
     assert t.is_reserved
     cost, basis = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
-                                          "agentic-coding", 616)
+                                          "agentic-coding")
     assert cost == pytest.approx(t.retry_premium, rel=1e-9)
     assert "marginal charge per request is nothing" in basis
     assert "circular" in basis, "the reason a reader needs is why an average was not used"
@@ -386,9 +386,9 @@ def test_a_reserved_candidate_is_not_made_expensive_by_being_measured_idle():
     """The whole inversion in one assertion: occupancy must not enter the routing price at all."""
     tiers = registry()
     idle, _ = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
-                                      "agentic-coding", 1.0)
+                                      "agentic-coding")
     busy, _ = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
-                                       "agentic-coding", 100_000.0)
+                                       "agentic-coding")
     assert idle == busy
 
 
@@ -397,10 +397,10 @@ def test_a_reserved_tier_placed_late_in_a_cascade_is_not_made_cheap_by_reach():
     fixed bill is what let a reserved tier look cheap by being placed second."""
     tiers = registry()
     head_only, _ = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
-                                            "agentic-coding", 616)
+                                            "agentic-coding")
     # Placing it behind a head must not change its financial contribution, because zero does not scale.
     chained, _ = policy._cost_per_request(tiers, policy.Arrangement(("api-cheap-a", "self-hosted-a"), "chain"),
-                                          "agentic-coding", 616)
+                                          "agentic-coding")
     o = tiers["api-cheap-a"].outcome("agentic-coding")
     reach = 1.0 - (o["solved"] / o["attempted"])
     expected = (o["bill_usd"] / o["attempted"] + tiers["api-cheap-a"].retry_premium) \
@@ -413,7 +413,7 @@ def test_a_reserved_tail_behind_an_api_head_is_not_infinitely_expensive():
     that reports no throughput came out infinite -- excluded for a bookkeeping reason."""
     tiers = registry()
     cost, _ = policy._cost_per_request(tiers, policy.Arrangement(("api-strong-a", "self-hosted-a"), "chain"),
-                                       "agentic-coding", None)
+                                       "agentic-coding")
     assert cost != float("inf")
 
 
@@ -436,7 +436,7 @@ def test_the_reservation_verdict_needs_a_window_because_a_reservation_has_no_cos
     tiers = registry()
     v = policy.reservation_verdict(tiers["self-hosted-a"], "agentic-coding", window_hours=None,
                                   counterfactual=tiers["api-cheap-a"])
-    assert v["verdict"] == "undecidable" and "exists only over one" in v["reason"]
+    assert v["verdict"] == "undecidable" and "exists only over a window" in v["reason"]
 
 
 def test_the_reservation_pays_when_the_traffic_would_have_cost_more_elsewhere():
@@ -446,7 +446,7 @@ def test_the_reservation_pays_when_the_traffic_would_have_cost_more_elsewhere():
                                             "out": 5_000_000}
     v = policy.reservation_verdict(t, "agentic-coding", window_hours=1.0,
                                   counterfactual=tiers["api-cheap-a"])
-    assert v["verdict"] == "pays" and v["counterfactual_usd"] > v["bill_usd"]
+    assert v["verdict"] == "imputed_pays" and v["counterfactual_usd"] > v["bill_usd"]
     assert v["counterfactual_tier"] == "api-cheap-a"
 
 
@@ -456,7 +456,7 @@ def test_the_reservation_does_not_pay_on_a_trickle():
     t.outcome("agentic-coding")["tokens"] = {"fresh_in": 1000, "cached_in": 0, "cache_write": 0, "out": 100}
     v = policy.reservation_verdict(t, "agentic-coding", window_hours=1.0,
                                   counterfactual=tiers["api-cheap-a"])
-    assert v["verdict"] == "does_not_pay" and v["counterfactual_usd"] < v["bill_usd"]
+    assert v["verdict"] == "imputed_does_not_pay" and v["counterfactual_usd"] < v["bill_usd"]
 
 
 def test_the_verdict_states_that_the_same_legs_elsewhere_is_an_assumption():
@@ -467,7 +467,8 @@ def test_the_verdict_states_that_the_same_legs_elsewhere_is_an_assumption():
                                                                  "cache_write": 0, "out": 1}
     v = policy.reservation_verdict(tiers["self-hosted-a"], "agentic-coding", window_hours=1.0,
                                   counterfactual=tiers["api-cheap-a"])
-    assert "only true for the same model" in v["reason"].replace("\n", " ")
+    assert any("only for the same model" in a for a in v["assumes"])
+    assert "ranks a hypothesis and not money" in v["reason"]
 
 
 # --- capacity is a scheduling answer, not a price ------------------------------------------------
@@ -480,11 +481,120 @@ def test_one_point_on_a_service_curve_is_not_a_saturation_figure():
     tiers = registry()
     tiers["self-hosted-a"].outcome("agentic-coding")["latency"] = {
         "unit": "seconds_per_task", "mean": 59.3, "concurrency_when_measured": 1}
-    note = policy.capacity_note(tiers["self-hosted-a"], "agentic-coding", 616)
+    note = policy.capacity_note(tiers["self-hosted-a"], "agentic-coding")
     assert "not a saturation figure" in note and "bounds nothing on its own" in note
     assert "probes at several" in note and "1 in flight" in note
 
 
 def test_a_metered_candidates_capacity_is_the_providers_problem():
     tiers = registry()
-    assert "provider's problem" in policy.capacity_note(tiers["api-cheap-a"], "agentic-coding", 616)
+    assert "provider's problem" in policy.capacity_note(tiers["api-cheap-a"], "agentic-coding")
+
+
+def test_a_reserved_candidate_with_no_declared_charge_kind_is_refused_not_guessed():
+    """Either inference is wrong in the other case. A gateway charge on a self-hosted engine is usually the
+    reservation re-expressed per token, so counting both bills the machine twice; a minimum-plus-meter contract
+    is genuinely additional, so dropping it loses real money."""
+    tiers = registry()
+    del tiers["self-hosted-a"].outcome("agentic-coding")["reserved_charge_kind"]
+    cost, why = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
+                                        "agentic-coding")
+    assert cost == float("inf")
+    assert "bills the machine twice" in why and "reservation_plus_metered" in why
+
+
+def test_an_additional_meter_on_a_reserved_candidate_is_charged():
+    """The case where dropping the quote would lose real money."""
+    tiers = registry()
+    o = tiers["self-hosted-a"].outcome("agentic-coding")
+    o["reserved_charge_kind"] = "reservation_plus_metered"
+    cost, _ = policy._cost_per_request(tiers, policy.Arrangement(("self-hosted-a",), "outright"),
+                                       "agentic-coding")
+    assert cost == pytest.approx(o["bill_usd"] / o["attempted"], rel=1e-9)
+
+
+def test_an_unrecognised_charge_kind_is_a_loud_error_not_a_default():
+    tiers = registry()
+    tiers["self-hosted-a"].outcome("agentic-coding")["reserved_charge_kind"] = "whatever"
+    with pytest.raises(ValueError) as e:
+        tiers["self-hosted-a"].reserved_charge_kind("agentic-coding")
+    assert "expected one of" in str(e.value)
+
+
+def test_the_retry_term_is_not_added_to_a_bill_that_already_contains_the_dead_attempts():
+    """For a purely reserved arrangement the retry term is the only nonzero quantity, so getting it wrong would
+    decide box-against-box comparisons on its own."""
+    tiers = registry()
+    o = tiers["api-cheap-a"].outcome("agentic-coding")
+    without = policy._retry_term(tiers["api-cheap-a"], "agentic-coding")
+    o["accounting_boundary"] = "usable_episodes_only"
+    with_boundary = policy._retry_term(tiers["api-cheap-a"], "agentic-coding")
+    assert without == 0.0, "no declared boundary means the bill is assumed to include them"
+    assert with_boundary == tiers["api-cheap-a"].retry_premium
+
+
+def test_a_certified_arrangement_with_no_computable_cost_is_not_selected():
+    """The sort puts certification first and infinity is still a number to `min`, so it would have won. Certified
+    on quality and unpriceable on cost is not a choice a cost objective can make."""
+    tiers = registry()
+    del tiers["self-hosted-a"].outcome("agentic-coding")["reserved_charge_kind"]
+    # A margin wide enough to certify it on quality, so the only thing standing between it and selection is
+    # that its cost is not computable. That is precisely the case the sort would have got wrong.
+    d = policy.assign_family(tiers, "agentic-coding", "api-strong-a", margin=0.50, alpha=0.05,
+                             today=TODAY)
+    ranked = {c.arrangement.head: c for c in d.ranked}
+    assert ranked["self-hosted-a"].certified is True
+    assert ranked["self-hosted-a"].cost_per_request == float("inf")
+    assert d.chosen.head != "self-hosted-a"
+    # Reported as unpriced rather than as an operator constraint: "your SLO removed this" and "nobody could
+    # price this" call for different actions.
+    assert any("could not be computed" in v for _, v in d.unpriced)
+    assert not any("could not be computed" in v for _, v in d.excluded)
+
+
+def test_the_verdict_is_labelled_imputed_because_both_sides_bypass_the_gateway():
+    """Not a caveat but a limit. The bill from hourly x window is the rate-card reconstruction this project's
+    spend rule forbids, and the alternative from another card is the same imputation one step over -- so a
+    settled-sounding `pays` would be the laundering the spend rule exists to prevent."""
+    tiers = registry()
+    tiers["self-hosted-a"].outcome("agentic-coding")["tokens"] = {
+        "fresh_in": 50_000_000, "cached_in": 0, "cache_write": 0, "out": 5_000_000}
+    v = policy.reservation_verdict(tiers["self-hosted-a"], "agentic-coding", window_hours=1.0,
+                                  counterfactual=tiers["api-cheap-a"])
+    assert v["verdict"] == "imputed_pays"
+    assert v["bill_authority"] == "rate_card_times_window"
+    assert v["counterfactual_authority"] == "rate_card_of_api-cheap-a"
+    assert len(v["assumes"]) >= 5
+
+
+def test_a_settled_period_bill_is_used_instead_of_the_card_when_one_is_supplied():
+    tiers = registry()
+    tiers["self-hosted-a"].outcome("agentic-coding")["tokens"] = {
+        "fresh_in": 1000, "cached_in": 0, "cache_write": 0, "out": 10}
+    v = policy.reservation_verdict(tiers["self-hosted-a"], "agentic-coding", window_hours=1.0,
+                                  counterfactual=tiers["api-cheap-a"], settled_period_usd=42.0)
+    assert v["bill_authority"] == "gateway_settled_period_bill" and v["bill_usd"] == pytest.approx(42.0)
+    assert "Imputed on one side" in v["reason"]
+
+
+def test_a_family_share_is_required_as_soon_as_anything_else_uses_the_box():
+    """Without it the whole bill is compared against one family's traffic: biased towards not-paying, and it
+    double-counts the reservation the moment two families' verdicts are added up."""
+    tiers = registry()
+    tiers["self-hosted-a"].outcome("agentic-coding")["tokens"] = {
+        "fresh_in": 1000, "cached_in": 0, "cache_write": 0, "out": 10}
+    whole = policy.reservation_verdict(tiers["self-hosted-a"], "agentic-coding", window_hours=1.0,
+                                       counterfactual=tiers["api-cheap-a"])
+    half = policy.reservation_verdict(tiers["self-hosted-a"], "agentic-coding", window_hours=1.0,
+                                      counterfactual=tiers["api-cheap-a"], family_share=0.5)
+    assert "sole user of the box" in whole["share_note"]
+    assert half["bill_usd"] == pytest.approx(whole["bill_usd"] / 2)
+
+
+def test_an_absent_token_leg_makes_the_verdict_undecidable_rather_than_small():
+    """Silently zeroed by an earlier version, which made a partial leg set look like a cheap alternative."""
+    tiers = registry()
+    tiers["self-hosted-a"].outcome("agentic-coding")["tokens"] = {"fresh_in": 1000, "out": 10}
+    v = policy.reservation_verdict(tiers["self-hosted-a"], "agentic-coding", window_hours=1.0,
+                                  counterfactual=tiers["api-cheap-a"])
+    assert v["verdict"] == "undecidable" and "are absent and are not zero" in v["reason"]

@@ -256,6 +256,34 @@ def from_joined(a, doc: dict, rate: dict) -> int:
                     "runs_per_item": trials_per_item,
                     "evidence": {"path": f"evidence/{ev_name}", "digest": f"sha256:{digest}"},
                     "tokens": dict(legs),
+                    # What the gateway charged, which is the ONLY figure the compiler will rank on cost. It was
+                    # accumulated here and then discarded, so a metered cohort produced a record with no charge
+                    # at all and came out unrankable -- a silent hole exactly where the framework's purpose is.
+                    # Written only when every row carried one: a bill over the metered subset of a mixed cohort
+                    # reads as the cohort's bill.
+                    **({"bill_usd": round(p["metered_usd"], 6)}
+                       if kinds == ["per_request_metered"] else {}),
+                    # Whether a reserved candidate ALSO carries a per-request charge is read off the join
+                    # rather than assumed: if no row in this cohort carried a metered charge, there was no
+                    # additional meter on this traffic. That is an observation. The compiler refuses to price a
+                    # reserved candidate without this declaration, because counting a re-expressed reservation
+                    # twice and dropping a real meter are both wrong and neither is the safe guess.
+                    **({"reserved_charge_kind": "reservation_only",
+                        "reserved_charge_kind_observed":
+                            f"no row in this cohort carried a per-request charge (cost kinds: {kinds}), so "
+                            "nothing metered this traffic on top of the reservation"}
+                       if a.hourly_fixed_usd and kinds == ["per_period_amortised"] else {}),
+                    **({"reserved_charge_kind": "reservation_plus_metered",
+                        "reserved_charge_kind_observed":
+                            f"rows in this cohort carried per-request charges (cost kinds: {kinds}) on a "
+                            "candidate that also holds a reservation"}
+                       if a.hourly_fixed_usd and "per_request_metered" in kinds else {}),
+                    **({"bill_usd_absent_because":
+                        f"cost kinds in this cohort were {kinds}. A gateway charge is written only when every "
+                        "row carried one: summed over the metered subset it would read as the whole cohort's "
+                        "bill. A reserved candidate has no per-request charge by construction and is judged "
+                        "over a window instead"}
+                       if kinds != ["per_request_metered"] else {}),
                     # The same figure as the record's top-level `latency`, written here as well because it
                     # belongs to the pair. The compiler needs a per-family latency to turn an hourly
                     # reservation into a cost per request and refuses to borrow one from another family --

@@ -472,3 +472,63 @@ def test_uniform_trials_do_not_rule_out_a_cohort_collected_twice(tmp_path):
     tr = json.loads(out.read_text())["trials"]
     assert code == 0 and tr["trials_per_item"] == 2
     assert "collected twice" in tr["uniformity_caveat"]
+
+
+# --- the gateway's charge reaches the record, or its absence is explained -------------------------
+
+
+def test_a_metered_cohorts_charge_reaches_the_family_record(tmp_path):
+    """It was accumulated and discarded, so a metered cohort produced a record with no charge and came out
+    unrankable on cost -- a silent hole exactly where the framework's purpose is."""
+    import subprocess
+    joined = tmp_path / "joined.json"
+    joined.write_text(json.dumps({
+        "rows": [
+            {"trace_id": "t1", "item_id": "i1", "state": "solved", "wall_s": 10.0, "turns": 2,
+             "candidate": {"agent": "a", "model": "M", "provider": "api-x"},
+             "legs": {"fresh_in": 100, "cached_in": 0, "cache_write": 0, "out": 10},
+             "cost": {"kind": "per_request_metered", "usd": 0.10}},
+            {"trace_id": "t2", "item_id": "i2", "state": "incorrect", "wall_s": 12.0, "turns": 3,
+             "candidate": {"agent": "a", "model": "M", "provider": "api-x"},
+             "legs": {"fresh_in": 200, "cached_in": 0, "cache_write": 0, "out": 20},
+             "cost": {"kind": "per_request_metered", "usd": 0.25}},
+        ],
+        "coverage": {"outcomes": 2, "joined": 2, "rate": 1.0, "unjoined": []},
+        "trials": {"uniform": True, "trials_per_item": 1, "observed": [1]},
+    }))
+    out = tmp_path / "led"
+    r = subprocess.run([sys.executable, str(ROOT / "harness" / "sweep_to_ledger.py"),
+                        "--joined", str(joined), "--out", str(out)],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    rec = json.loads((out / "tiers" / "agent-a.json").read_text())
+    assert rec["families"]["agentic-coding"]["bill_usd"] == pytest.approx(0.35)
+
+
+def test_a_mixed_cohort_does_not_present_the_metered_subsets_bill_as_the_whole(tmp_path):
+    """Summed over the metered subset it would read as the cohort's bill, which is the same class of error as a
+    cost over the rows that happened to join."""
+    import subprocess
+    joined = tmp_path / "joined.json"
+    joined.write_text(json.dumps({
+        "rows": [
+            {"trace_id": "t1", "item_id": "i1", "state": "solved", "wall_s": 10.0, "turns": 2,
+             "candidate": {"agent": "a", "model": "M", "provider": "api-x"},
+             "legs": {"fresh_in": 100, "cached_in": 0, "cache_write": 0, "out": 10},
+             "cost": {"kind": "per_request_metered", "usd": 0.10}},
+            {"trace_id": "t2", "item_id": "i2", "state": "solved", "wall_s": 11.0, "turns": 2,
+             "candidate": {"agent": "a", "model": "M", "provider": "api-x"},
+             "legs": {"fresh_in": 100, "cached_in": 0, "cache_write": 0, "out": 10},
+             "cost": {"kind": "per_period_amortised", "usd": None}},
+        ],
+        "coverage": {"outcomes": 2, "joined": 2, "rate": 1.0, "unjoined": []},
+        "trials": {"uniform": True, "trials_per_item": 1, "observed": [1]},
+    }))
+    out = tmp_path / "led"
+    r = subprocess.run([sys.executable, str(ROOT / "harness" / "sweep_to_ledger.py"),
+                        "--joined", str(joined), "--out", str(out)],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    fam = json.loads((out / "tiers" / "agent-a.json").read_text())["families"]["agentic-coding"]
+    assert "bill_usd" not in fam
+    assert "every row carried one" in fam["bill_usd_absent_because"]

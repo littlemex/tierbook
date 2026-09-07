@@ -533,3 +533,29 @@ def test_a_pinned_gateway_version_loads_from_configuration(tmp_path):
     body["candidates"]["ref"]["endpoint"]["gateway_version"] = "0.2.0"
     cfg = load_config(_write(tmp_path, body))
     assert cfg.candidates["ref"].endpoint.gateway_version == "0.2.0"
+
+
+def test_the_exported_config_does_not_name_a_candidate_the_policy_cannot_route_to(tmp_path):
+    """Two artifacts, disagreeing, both called the output. The router cannot evaluate a guard, so a config that
+    always routes to the box beside a policy that never can is the worst of both: the config is what the router
+    obeys, and it would assert exactly what the policy withholds."""
+    from tierbook.export_vsr import export
+    from tierbook.table import compile_to_file
+
+    cfg = load_config(CANDIDATES)
+    table = compile_to_file(load_registry(LEDGER), {"tool-agent-user-retail": "api-strong-a"},
+                            tmp_path / "t.json", margin=0.25, today="2026-08-30",
+                            validations=VALIDATION)
+    # A compiled policy whose capacity guard was never measured: no rule can fire.
+    table["decide"] = {"tool-agent-user-retail": {"cannot_reject": {
+        "can_ever_fire": False,
+        "unmeasured_guards": ["inflight:self-hosted-a: no load probe has been run"]}}}
+    from tierbook.export_vsr import ExportError
+    with pytest.raises(ExportError) as e:
+        export(table, cfg, signal_for_family={"tool-agent-user-retail": "retail"},
+               default_model="api-strong-a")
+    msg = str(e.value)
+    assert "no rule can fire" in msg and "inflight:self-hosted-a" in msg
+    # And the remedy named is the one that applies. Telling an operator to pass allow_provisional when the
+    # obstacle is an unmeasured guard sends them to the wrong lever.
+    assert "Run the load probe" in msg and "allow_provisional will not help" in msg

@@ -133,6 +133,10 @@ def self_hosted_answer(entry: dict, frontier: list[dict], *, self_hosted_ids: se
     # A constraint the operator stated is a different answer from anything about the frontier, and it is the
     # actionable one: relax the constraint, or improve the candidate against it. Checked first because a
     # candidate that was removed before ranking has no frontier position to report.
+    unpriced = {k: v for k, v in (entry.get("unpriced") or {}).items() if k in self_hosted_ids}
+    if unpriced:
+        return {"usable": False, "reason": "not_priced", "candidates": sorted(unpriced),
+                "detail": "; ".join(f"{k}: {v}" for k, v in sorted(unpriced.items()))}
     barred = {k: v for k, v in (entry.get("excluded_by_constraint") or {}).items() if k in self_hosted_ids}
     if barred:
         return {"usable": False, "reason": "excluded_by_constraint",

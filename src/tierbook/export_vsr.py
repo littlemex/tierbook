@@ -191,6 +191,16 @@ def export(
                 "remove the family -- guessing the mapping would route this traffic on evidence about other "
                 "traffic."
             )
+        # The router cannot evaluate a guard. So if the compiled policy's rule for this family cannot fire --
+        # because a threshold it needs was never measured -- then naming the guarded candidate here would ship
+        # two artifacts that disagree: a config that always routes to the box and a policy that never does.
+        # That happened. The config is what the router obeys, so it must not assert what the policy withholds.
+        pol = ((table.get("decide") or {}).get(family) or {}).get(
+            "can_reject" if request_can_reject else "cannot_reject")
+        if pol is not None and not pol.get("can_ever_fire", True):
+            skipped.append(f"{family} (the compiled policy has an unmeasured guard, so no rule can fire and "
+                           f"this traffic takes the declared default: {pol.get('unmeasured_guards')})")
+            continue
         chosen = d["chosen"][0]
         if chosen not in cfg.candidates:
             raise ExportError(
@@ -212,11 +222,17 @@ def export(
         })
 
     if not decisions:
-        raise ExportError(
-            "no family produced an exportable decision. Skipped: " + "; ".join(skipped) +
-            ". Every entry is provisional, which means no held-out fold supports it; measure a second cohort "
-            "or pass allow_provisional=True and accept that the config records it."
-        )
+        # The reason has to be the one that applies. This used to assert that everything was provisional, which
+        # is one of the two ways a family gets skipped now -- and telling an operator to pass
+        # allow_provisional when the real obstacle is an unmeasured guard sends them to the wrong lever.
+        inert = [x for x in skipped if "no rule can fire" in x]
+        remedy = ("Run the load probe those guards name; allow_provisional will not help, because the "
+                  "obstacle is a measurement rather than a fold."
+                  if inert and len(inert) == len(skipped) else
+                  "Where the obstacle is that no held-out fold supports an entry, measure a second cohort or "
+                  "pass allow_provisional=True and accept that the config records it.")
+        raise ExportError("no family produced an exportable decision. Skipped: " + "; ".join(skipped)
+                          + ". " + remedy)
     if default_model not in cfg.candidates:
         raise ExportError(f"default_model {default_model!r} is not a configured candidate")
     used.setdefault(default_model, (

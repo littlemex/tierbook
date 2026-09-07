@@ -165,6 +165,18 @@ class Tier:
         """
         return self.record["price_card"].get("cache_write") is None
 
+    #: How a reserved candidate's per-request charge relates to its reservation. Declared per family, because a
+    #: contract can meter one workload and not another.
+    RESERVED_CHARGE_KINDS = ("reservation_only", "reservation_plus_metered")
+
+    def reserved_charge_kind(self, family: str) -> str | None:
+        """Whether this reserved candidate also carries a per-request charge, as the record declares it."""
+        v = (self.outcome(family) or {}).get("reserved_charge_kind")
+        if v is not None and v not in self.RESERVED_CHARGE_KINDS:
+            raise ValueError(f"{self.id!r} declares reserved_charge_kind={v!r} for {family!r}; expected one of "
+                             f"{self.RESERVED_CHARGE_KINDS}")
+        return v
+
     @property
     def is_reserved(self) -> bool:
         """Whether this candidate's bill is a period reservation rather than a per-request charge.
@@ -479,6 +491,9 @@ class Decision:
     #: written into `why`, because a reader downstream cannot parse prose: the report has to be able to say
     #: "the box was excluded by the latency SLO" rather than "the box is not on the frontier".
     excluded: tuple = ()
+    #: Candidates certified on quality that no cost could be computed for. Separate from `excluded` because
+    #: "your SLO removed this" and "nobody could price this" call for different actions.
+    unpriced: tuple = ()
 
 
 def _family_spend(t: Tier, family: str) -> tuple[float | None, str]:
@@ -534,8 +549,7 @@ def imputed_spend(t: Tier, family: str) -> tuple[float | None, str]:
                  "omits credits, minimums, rounding, retries and price changes")
 
 
-def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str,
-                      realised_tasks_per_hour: float | None) -> tuple[float, str | None]:
+def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str) -> tuple[float, str | None]:
     """Expected **marginal** charge per incoming request, not an average, and not per solved task.
 
     Per-solve would smuggle a second quality objective in after non-inferiority has already constrained
@@ -567,6 +581,11 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str,
 
     Two further corrections, both from the reviews and both independent of the accounting argument:
 
+    `retry_premium` is added only where the record says its charge EXCLUDES the attempts that died. That is a
+    property of the accounting boundary the record declares, and adding the term to a bill which already
+    contains those attempts counts them twice. For a purely reserved arrangement the term is the only nonzero
+    quantity here, so getting it wrong would decide box-against-box comparisons on its own.
+
     Every figure that enters this total is a gateway charge. A candidate with no charge is refused rather than
     priced from its own rate card: cost truth belongs to the gateway, and a reconstruction ranked as though it
     were settled is how an estimate becomes a decision.
@@ -589,16 +608,33 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str,
             return math.inf, f"{tid!r} attempted nothing on {family!r}"
 
         if t.is_reserved:
-            # Reserved and kept: the marginal financial charge of one more request is zero while there is
-            # capacity for it. Whether there IS capacity is a separate, measured question -- see
-            # `capacity_note` -- and it is a scheduling constraint, not a price.
+            # Reserved and kept: the FIXED settlement is not a marginal charge, because the period bill arrives
+            # whether or not this request uses the machine. Whether there is ALSO a per-request charge is not
+            # something to infer -- and inferring it either way is wrong in the other case. A gateway charge on
+            # a self-hosted engine is usually that same reservation re-expressed per token, and counting both
+            # bills the machine twice; but a minimum-plus-meter contract, egress or an overage is genuinely
+            # additional, and dropping it loses real money. So the record declares which, and without the
+            # declaration this refuses rather than picking.
             reserved.append(tid)
-            total += reach * t.retry_premium
+            kind = t.reserved_charge_kind(family)
+            if kind is None:
+                return math.inf, (
+                    f"{tid!r} is reserved and {family!r} does not declare `reserved_charge_kind`. A gateway "
+                    "charge on a reserved candidate is either that reservation re-expressed per token -- in "
+                    "which case counting both bills the machine twice -- or a genuinely additional meter, and "
+                    "guessing either way is wrong in the other case. Declare `reservation_only` or "
+                    f"`reservation_plus_metered` for {family!r}")
+            if kind == "reservation_plus_metered":
+                variable, why = _family_spend(t, family)
+                if variable is None:
+                    return math.inf, (f"{tid!r} declares an additional meter for {family!r} but {why}")
+                total += reach * variable / n
+            total += reach * _retry_term(t, family)
         else:
             spend, basis = _family_spend(t, family)
             if spend is None:
                 return math.inf, basis
-            total += reach * (spend / n + t.retry_premium)
+            total += reach * (spend / n + _retry_term(t, family))
         solved = (o.get("solved") or 0) / n
         reach *= max(0.0, 1.0 - solved)
 
@@ -612,7 +648,22 @@ def _cost_per_request(tiers: dict[str, Tier], arr: Arrangement, family: str,
     return total, ("; ".join(notes) or None)
 
 
-def capacity_note(t: Tier, family: str, realised_tasks_per_hour: float | None) -> str:
+def _retry_term(t: Tier, family: str) -> float:
+    """The expected charge for attempts that died, or zero when the bill already contains them.
+
+    The schema has a family-level `accounting_boundary`. When it says the charge covers only the attempts that
+    produced a usable episode, the dead ones are outside it and this term prices them. When it says otherwise --
+    or says nothing, which is the same thing for this purpose -- the term is zero, because a gateway bill
+    normally does include what it charged for a failed attempt, and adding a modelled surcharge on top charges
+    the same retries twice.
+    """
+    boundary = (t.outcome(family) or {}).get("accounting_boundary")
+    if boundary == "usable_episodes_only":
+        return t.retry_premium
+    return 0.0
+
+
+def capacity_note(t: Tier, family: str) -> str:
     """What is known about how much traffic a reserved candidate can absorb, and what is not.
 
     Separated from cost on purpose. "Can the box take this request" is a capacity question with a scheduling
@@ -632,46 +683,95 @@ def capacity_note(t: Tier, family: str, realised_tasks_per_hour: float | None) -
 
 
 def reservation_verdict(t: Tier, family: str, *, window_hours: float | None,
-                        counterfactual: Tier | None) -> dict:
-    """Whether a kept reservation paid for itself over a stated window, and the reason when it cannot be said.
+                        counterfactual: Tier | None, settled_period_usd: float | None = None,
+                        family_share: float | None = None) -> dict:
+    """Whether a kept reservation looks like it paid for itself, and why it usually cannot be said.
 
-    The period-level question the per-request average was standing in for. It compares what the reservation
-    cost over the window against what the traffic it absorbed would have been charged elsewhere -- which
-    requires a metered candidate to quote that traffic. Without one, the answer is that the economics are not
-    decidable on this evidence, which is a different statement from "the box is expensive" and leads somewhere
-    different: measure demand and get a quote, rather than route away.
+    The period-level question the per-request average was standing in for. It is **imputed, not settled**, and
+    that is a hard limit rather than a caveat: both sides of the comparison bypass the gateway. The bill from
+    `hourly x window` is a rate-card reconstruction of the very kind this project's spend rule forbids, and the
+    alternative from another candidate's card is the same imputation one step over. So the verdicts are named
+    `imputed_pays` and `imputed_does_not_pay`, and a decisive settled verdict is possible only when the
+    gateway's own period bill is supplied.
+
+    `family_share` is the fraction of the reservation this family is answerable for, and it is required as soon
+    as anything else uses the box. Without it the whole bill is compared against one family's traffic, which is
+    biased towards not-paying and double-counts the reservation if two families' verdicts are ever added up:
+    "can the box be used for this family" and "does the reservation pay" are questions at different scopes.
+
+    Everything this comparison assumes is listed in the returned `assumes`, because a categorical verdict from
+    a point comparison with no interval is exactly the shape of claim this project has been wrong with before.
     """
     if not t.is_reserved:
         return {"verdict": "not_applicable", "reason": "this candidate is not reserved"}
     hourly = t.record["price_card"]["hourly_fixed_usd"]
     o = t.outcome(family) or {}
     tok = o.get("tokens") or {}
-    if window_hours is None:
+
+    if settled_period_usd is not None:
+        bill, bill_authority = float(settled_period_usd), "gateway_settled_period_bill"
+    elif window_hours is None:
         return {"verdict": "undecidable", "reason":
-                "no accounting window was stated, and a reservation's cost exists only over one. The bill is "
-                f"${hourly:.6f} an hour and nothing here says for how many hours it was held"}
-    bill = hourly * window_hours
-    if counterfactual is None or not tok:
-        missing = [] if counterfactual else ["a metered candidate to quote the same traffic"]
+                "no accounting window was stated and no settled bill was supplied. A reservation's cost exists "
+                f"only over a window: the card says ${hourly:.6f} an hour and nothing here says for how many"}
+    else:
+        bill, bill_authority = hourly * window_hours, "rate_card_times_window"
+
+    if family_share is None:
+        share_note = ("no family share was given, so the WHOLE reservation is compared against this family's "
+                      "traffic. That is right only if this family is the sole user of the box; otherwise it is "
+                      "biased towards not-paying and cannot be summed across families")
+        share = 1.0
+    else:
+        share = float(family_share)
+        share_note = f"this family is charged {share:.3f} of the reservation, as declared"
+    bill *= share
+
+    absent = [k for k in ("fresh_in", "cached_in", "out") if tok.get(k) is None]
+    if counterfactual is None or not tok or absent:
+        missing = []
+        if counterfactual is None:
+            missing.append("a candidate to quote the same traffic")
         if not tok:
             missing.append("the token legs the traffic actually used")
-        return {"verdict": "undecidable", "bill_usd": round(bill, 6), "window_hours": window_hours,
-                "reason": ("the reservation cost $%.6f over the stated window, but whether that beat the "
-                           "alternative cannot be said without %s. This is not evidence that the box is "
-                           "expensive; it is the absence of the comparison" % (bill, " and ".join(missing)))}
-    elsewhere = counterfactual.token_cost(int(tok.get("fresh_in") or 0), int(tok.get("cached_in") or 0),
-                                          int(tok.get("out") or 0), int(tok.get("cache_write") or 0))
+        if absent:
+            # Silently zeroed by an earlier version, which made a partial leg set look like a small bill.
+            missing.append(f"token legs {absent}, which are absent and are not zero")
+        return {"verdict": "undecidable", "bill_usd": round(bill, 6), "bill_authority": bill_authority,
+                "window_hours": window_hours, "family_share": share, "share_note": share_note,
+                "reason": (f"the reservation cost ${bill:.6f} on this reading, but whether that beat the "
+                           f"alternative cannot be said without {' and '.join(missing)}. This is not evidence "
+                           "that the box is expensive; it is the absence of the comparison")}
+
+    elsewhere = counterfactual.token_cost(int(tok["fresh_in"]), int(tok["cached_in"]), int(tok["out"]),
+                                          int(tok.get("cache_write") or 0))
+    settled = bill_authority == "gateway_settled_period_bill"
+    verdict = "imputed_pays" if bill < elsewhere else "imputed_does_not_pay"
     return {
-        "verdict": "pays" if bill < elsewhere else "does_not_pay",
+        "verdict": verdict,
         "bill_usd": round(bill, 6),
+        "bill_authority": bill_authority,
         "counterfactual_usd": round(elsewhere, 6),
+        "counterfactual_authority": "rate_card_of_" + counterfactual.id,
         "counterfactual_tier": counterfactual.id,
         "window_hours": window_hours,
-        "reason": (f"over {window_hours:.2f} hours the reservation cost ${bill:.6f}, and the traffic it "
-                   f"absorbed would have been charged ${elsewhere:.6f} by {counterfactual.id!r} at that "
-                   "candidate's card. The comparison assumes the same token legs elsewhere, which is only "
-                   "true for the same model: a different tokenizer counts differently and a cold cache "
-                   "charges the cached leg as fresh"),
+        "family_share": share,
+        "share_note": share_note,
+        "reason": (f"on this reading the reservation cost ${bill:.6f} and the traffic it absorbed would have "
+                   f"been charged ${elsewhere:.6f} by {counterfactual.id!r}. Imputed on "
+                   + ("one" if settled else "both")
+                   + " side(s): a rate card is not a settled charge, so this ranks a hypothesis and not money "
+                     "that left"),
+        "assumes": [
+            "the same token legs elsewhere, which holds only for the same model: a different tokenizer counts "
+            "differently, and a different model's solve and retry behaviour produces different legs entirely",
+            "a warm cache elsewhere, where a candidate that has never served this prefix would be charged the "
+            "cached leg as fresh",
+            "that the traffic in this record is exactly the traffic the window covers",
+            "that the alternative was available, authorised, within capacity and within any latency floor",
+            "a point comparison with no interval, on one window, which does not decide renewal under future "
+            "demand or prices",
+        ],
     }
 
 
@@ -845,11 +945,15 @@ def assign_family(
     for arr in arrangements:
         lcb, note = _quality(tiers, arr, family, reference, alpha)
         certified = lcb is not None and lcb >= -margin
-        tph, refusal = throughput_for(tiers[arr.head], family, realised_tasks_per_hour)
-        cost, basis = (math.inf, None) if refusal else _cost_per_request(tiers, arr, family, tph)
-        if refusal:
-            note = f"{note}; cost not computed: {refusal}"
-        elif cost == math.inf and basis:
+        # Throughput no longer enters the objective at all: a reservation is not amortised into a per-request
+        # price, so there is nothing for a tasks-per-hour figure to divide. It is still computed, because a
+        # refusal from it is worth reporting -- it says the family has no latency recorded -- but the cost does
+        # not depend on it.
+        _, throughput_refusal = throughput_for(tiers[arr.head], family, realised_tasks_per_hour)
+        cost, basis = _cost_per_request(tiers, arr, family)
+        if throughput_refusal:
+            note = f"{note}; throughput not computable: {throughput_refusal}"
+        if cost == math.inf and basis:
             # Excluded for want of a spend figure rather than for being expensive, and the two must not read
             # the same: one is a measurement, the other is a gap in one.
             note = f"{note}; cost not computed: {basis}"
@@ -861,7 +965,21 @@ def assign_family(
     # constraint, so an uncertified arrangement never outranks a certified one however cheap or fast it is.
     ranked.sort(key=lambda c: (not c.certified, c.value_for(objective)))
 
-    best = ranked[0]
+    # A certified arrangement with an infinite cost sorts ahead of everything uncertified and would then be
+    # selected: the sort key puts certification first, and infinity is still a number to `min`. Certified on
+    # quality and unpriceable on cost is not a choice a cost objective can make, so it is dropped from
+    # contention here rather than at the frontier, which only governs what is displayed.
+    unpriceable = [c for c in ranked if c.certified and c.value_for(objective) == math.inf]
+    contenders = [c for c in ranked if not (c.certified and c.value_for(objective) == math.inf)] or list(ranked)
+    best = contenders[0]
+    if unpriceable:
+        # Kept apart from `excluded`, which is for constraints an operator stated. "Your SLO removed this" and
+        # "nobody could price this" call for different actions, and the report labelled the second as the first.
+        unpriced = {c.arrangement.head: f"certified on quality but its {objective} could not be computed, so it "
+                                        "cannot be compared against anything"
+                    for c in unpriceable}
+    else:
+        unpriced = {}
     if not best.certified or best.arrangement == ref_only:
         # Three different facts end up here and an incident review will care which one it was: nothing was
         # measurable, something cheaper was measurable and failed the margin, or the reference genuinely was
@@ -881,14 +999,14 @@ def assign_family(
             why = f"{why}. Excluded by constraint: " + "; ".join(f"{k} {v}" for k, v in excluded.items())
         return Decision(family, reference, ref_only, False, tuple(ranked),
                         registry_version(tiers), margin, alpha, why, objective,
-                        tuple(sorted(excluded.items())))
+                        tuple(sorted(excluded.items())), tuple(sorted(unpriced.items())))
     unit = "per request" if objective == "cost" else "to an accepted answer"
     why = f"certified within the margin and lowest {objective} {unit}; {best.note}"
     if excluded:
         why += ". Excluded by constraint: " + "; ".join(f"{k} {v}" for k, v in excluded.items())
     return Decision(family, reference, best.arrangement, True, tuple(ranked),
                     registry_version(tiers), margin, alpha, why, objective,
-                    tuple(sorted(excluded.items())))
+                    tuple(sorted(excluded.items())), tuple(sorted(unpriced.items())))
 
 
 def compile_table(

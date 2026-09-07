@@ -44,6 +44,7 @@ def _decision_json(d: Decision) -> dict:
         # Which constraint removed which candidate, as data. `why` says it in prose for a human; a program
         # reading only prose cannot tell "excluded by the SLO" from "lost on cost".
         "excluded_by_constraint": {k: v for k, v in (d.excluded or ())},
+        "unpriced": {k: v for k, v in (d.unpriced or ())},
         # Every candidate, not just the winner. A reader deciding whether to trust this entry needs to see
         # what it beat and by how much.
         "ranked": [

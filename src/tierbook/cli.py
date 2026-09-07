@@ -174,12 +174,13 @@ def cmd_compile(args) -> int:
         for sid in sorted(self_hosted):
             economics[fam] = reservation_verdict(
                 tiers[sid], fam, window_hours=args.window_hours, counterfactual=counterfactual)
-            capacity[fam] = capacity_note(tiers[sid], fam, None)
+            capacity[fam] = capacity_note(tiers[sid], fam)
             break
     report.annotate(table, self_hosted_ids=self_hosted, economics=economics, capacity=capacity)
     # The policy as a function of observed state, not only as the point the cohort's state produced. Every
     # threshold in it is a measurement or a named gap; the reference is the declared default, because when no
     # rule holds the cheapest candidate is the one there is least reason to trust.
+    curve = json.loads(Path(args.service_curve).read_text()) if args.service_curve else None
     table["decide"] = {}
     for fam, entry in (table.get("families") or {}).items():
         for label in ("can_reject", "cannot_reject"):
@@ -187,11 +188,15 @@ def cmd_compile(args) -> int:
             if not isinstance(e, dict):
                 continue
             pol = compile_policy(fam, e, reserved_ids=self_hosted,
+                                 metered_ids={t for t in tiers} - self_hosted,
                                  default=(families[fam],),
-                                 capacity_bound=args.reserved_capacity,
-                                 **({"capacity_source": args.reserved_capacity_source}
-                                    if args.reserved_capacity and args.reserved_capacity_source else {}))
+                                 default_declared_by=("--config" if cfg else "--family FAMILY=REFERENCE"),
+                                 service_curve=curve,
+                                 max_evidence_age_days=args.max_age_days)
             table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
+            if not pol.can_ever_fire and pol.certified:
+                print(f"  [WARN] {fam}/{label}: no rule can fire, so every request takes the declared "
+                      f"default. Unmeasured: {pol.gaps}")
     Path(args.out).write_text(json.dumps(table, indent=1) + "\n")
     if args.report:
         Path(args.report).write_text(report.render(table))
@@ -408,14 +413,13 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--max-age-days", type=int, default=90)
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
-    c.add_argument("--reserved-capacity", type=float, default=None,
-                   help="the concurrency at which the reserved candidate stops absorbing work, FROM A LOAD "
-                        "PROBE at several concurrencies. This is the one derived threshold in the emitted "
-                        "policy; without it the guard is emitted unmeasured, every request takes the declared "
-                        "default, and the missing probe is named rather than replaced by a plausible number")
-    c.add_argument("--reserved-capacity-source", default=None,
-                   help="what measured that capacity, recorded beside the threshold so a reader can tell a "
-                        "probe from an assumption")
+    c.add_argument("--service-curve", default=None,
+                   help="JSON mapping concurrency to observed tasks per hour, from a load probe at several "
+                        "concurrencies. The reserved candidate's capacity bound is DERIVED from it -- the "
+                        "concurrency beyond which throughput stopped rising. A scalar is deliberately not "
+                        "accepted: a number a caller passes is a configured threshold whatever the "
+                        "documentation beside it says. Without a curve the guard is emitted unmeasured, no "
+                        "rule can fire, and the missing probe is named")
     c.add_argument("--window-hours", type=float, default=None,
                    help="how many hours the reservation was held for, so its bill can be compared against "
                         "what the traffic it absorbed would have cost elsewhere. A POLICY INPUT: a "

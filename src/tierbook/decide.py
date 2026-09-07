@@ -40,13 +40,23 @@ from dataclasses import dataclass, field
 
 #: State variables a guard may read. Closed on purpose: a guard over a variable nobody collects is a guard that
 #: cannot be evaluated, and discovering that at request time is worse than refusing to compile it.
+#: A guard reads a state variable of the form `<var>` for a global fact or `<var>:<candidate>` for one about a
+#: named candidate. Occupancy and availability are per candidate on purpose: an arrangement can contain more
+#: than one reserved candidate, and a single global counter guarded by a per-candidate threshold is a category
+#: error the moment two of them exist -- or the moment two families share one box, since the threshold comes
+#: from a per-family service curve.
 STATE_VARS = (
-    "reserved_inflight",        # concurrent requests already on the reserved candidate
-    "reserved_available",       # whether the reserved candidate is serving at all
+    "inflight",                 # concurrent requests already on a named candidate
+    "available",                # whether a named candidate is serving at all
     "metered_authorised",       # whether the gateway will still authorise spend on metered candidates
     "arrival_rate_per_hour",    # observed arrivals for this family
     "evidence_age_days",        # how old the measurements behind this policy are
 )
+
+
+def var_name(spec: str) -> str:
+    """The variable a guard reads, with any candidate qualifier stripped."""
+    return spec.split(":", 1)[0]
 
 #: The parts of a closed loop this module does not contain, named so their absence is not mistaken for
 #: presence. Every one of them was raised by review and none is disguised as done.
@@ -86,8 +96,9 @@ class Guard:
     derived_from: str              # the measurement, or the probe that would supply it
 
     def __post_init__(self):
-        if self.var not in STATE_VARS:
-            raise ValueError(f"{self.var!r} is not a collected state variable; one of {STATE_VARS}")
+        if var_name(self.var) not in STATE_VARS:
+            raise ValueError(f"{self.var!r} does not name a state variable this evaluates; one of {STATE_VARS}, "
+                             "optionally qualified as <var>:<candidate>")
         if self.op not in ("<", "<=", "==", ">=", ">"):
             raise ValueError(f"{self.op!r} is not a comparison this evaluates")
 
@@ -133,15 +144,18 @@ class Rule:
         "the policy fell through to the default" and "the policy fell through because nobody measured the
         capacity" call for different actions.
         """
-        gaps = []
+        gaps, fires = [], True
         for g in self.guards:
             ok, why = g.evaluate(state)
             if ok is None:
+                # Every unevaluable guard is collected, not just the first. Returning early hid the later ones,
+                # so a rule with two unmeasured thresholds reported one and looked half as far from working as
+                # it was.
                 gaps.append(f"{g.var}: {why}")
-                return False, gaps
-            if not ok:
-                return False, gaps
-        return True, gaps
+                fires = False
+            elif not ok:
+                fires = False
+        return fires, gaps
 
 
 @dataclass(frozen=True)
@@ -159,12 +173,36 @@ class Policy:
     domain: dict = field(default_factory=dict)
     certified: bool = False
     note: str = ""
+    #: Where the parts that were not derived came from. The default in particular is DECLARED, and an artifact
+    #: that does not say who declared it invites a reader to take it for a measured choice.
+    provenance: dict = field(default_factory=dict)
+
+    @property
+    def can_ever_fire(self) -> bool:
+        """Whether any rule could fire under any state.
+
+        A policy every path of which lands on the default is not a degenerate policy, it is an inert one, and
+        the difference matters: the first is a correct answer and the second is a component that does nothing
+        while looking like it works. An earlier version shipped exactly that -- an unmeasured guard meant no
+        rule could ever fire -- while a separately exported router config named the guarded candidate anyway.
+        Two artifacts, disagreeing, both called the output.
+        """
+        return any(all(g.measured for g in r.guards) for r in self.rules)
 
     @property
     def gaps(self) -> list[str]:
         """Every guard nobody measured, named. The list a reader should look at before the rules."""
         return [f"{g.var}: {g.derived_from}"
                 for r in self.rules for g in r.guards if not g.measured]
+
+    @property
+    def guarded_candidates(self) -> set[str]:
+        """Candidates a rule assigns to under a guard that could fire. What an exporter may name."""
+        out = set()
+        for r in self.rules:
+            if all(g.measured for g in r.guards):
+                out.update(r.assign)
+        return out
 
     def in_domain(self, state: dict) -> tuple[bool, list[str]]:
         """Whether this state is inside the range the policy was compiled over.
@@ -173,14 +211,21 @@ class Policy:
         every other answer. `domain` maps a state variable to `[low, high]`; a variable absent from `domain` was
         not varied during measurement, so any value of it is outside what was observed and is reported as such.
         """
+        # Only the variables the GUARDS read are checked. An earlier version iterated the whole state and
+        # rejected anything absent from `domain`, which inverted the design: a caller that collected all the
+        # documented variables was permanently out of domain and every request took the default, so observing
+        # more made the policy apply less. Extra observations are not a reason to refuse.
         outside = []
-        for var, value in sorted(state.items()):
-            rng = (self.domain or {}).get(var)
+        for spec in sorted({g.var for r in self.rules for g in r.guards}):
+            if spec not in state:
+                continue
+            rng = (self.domain or {}).get(spec)
             if rng is None:
-                outside.append(f"{var}={value} was not varied when this was measured, so no observation "
-                               "covers it")
-            elif not (rng[0] <= value <= rng[1]):
-                outside.append(f"{var}={value} is outside the observed range [{rng[0]}, {rng[1]}]")
+                continue          # the guard itself reports an unmeasured threshold; that is not a domain fact
+            value = state[spec]
+            if not (rng[0] <= value <= rng[1]):
+                outside.append(f"{spec}={value} is outside the range this was measured over "
+                               f"[{rng[0]}, {rng[1]}]")
         return (not outside), outside
 
 
@@ -237,59 +282,127 @@ def as_dict(policy: Policy) -> dict:
     }
 
 
-def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], default: tuple[str, ...],
-                   capacity_bound: float | None = None,
-                   capacity_source: str = "no load probe at several concurrencies has been run, so the "
-                                          "concurrency at which the reserved candidate stops absorbing work "
-                                          "is unmeasured") -> Policy:
+def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_ids: set[str],
+                   default: tuple[str, ...], default_declared_by: str,
+                   service_curve: dict | None = None, max_evidence_age_days: float | None = None) -> Policy:
     """Derive the policy from one compiled family entry. Every threshold is a measurement or a named gap.
 
     The shape falls out of the accounting rather than being chosen. A reserved candidate is free at the margin
     **while it has capacity**, so the assignment has exactly one derived boundary: the occupancy at which that
-    stops being true. Below it, use the capacity already paid for. Above it, the metered candidate -- which is
-    the only place "at this concurrency, route to the API" comes from, and it is derived here rather than
-    written down.
+    stops being true. Below it, use the capacity already paid for. Above it, degrade -- to the assignment's own
+    metered tail if it has one, and only otherwise to the declared default, because a certified cascade's tail
+    is a measured continuation while an unrelated default is not.
 
-    `capacity_bound` is that boundary, and it comes from a service curve. Absent, the guard is emitted
-    unmeasured: the rule cannot fire, every state falls to the default, and the missing probe is named. That is
-    the honest state of this project today, and it is more useful than a plausible number because it says what
-    to measure next.
+    `service_curve` is where the boundary comes from, and it must be **measurements**, not a number: a mapping
+    of concurrency to observed tasks per hour, from a load probe. The bound is derived here, as the highest
+    concurrency at which throughput was still rising -- above that the candidate is absorbing no more work.
+    Accepting a scalar was the previous shape and it was a configured threshold with documentation attached: a
+    caller could pass 8 and the compiler would label it measured.
 
-    When nothing was certified the rules are empty and the default carries everything. A named-but-uncertified
-    assignment is a fallback, not a choice the evidence supports, so it does not become a rule.
+    Two guards nobody had written are written now, because "a threshold is a measurement or a gap" had a third
+    case: a guard that does not exist. `metered_authorised` gates any assignment that charges, so a rule cannot
+    keep firing after the gateway stops authorising spend; `evidence_age_days` gates every rule, so a policy
+    stops asserting itself when the measurements behind it expire. Without them `decide` returned a confident
+    assignment that could not be paid for, and reported no gap at all.
     """
     chosen = tuple(entry.get("chosen") or ())
     certified = entry.get("status") == "assigned"
+    prov = {"default_declared_by": default_declared_by}
     if not chosen or not certified:
         why = (entry.get("validation") or {}).get("reason") or "no held-out fold supports this assignment"
-        return Policy(family, (), default, domain={}, certified=False,
+        return Policy(family, (), default, domain={}, certified=False, provenance=prov,
                       note=f"no rule: nothing was certified for this family ({why}), so every request takes "
                            "the declared default")
 
+    age = (Guard("evidence_age_days", "<=", max_evidence_age_days,
+                 derived_from=("the freshness bound stated for this registry"
+                               if max_evidence_age_days is not None else
+                               "no freshness bound was stated, so nothing says when these measurements stop "
+                               "describing the environment"))
+           if True else None)
+    money = [Guard("metered_authorised", "==", True,
+                   derived_from="the gateway authorises spend or it does not; an assignment that charges "
+                                "cannot proceed when it has stopped")] if set(chosen) & metered_ids else []
+
     reserved = [c for c in chosen if c in reserved_ids]
     if not reserved:
-        # No reserved candidate in the assignment: the choice does not depend on occupancy, so there is no
-        # derived boundary and the rule is unconditional. Stated rather than left as an empty guard list that
-        # could be mistaken for a gap.
-        return Policy(family, (Rule((), chosen, "certified, and no candidate in this assignment is reserved, "
-                                                "so the choice does not turn on occupancy"),),
-                      default, domain={}, certified=True,
-                      note="unconditional: nothing here is capacity-bound")
+        return Policy(family, (Rule((age, *money), chosen,
+                                    "certified, and no candidate in this assignment is reserved, so the choice "
+                                    "does not turn on occupancy"),),
+                      default, domain={}, certified=True, provenance=prov,
+                      note="unconditional in occupancy: nothing here is capacity-bound")
 
-    guards = (
-        Guard("reserved_available", "==", True,
-              derived_from="observed while the cohort ran; a candidate that is not serving cannot absorb work"),
-        Guard("reserved_inflight", "<", capacity_bound, derived_from=capacity_source),
-    )
-    rules = (
-        Rule(guards, chosen,
-             "the reserved candidate is certified for this family and free at the margin while it has "
-             "capacity, so paid-for capacity is used before anything metered is charged"),
-    )
-    return Policy(family, rules, default,
-                  domain={"reserved_available": [False, True]} if capacity_bound is None else
-                         {"reserved_available": [False, True], "reserved_inflight": [0, capacity_bound]},
-                  certified=True,
-                  note=("the boundary between the reserved candidate and the default is the occupancy at which "
-                        "the reserved one stops absorbing work. That is the only derived threshold here, and "
-                        "it is " + ("measured" if capacity_bound is not None else "NOT measured yet")))
+    box = reserved[0]
+    bound, source = _capacity_from_curve(service_curve)
+    # Above capacity the assignment's own metered tail is a measured continuation; an unrelated default is not.
+    tail = tuple(c for c in chosen if c not in reserved_ids)
+    guards = (age, *money,
+              Guard(f"available:{box}", "==", True,
+                    derived_from="observed while the cohort ran; a candidate that is not serving cannot absorb "
+                                 "work"),
+              Guard(f"inflight:{box}", "<", bound, derived_from=source))
+    rules = [Rule(guards, chosen,
+                  "the reserved candidate is certified for this family and free at the margin while it has "
+                  "capacity, so paid-for capacity is used before anything metered is charged")]
+    if tail:
+        rules.append(Rule((age, *money, Guard(f"inflight:{box}", ">=", bound, derived_from=source)), tail,
+                          "above the reserved candidate's capacity, the assignment's own metered tail carries "
+                          "the request. That tail was measured as part of this arrangement; the declared "
+                          "default was not"))
+    if len(reserved) > 1:
+        prov["reserved_not_modelled"] = sorted(reserved[1:])
+        prov["reserved_not_modelled_note"] = (
+            "this assignment contains more than one reserved candidate and only the first is capacity-guarded. "
+            "One occupancy figure cannot describe two of them, and guessing which one a request would land on "
+            "is a scheduling decision this does not make")
+    # The domain does NOT stop at the boundary. Above capacity is the measured branch, not an unknown region,
+    # and truncating there classified the default branch as an unsupported extrapolation.
+    domain = {} if bound is None else {f"inflight:{box}": [0, float("inf")]}
+    if max_evidence_age_days is not None:
+        domain["evidence_age_days"] = [0, max_evidence_age_days]
+    return Policy(family, tuple(rules), default, domain=domain, certified=True, provenance=prov,
+                  note=("the boundary between the reserved candidate and what follows it is the occupancy at "
+                        "which the reserved one stops absorbing work. That is the only derived threshold here, "
+                        "and it is " + ("derived from a service curve" if bound is not None
+                                        else "NOT measured yet")))
+
+
+def _capacity_from_curve(curve: dict | None) -> tuple[float | None, str]:
+    """Derive the occupancy bound from a service curve, or say why there is none.
+
+    The curve maps concurrency to observed tasks per hour. The bound is the lowest concurrency beyond which
+    throughput stopped rising: past it the candidate absorbs no more work, so sending more is queueing rather
+    than serving. Derived rather than read, because a scalar someone passed is a configured threshold whatever
+    the docstring beside it says.
+    """
+    if not curve:
+        return None, ("no load probe at several concurrencies has been run, so the occupancy at which the "
+                      "reserved candidate stops absorbing work is unmeasured")
+    points = sorted((float(k), float(v)) for k, v in curve.items())
+    if len(points) < 2:
+        return None, (f"a service curve needs at least two concurrencies to show where throughput stops "
+                      f"rising; this one has {len(points)}")
+    best_c, best_tph = points[0]
+    for c, tph in points[1:]:
+        if tph <= best_tph:
+            break
+        best_c, best_tph = c, tph
+    return best_c, (f"derived from a service curve over concurrencies {[int(c) for c, _ in points]}: "
+                    f"throughput stopped rising above {int(best_c)} in flight ({best_tph:.1f} tasks/hour)")
+
+
+def as_dict(policy: Policy) -> dict:
+    """The policy as plain data, for the artifact. Readable without importing this module."""
+    return {
+        "family": policy.family,
+        "default": list(policy.default),
+        "certified": policy.certified,
+        "note": policy.note,
+        "domain": policy.domain,
+        "provenance": policy.provenance,
+        "unmeasured_guards": policy.gaps,
+        "can_ever_fire": policy.can_ever_fire,
+        "missing_for_a_closed_loop": list(MISSING_FOR_A_CLOSED_LOOP),
+        "rules": [{"when": [g.describe() for g in r.guards], "assign": list(r.assign),
+                   "because": r.because} for r in policy.rules],
+    }
