@@ -26,7 +26,7 @@ import os
 import sys
 from pathlib import Path
 
-from tierbook import SCHEMA_PATH, SCHEMA_VERSION, __version__
+from tierbook import SCHEMA_PATH, SCHEMA_VERSION, __version__, report
 from tierbook.config import ConfigError, draft_from_model_list, load_config
 from tierbook.evidence import EvidenceError
 from tierbook.policy import assign_family, cutover_violation, evidence_class, load_registry, registry_version
@@ -156,6 +156,16 @@ def cmd_compile(args) -> int:
                             objective=(o.objective if o else "cost"),
                             latency_slo_p95_ms=(o.latency_slo_p95_ms if o else None),
                             min_completion_probability=(o.min_completion_probability if o else None))
+    # The three statements the table already contained the answers to and did not make: which kind of
+    # policy this is, the frontier rather than only the chosen point, and whether the self-hosted candidate
+    # can be used. Added to the artifact rather than printed only, because the next reader is a program.
+    self_hosted = {t.id for t in tiers.values()
+                   if (t.record.get("price_card") or {}).get("hourly_fixed_usd")}
+    report.annotate(table, self_hosted_ids=self_hosted)
+    Path(args.out).write_text(json.dumps(table, indent=1) + "\n")
+    if args.report:
+        Path(args.report).write_text(report.render(table))
+        print(f"wrote {args.report}")
     print(f"wrote {args.out} (format {table['table_format']}, registry {table['registry_version']}, "
           f"objective {table['objective']}, margin {table['margin']})")
     for family, entry in table["families"].items():
@@ -368,6 +378,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--max-age-days", type=int, default=90)
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
+    c.add_argument("--report", default=None,
+                   help="also write a human reading of the policy kind, the frontier and the self-hosted "
+                        "answer, per family")
     c.add_argument("--validations", default=None,
                    help="directory of held-out records. Without one, every entry stays provisional: a "
                         "calibration fold cannot validate its own choice")
