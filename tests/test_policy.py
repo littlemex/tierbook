@@ -619,7 +619,7 @@ def test_a_slot_is_worth_the_charge_it_avoids_per_second_it_occupies():
     slot spent on a request that avoids a tenth of a cent displaces one that would have avoided a dollar."""
     tiers = registry()
     v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=tiers["api-strong-a"],
-                          seconds_per_task=8.19)
+                          seconds_per_task=8.19, alternative_certified=True)
     o = tiers["api-strong-a"].outcome("agentic-coding")
     assert v["usd_per_slot_second"] == pytest.approx(o["bill_usd"] / o["attempted"] / 8.19, rel=1e-9)
     assert v["alternative"] == "api-strong-a"
@@ -628,7 +628,7 @@ def test_a_slot_is_worth_the_charge_it_avoids_per_second_it_occupies():
 
 def test_a_family_with_no_metered_alternative_has_no_slot_comparison_rather_than_a_worthless_slot():
     tiers = registry()
-    v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=None, seconds_per_task=8.19)
+    v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=None, seconds_per_task=8.19, alternative_certified=True)
     assert v["usd_per_slot_second"] is None
     assert "not a slot worth nothing" in v["reason"]
 
@@ -636,8 +636,8 @@ def test_a_family_with_no_metered_alternative_has_no_slot_comparison_rather_than
 def test_an_unmeasured_occupancy_makes_the_slot_value_unknown_not_zero():
     tiers = registry()
     v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=tiers["api-strong-a"],
-                          seconds_per_task=None)
-    assert v["usd_per_slot_second"] is None and "service curve supplies it" in v["reason"]
+                          seconds_per_task=None, alternative_certified=True)
+    assert v["usd_per_slot_second"] is None and "`occupancy_at` derives it from the probe" in v["reason"]
 
 
 def test_an_alternative_nobody_metered_leaves_the_saving_unquantified():
@@ -646,7 +646,7 @@ def test_an_alternative_nobody_metered_leaves_the_saving_unquantified():
     del o["bill_usd"]
     o.pop("tokens", None)
     v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=tiers["api-strong-a"],
-                          seconds_per_task=8.19)
+                          seconds_per_task=8.19, alternative_certified=True)
     assert v["usd_per_slot_second"] is None and "no priceable spend" in v["reason"]
 
 
@@ -656,7 +656,7 @@ def test_the_admission_order_puts_the_larger_saving_first():
         tiers["self-hosted-a"], {"agentic-coding": None, "tool-agent-user-retail": None},
         alternatives={"agentic-coding": tiers["api-strong-a"],
                       "tool-agent-user-retail": tiers["api-cheap-a"]},
-        seconds_per_task=8.19)
+        seconds_per_task=8.19, certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")})
     per = {x["family"]: x["usd_per_slot_second"] for x in order["scored"]}
     assert len(order["scored"]) == 2 and order["unranked"] == []
     if order["comparable"]:
@@ -668,7 +668,7 @@ def test_an_unrankable_family_goes_last_and_says_why_rather_than_being_ranked_on
     order = policy.capacity_priority(
         tiers["self-hosted-a"], {"agentic-coding": None, "tool-agent-user-retail": None},
         alternatives={"agentic-coding": tiers["api-strong-a"]},
-        seconds_per_task=8.19)
+        seconds_per_task=8.19, certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")})
     # Listed apart from the order, not at the end of it: appending it to a list a scheduler would read is
     # ranking it on an absence.
     assert "tool-agent-user-retail" not in order["order"]
@@ -689,7 +689,7 @@ def test_occupancy_is_taken_per_family_where_it_was_measured():
         box, {"agentic-coding": None, "tool-agent-user-retail": None},
         alternatives={"agentic-coding": tiers["api-strong-a"],
                       "tool-agent-user-retail": tiers["api-strong-a"]},
-        seconds_per_task=8.19)
+        seconds_per_task=8.19, certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")})
     by = {x["family"]: x for x in order["scored"]}
     assert by["agentic-coding"]["seconds_per_task"] == 40.0
     assert by["agentic-coding"]["occupancy_source"] == "own_measurement"
@@ -712,7 +712,7 @@ def test_own_measurements_at_different_concurrencies_are_not_comparable_either()
         box, {"agentic-coding": None, "tool-agent-user-retail": None},
         alternatives={"agentic-coding": tiers["api-strong-a"],
                       "tool-agent-user-retail": tiers["api-strong-a"]},
-        seconds_per_task=8.19)
+        seconds_per_task=8.19, certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")})
     assert order["comparable"] is False and "at concurrencies" in order["not_comparable_because"]
 
 
@@ -724,7 +724,7 @@ def test_the_probes_occupancy_is_borrowed_only_where_a_family_has_none_and_says_
     assert "latency" not in box.outcome("agentic-coding")
     order = policy.capacity_priority(
         box, {"agentic-coding": None},
-        alternatives={"agentic-coding": tiers["api-strong-a"]}, seconds_per_task=8.19)
+        alternatives={"agentic-coding": tiers["api-strong-a"]}, seconds_per_task=8.19, certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")})
     x = order["scored"][0]
     assert x["seconds_per_task"] == 8.19
     assert x["occupancy_source"] == "borrowed_from_probe"
@@ -736,7 +736,7 @@ def test_the_saving_is_incremental_not_the_alternatives_gross_cost():
     tiers = registry()
     box = tiers["self-hosted-a"]
     box.outcome("agentic-coding")["reserved_charge_kind"] = "reservation_plus_metered"
-    v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=8.19)
+    v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=8.19, alternative_certified=True)
     alt = tiers["api-strong-a"].outcome("agentic-coding")
     own = box.outcome("agentic-coding")
     expected = alt["bill_usd"] / alt["attempted"] - own["bill_usd"] / own["attempted"]
@@ -751,7 +751,7 @@ def test_a_negative_saving_is_a_real_answer():
     box = tiers["self-hosted-a"]
     box.outcome("agentic-coding")["reserved_charge_kind"] = "reservation_plus_metered"
     box.outcome("agentic-coding")["bill_usd"] = 99.0
-    v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=8.19)
+    v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=8.19, alternative_certified=True)
     assert v["usd_per_slot_second"] < 0
 
 
@@ -759,7 +759,7 @@ def test_without_the_charge_declaration_only_the_alternatives_cost_is_knowable_a
     tiers = registry()
     del tiers["self-hosted-a"].outcome("agentic-coding")["reserved_charge_kind"]
     v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=tiers["api-strong-a"],
-                          seconds_per_task=8.19)
+                          seconds_per_task=8.19, alternative_certified=True)
     assert v["usd_per_slot_second"] is None
     assert "which is not the same number" in v["reason"]
 
@@ -777,10 +777,9 @@ def test_a_mixed_set_of_occupancy_sources_is_returned_unranked():
         box, {"agentic-coding": None, "tool-agent-user-retail": None},
         alternatives={"agentic-coding": tiers["api-strong-a"],
                       "tool-agent-user-retail": tiers["api-strong-a"]},
-        seconds_per_task=8.19)
+        seconds_per_task=8.19, certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")})
     assert order["comparable"] is False and order["order"] == []
-    assert "measure each family on the reserved candidate at one operating point" in \
-        order["not_comparable_because"]
+    assert "at one operating point, on the reserved candidate" in order["not_comparable_because"]
 
 
 def test_the_order_says_it_is_not_wired_into_decide():
@@ -789,7 +788,7 @@ def test_the_order_says_it_is_not_wired_into_decide():
     tiers = registry()
     order = policy.capacity_priority(
         tiers["self-hosted-a"], {"agentic-coding": None},
-        alternatives={"agentic-coding": tiers["api-strong-a"]}, seconds_per_task=8.19)
+        alternatives={"agentic-coding": tiers["api-strong-a"]}, seconds_per_task=8.19, certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")})
     assert "not consulted by `decide`" in order["not_wired_into_decide"]
     assert "atomic decision" in order["not_wired_into_decide"]
 
@@ -838,3 +837,123 @@ def test_a_family_share_scales_the_reservation_side():
     half = policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
                                    window_hours=1.0, family_share=0.5)
     assert half["usd_per_mtok"] == pytest.approx(whole["usd_per_mtok"] / 2)
+
+
+# --- what the review caught with arithmetic on our own numbers ------------------------------------
+
+
+def test_occupancy_comes_from_littles_law_not_from_mean_latency():
+    """Caught by arithmetic on measurements already in hand. At 64 in flight the probe completed 22,908 tasks an
+    hour, so 6.363 a second, so a fully occupied slot costs 64/6.363 = 10.06 slot-seconds. The mean latency there
+    was 8.19s, which implies an effective concurrency of about 52 -- a per-request wait, not the capacity a task
+    consumes. Using it inflated every slot value by roughly 23 percent."""
+    pts = [{"concurrency": 64, "tasks_per_hour": 22908.1, "mean_latency_s": 8.19},
+           {"concurrency": 128, "tasks_per_hour": 23034.9, "mean_latency_s": 17.63},
+           {"concurrency": 256, "tasks_per_hour": 27860.7, "mean_latency_s": 26.4}]
+    at64, why = policy.occupancy_at(pts, 64)
+    assert at64 == pytest.approx(10.06, abs=0.01)
+    assert at64 / 8.19 == pytest.approx(1.23, abs=0.01), "the inflation the mean latency caused"
+    assert "Not the mean latency" in why
+    assert policy.occupancy_at(pts, 128)[0] == pytest.approx(20.0, abs=0.01)
+    assert policy.occupancy_at(pts, 256)[0] == pytest.approx(33.08, abs=0.01)
+
+
+def test_capacity_is_not_interpolated_across_the_curve():
+    pts = [{"concurrency": 64, "tasks_per_hour": 22908.1}, {"concurrency": 128, "tasks_per_hour": 23034.9}]
+    v, why = policy.occupancy_at(pts, 96)
+    assert v is None and "interpolating capacity across a batching engine's curve is not arithmetic" in why
+
+
+def test_a_point_that_completed_nothing_bought_no_capacity():
+    v, why = policy.occupancy_at([{"concurrency": 8, "tasks_per_hour": 0}], 8)
+    assert v is None and "bought nothing" in why
+
+
+def test_an_uncertified_alternative_makes_the_difference_not_a_saving():
+    """The objective is cost AND accuracy. A cheaper candidate that is worse does not produce a saving."""
+    tiers = registry()
+    v = policy.slot_value(tiers["self-hosted-a"], "agentic-coding", alternative=tiers["api-strong-a"],
+                          seconds_per_task=10.06, alternative_certified=None)
+    assert v["usd_per_slot_second"] is None
+    assert "nobody said whether" in v["reason"] and "cost AND accuracy" in v["reason"]
+
+
+def test_all_families_borrowing_one_denominator_is_not_comparable():
+    """It carries no occupancy information at all, so the ranking would be by per-request saving wearing
+    occupancy's name -- strictly less information than the mixed case the gate refused."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    for fam in ("agentic-coding", "tool-agent-user-retail"):
+        box.outcome(fam).pop("latency", None)
+    order = policy.capacity_priority(
+        box, {"agentic-coding": None, "tool-agent-user-retail": None},
+        alternatives={f: tiers["api-strong-a"] for f in ("agentic-coding", "tool-agent-user-retail")},
+        seconds_per_task=10.06,
+        certified={f: True for f in ("agentic-coding", "tool-agent-user-retail")})
+    assert order["comparable"] is False and order["order"] == []
+    assert "every family borrowed one constant occupancy figure" in order["not_comparable_because"]
+
+
+def test_a_negative_slot_value_is_do_not_admit_rather_than_last_in_line():
+    """Sorting it to the bottom of a list a scheduler reads would still offer it a slot."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    box.outcome("agentic-coding")["reserved_charge_kind"] = "reservation_plus_metered"
+    box.outcome("agentic-coding")["bill_usd"] = 999.0
+    box.outcome("agentic-coding")["latency"] = {"unit": "seconds_per_task", "mean": 10.0,
+                                               "concurrency_when_measured": 1}
+    order = policy.capacity_priority(
+        box, {"agentic-coding": None}, alternatives={"agentic-coding": tiers["api-strong-a"]},
+        seconds_per_task=10.06, certified={"agentic-coding": True})
+    assert order["order"] == []
+    assert order["do_not_admit"][0]["family"] == "agentic-coding"
+    assert "loses money even when nothing is contended" in order["do_not_admit"][0]["reason"]
+
+
+def test_the_break_even_includes_the_boxs_own_meter():
+    """Omitting it understates the break-even by exactly that meter -- the difference between a saving and a
+    gross cost, which the sibling function already names."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    alt = tiers["api-strong-a"]
+    alt.outcome("agentic-coding")["tokens"] = {"fresh_in": 1_000_000, "cached_in": 0, "cache_write": 0,
+                                             "out": 0}
+    only = policy.break_even_price(box, alt, "agentic-coding", window_hours=1.0)
+    box.outcome("agentic-coding")["reserved_charge_kind"] = "reservation_plus_metered"
+    plus = policy.break_even_price(box, alt, "agentic-coding", window_hours=1.0)
+    assert plus["usd_per_mtok"] > only["usd_per_mtok"]
+    assert plus["reserved_own_meter_usd"] == pytest.approx(box.outcome("agentic-coding")["bill_usd"])
+    assert only["reserved_own_meter_usd"] == 0.0
+
+
+def test_an_absent_cache_write_leg_no_longer_slips_past_the_guard():
+    """The guard checked three legs and the total summed four, so a missing cache-write leg deflated the total
+    and inflated the break-even -- against the guard's own message that absent is not zero."""
+    tiers = registry()
+    tiers["api-strong-a"].outcome("agentic-coding")["tokens"] = {"fresh_in": 10, "cached_in": 0, "out": 1}
+    v = policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
+                               window_hours=1.0)
+    assert v["usd_per_mtok"] is None and "cache_write" in v["reason"]
+    assert "absent is not zero" in v["reason"] and v["reason"].count("(") == v["reason"].count(")")
+
+
+def test_a_nonsense_window_or_share_is_refused():
+    tiers = registry()
+    tiers["api-strong-a"].outcome("agentic-coding")["tokens"] = {"fresh_in": 10, "cached_in": 0,
+                                                              "cache_write": 0, "out": 1}
+    assert policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
+                                   window_hours=0)["usd_per_mtok"] is None
+    v = policy.break_even_price(tiers["self-hosted-a"], tiers["api-strong-a"], "agentic-coding",
+                               window_hours=1.0, family_share=1.5)
+    assert v["usd_per_mtok"] is None and "not a share of one reservation" in v["reason"]
+
+
+def test_a_saving_from_unpaired_cohorts_is_refused():
+    """Two means from two cohorts are not a paired difference, and the pairing is checked rather than assumed."""
+    tiers = registry()
+    box = tiers["self-hosted-a"]
+    box.outcome("agentic-coding")["reserved_charge_kind"] = "reservation_plus_metered"
+    box.outcome("agentic-coding")["attempted"] = 7
+    v = policy.slot_value(box, "agentic-coding", alternative=tiers["api-strong-a"], seconds_per_task=10.06,
+                          alternative_certified=True)
+    assert v["usd_per_slot_second"] is None and "not paired" in v["reason"]

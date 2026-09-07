@@ -31,8 +31,9 @@ from tierbook.config import ConfigError, draft_from_model_list, load_config
 from tierbook.decide import as_dict as decide_as_dict
 from tierbook.decide import compile_policy
 from tierbook.evidence import EvidenceError
-from tierbook.policy import (assign_family, capacity_note, capacity_priority, cutover_violation,
-                             evidence_class, load_registry, registry_version, reservation_verdict)
+from tierbook.policy import (assign_family, break_even_price, capacity_note, capacity_priority,
+                             cutover_violation, evidence_class, load_registry, occupancy_at, registry_version,
+                             reservation_verdict)
 from tierbook.table import Unvalidated, check_fresh, compile_to_file, load_table, lookup
 
 REQUIRED_FOR_A_DECISION = (
@@ -210,8 +211,10 @@ def cmd_compile(args) -> int:
                 target = next((g.threshold for r in pol.rules for g in r.guards
                                if g.var.startswith("inflight:") and g.measured), None)
                 if target is not None:
-                    seconds_at_bound = next((pt.get("mean_latency_s") for pt in points
-                                             if float(pt.get("concurrency", -1)) == float(target)), None)
+                    # Little's law at the bound, not the mean latency there. A mean latency is a per-request
+                    # wait; what a contended slot allocates is capacity, and capacity per task is concurrency
+                    # over throughput. Using the latency inflated every slot value by about 23 percent.
+                    seconds_at_bound, _ = occupancy_at(points, float(target))
             if not pol.can_ever_fire and pol.certified:
                 print(f"  [WARN] {fam}/{label}: no rule can fire, so every request takes the declared "
                       f"default. Unmeasured: {pol.gaps}")
@@ -224,7 +227,12 @@ def cmd_compile(args) -> int:
             box, table.get("families") or {},
             alternatives={fam: tiers.get(families[fam]) for fam in (table.get("families") or {})
                           if families.get(fam) not in self_hosted},
-            seconds_per_task=seconds_at_bound)
+            seconds_per_task=seconds_at_bound,
+            # Whether the alternative is interchangeable on a family is the compiler's own finding, read from
+            # the table rather than re-derived: a second, weaker answer to a question already answered is how
+            # two parts of one program come to disagree.
+            certified={fam: (((entry or {}).get("cannot_reject") or {}).get("status") == "assigned")
+                       for fam, entry in (table.get("families") or {}).items()})
     report.annotate(table, self_hosted_ids=self_hosted, economics=economics, capacity=capacity)
     Path(args.out).write_text(json.dumps(table, indent=1) + "\n")
     if args.report:

@@ -691,8 +691,37 @@ def capacity_note(t: Tier, family: str) -> str:
             "concurrencies")
 
 
+def occupancy_at(points: list | None, concurrency: float | None) -> tuple[float | None, str]:
+    """Slot-seconds one task consumes at a stated operating point, by Little's law on the probe's own numbers.
+
+    Not the mean latency. A review caught this with arithmetic on the measurements already in hand: at 64
+    requests in flight the probe completed 22,908 tasks an hour, so 6.363 a second, so a fully occupied slot
+    costs 64 / 6.363 = 10.06 slot-seconds per task. The mean latency at that point was 8.19 s, which implies an
+    effective concurrency of about 52 -- it is a per-request wait seen from an unsaturated view, not the capacity
+    a task consumes. Using it inflated every slot value by roughly 23 percent.
+
+    The distinction matters most where the index is used. What a contended slot allocates is capacity, and
+    capacity per task is exactly `concurrency / throughput` at the point where the contention happens.
+    """
+    if not points or concurrency is None:
+        return None, "no probe point, or no operating point to read it at"
+    at = next((pt for pt in points if float(pt.get("concurrency", -1)) == float(concurrency)), None)
+    if at is None:
+        probed = sorted(int(pt["concurrency"]) for pt in points if pt.get("concurrency") is not None)
+        return None, (f"the probe has no point at {int(concurrency)} in flight (it probed {probed}), and "
+                      "interpolating capacity across a batching engine's curve is not arithmetic")
+    tph = at.get("tasks_per_hour")
+    if not tph:
+        return None, f"the probe completed no work at {int(concurrency)} in flight, so a slot bought nothing"
+    return concurrency / (tph / 3600.0), (
+        f"by Little's law at {int(concurrency)} in flight: {tph:.1f} tasks/hour is {tph / 3600.0:.3f} a second, "
+        f"so one task occupies {concurrency / (tph / 3600.0):.2f} slot-seconds. Not the mean latency at that "
+        f"point ({at.get('mean_latency_s')}s), which is a per-request wait rather than the capacity a task "
+        "consumes")
+
+
 def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
-               seconds_per_task: float | None) -> dict:
+               seconds_per_task: float | None, alternative_certified: bool | None = None) -> dict:
     """What one second of the reserved candidate's occupancy is worth to this family, and why it may be nothing.
 
     Below capacity a reservation is free at the margin, so any certified request may take it. Capacity is
@@ -723,8 +752,17 @@ def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
                           "comparison that does not exist"}
     if seconds_per_task is None:
         return {"usd_per_slot_second": None,
-                "reason": "how long a task occupies the candidate at the concurrency in use is unmeasured, so "
-                          "the occupancy a saving costs is unknown. The service curve supplies it"}
+                "reason": "how much capacity a task consumes at the concurrency in use is unmeasured, so the "
+                          "occupancy a saving costs is unknown. `occupancy_at` derives it from the probe"}
+    # A saving is only a saving if the alternative would have done the job. Passed in rather than inferred from
+    # the record: whether two candidates are interchangeable on a family is the compiler's finding, and sniffing
+    # for evidence fields here would be a second, weaker answer to a question already answered elsewhere.
+    if alternative_certified is not True:
+        missing = ("nobody said whether" if alternative_certified is None else "it is not recorded that")
+        return {"usd_per_slot_second": None,
+                "reason": f"{missing} {alternative.id!r} is non-inferior on {family!r}, so the difference in "
+                          "charge is not a saving: it would be paid for by an accuracy change nobody measured. "
+                          "This framework's objective is cost AND accuracy"}
     spend, why = _family_spend(alternative, family)
     o = alternative.outcome(family) or {}
     n = o.get("attempted") or 0
@@ -750,6 +788,13 @@ def slot_value(reserved: Tier, family: str, *, alternative: Tier | None,
                     "reason": f"{reserved.id!r} charges per request for {family!r} but that charge is not "
                               f"priceable: {own_why if own_spend is None else 'it attempted nothing'}. The "
                               "saving is the difference, so it cannot be computed without both sides"}
+        # Two means from two cohorts. If they were not measured on the same items in the same numbers, their
+        # difference is not a paired saving, and the pairing is checked rather than assumed.
+        if rn != n:
+            return {"usd_per_slot_second": None,
+                    "reason": f"the two sides were measured on different numbers of attempts ({n} for "
+                              f"{alternative.id!r}, {rn} for {reserved.id!r}), so their means are not paired and "
+                              "the difference is not a saving on the same work"}
         own = own_spend / rn
     avoided = spend / n - own
     return {
@@ -801,27 +846,63 @@ def break_even_price(reserved: Tier, alternative: Tier, family: str, *, window_h
         return {"usd_per_mtok": None,
                 "reason": "a reservation has no cost without a stated window, so there is nothing to break "
                           "even against"}
+    if window_hours <= 0:
+        return {"usd_per_mtok": None,
+                "reason": f"a window of {window_hours} hours is not a window; a reservation held for no time "
+                          "costs nothing and equalises with everything"}
     tok = (alternative.outcome(family) or {}).get("tokens") or {}
-    absent = [k for k in ("fresh_in", "cached_in", "out") if tok.get(k) is None]
+    # All four legs, matching what `total` actually sums. Checking three and summing four let an absent
+    # `cache_write` through the guard and deflate the total, which inflates the break-even price -- against the
+    # guard's own message that absent is not zero.
+    absent = [k for k in ("fresh_in", "cached_in", "cache_write", "out") if tok.get(k) is None]
     if not tok or absent:
         return {"usd_per_mtok": None,
-                "reason": f"the alternative's token legs for {family!r} are "
-                          + ("absent" if not tok else f"incomplete ({absent}, and absent is not zero")
+                "reason": (f"the alternative's token legs for {family!r} are absent"
+                           if not tok else
+                           f"the alternative's token legs for {family!r} are incomplete: {absent} are missing, "
+                           "and absent is not zero")
                           + ", so what it would have to charge cannot be computed"}
     share = 1.0 if family_share is None else float(family_share)
-    bill = reserved.record["price_card"]["hourly_fixed_usd"] * window_hours * share
+    if not 0.0 < share <= 1.0:
+        return {"usd_per_mtok": None,
+                "reason": f"a family share of {share} is not a share of one reservation"}
+    hourly = (reserved.record.get("price_card") or {}).get("hourly_fixed_usd")
+    if not hourly:
+        return {"usd_per_mtok": None,
+                "reason": f"{reserved.id!r} states no hourly reservation price, so there is no bill to break "
+                          "even against"}
+    bill = hourly * window_hours * share
+    # The reservation is not the whole of the reserved arm's cost where the contract also meters. Omitting that
+    # understates the break-even by exactly the box's own meter -- the error the sibling function calls the
+    # difference between a saving and a gross cost.
+    kind = reserved.reserved_charge_kind(family)
+    own_meter = 0.0
+    if kind is None:
+        return {"usd_per_mtok": None,
+                "reason": f"{reserved.id!r} does not declare whether it also charges per request for "
+                          f"{family!r}, so its own side of the comparison is incomplete"}
+    if kind == "reservation_plus_metered":
+        own_spend, own_why = _family_spend(reserved, family)
+        if own_spend is None:
+            return {"usd_per_mtok": None,
+                    "reason": f"{reserved.id!r} charges per request for {family!r} and that charge is not "
+                              f"priceable: {own_why}"}
+        own_meter = float(own_spend)
+        bill += own_meter
     total = sum(int(tok.get(k) or 0) for k in ("fresh_in", "cached_in", "cache_write", "out"))
     if total <= 0:
         return {"usd_per_mtok": None, "reason": "the alternative used no tokens, so no price equalises the two"}
     out_tok = int(tok.get("out") or 0)
     return {
         "usd_per_mtok": bill / (total / 1e6),
-        "reservation_usd": round(bill, 6),
+        "reserved_side_usd": round(bill, 6),
+        "reservation_usd": round(bill - own_meter, 6),
+        "reserved_own_meter_usd": round(own_meter, 6),
         "alternative_tokens": total,
         "alternative_output_share": round(out_tok / total, 6),
         "window_hours": window_hours,
         "family_share": share,
-        "reason": (f"the reservation cost ${bill:.6f} over {window_hours:.2f} hours, and the alternative used "
+        "reason": (f"the reserved arm cost ${bill:.6f} over {window_hours:.2f} hours, and the alternative used "
                    f"{total:,} tokens on the same work. They cost the same when the alternative charges "
                    f"${bill / (total / 1e6):.4f} per million tokens blended at this cohort's mix "
                    f"({out_tok / total:.1%} output). Above that the reservation is cheaper; below it, the "
@@ -838,7 +919,7 @@ def break_even_price(reserved: Tier, alternative: Tier, family: str, *, window_h
 
 
 def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
-                      seconds_per_task: float | None) -> dict:
+                      seconds_per_task: float | None, certified: dict | None = None) -> dict:
     """The order families should be admitted to a contended reserved candidate, highest slot value first.
 
     Emitted as an order rather than applied, because admitting a request is a scheduling act and this project
@@ -856,7 +937,8 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
     for family in sorted(families):
         own, conc = _family_latency_seconds(reserved.outcome(family) or {})
         secs = own if own is not None else seconds_per_task
-        v = slot_value(reserved, family, alternative=alternatives.get(family), seconds_per_task=secs)
+        v = slot_value(reserved, family, alternative=alternatives.get(family), seconds_per_task=secs,
+                       alternative_certified=(certified or {}).get(family))
         v["occupancy_source"] = "own_measurement" if own is not None else "borrowed_from_probe"
         v["occupancy_concurrency"] = conc if own is not None else "the probe's"
         if v["usd_per_slot_second"] is None:
@@ -869,9 +951,21 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
     # make the ratio between them a ranking: on the first real pair the numbers were $0.089 against $0.025 per
     # slot-second, and the order reverses if the borrowed family in fact occupies the engine for more than about
     # 29 seconds -- which nobody measured. So an incomparable set is returned UNRANKED rather than sorted.
-    sources = {x["occupancy_source"] for x in scored}
-    concs = {str(x["occupancy_concurrency"]) for x in scored}
-    comparable = len(scored) <= 1 or (len(sources) == 1 and len(concs) == 1)
+    # Physical, not syntactic. An earlier gate compared label strings, which let two families whose concurrency
+    # came back as None match on "None" while 63 and 64 did not match, and -- worse -- waved through the case
+    # where EVERY family borrowed one constant denominator. That case carries no occupancy information at all,
+    # so the ranking it produces is a ranking by per-request saving wearing occupancy's name, which is the exact
+    # failure the borrowing was labelled to avoid. It contains strictly less information than the mixed case the
+    # gate refused.
+    own_only = [x for x in scored if x["occupancy_source"] == "own_measurement"]
+    concs = {x["occupancy_concurrency"] for x in own_only}
+    all_borrowed = scored and not own_only
+    comparable = (len(scored) <= 1
+                  or (len(own_only) == len(scored) and len(concs) == 1 and None not in concs))
+    # A negative saving is not a low priority, it is a candidate that should not be admitted at all -- even
+    # uncontended. Sorting it to the bottom of a list a scheduler reads would still offer it a slot.
+    do_not_admit = [x for x in scored if x["usd_per_slot_second"] <= 0]
+    scored = [x for x in scored if x["usd_per_slot_second"] > 0]
     if comparable:
         scored.sort(key=lambda x: -x["usd_per_slot_second"])
     return {
@@ -882,11 +976,18 @@ def capacity_priority(reserved: Tier, families: dict, *, alternatives: dict,
         "order": [x["family"] for x in scored] if comparable else [],
         "scored": scored,
         "unranked": unranked,
-        "not_comparable_because": (None if comparable else
-                                   f"occupancy for these families came from {sorted(sources)} at concurrencies "
-                                   f"{sorted(concs)}. A saving per second is only a ranking when every second "
-                                   "was measured the same way; measure each family on the reserved candidate at "
-                                   "one operating point"),
+        "do_not_admit": [{"family": x["family"], "usd_per_slot_second": x["usd_per_slot_second"],
+                          "reason": "using the reserved candidate costs more than the alternative for this "
+                                    "family, so a slot spent here loses money even when nothing is contended"}
+                         for x in do_not_admit],
+        "not_comparable_because": (
+            None if comparable else
+            ("every family borrowed one constant occupancy figure, so this would rank by per-request saving "
+             "with no occupancy information at all -- less than the mixed case would carry"
+             if all_borrowed else
+             f"occupancy was measured for {len(own_only)} of {len(scored) + len(do_not_admit)} families, at "
+             f"concurrencies {sorted(str(c) for c in concs)}. A saving per second is a ranking only when every "
+             "second was measured the same way, at one operating point, on the reserved candidate")),
         "note": ("highest saving per second of occupancy first, when the denominators are comparable. Families "
                  "with no computable slot value are listed apart from the order, not at the end of it: nothing "
                  "here can rank them, which is not the same as their being worth least"),
