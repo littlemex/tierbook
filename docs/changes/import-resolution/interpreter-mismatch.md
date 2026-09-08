@@ -58,17 +58,41 @@ reason to look elsewhere that has nothing to do with the prompt not naming a dir
 binary and also stop being able to test their work at all. Recorded as a consequence to accept deliberately or to fix
 properly, not as a detail.
 
-## The proper fix, and why it is not in either contract
+## The proper fix: four shapes, and what is measured about each
 
-A run should verify with **the interpreter its own item was built with**. Two shapes, both larger than a driver flag:
+A run should verify with **the interpreter its own item was built with**. Measured on the pod and on a live testbed
+rather than reasoned about:
 
-- Run the agent inside the item's testbed image, which already has the right conda environment -- the same image the
-  scorer uses, whose `/testbed` matplotlib imports correctly under its own 3.11.11 env.
-- Or build the staged tree for the pod's interpreter once per item, offline, so `pip install -e .` never has to happen
-  inside a run and never writes to a shared directory.
+    agent pod:            /usr/bin/python3.11 only, no conda, node v22.23.2, opencode present
+    testbed (astropy):    python 3.9.20 in a conda env named `testbed`; import astropy -> /testbed/astropy
+                          NO node, NO npm
+    that env's size:      287 MB   (the whole miniconda install is 1.9 GB)
+    the shared volume:    /work IS mounted in the testbed pod
 
-Both remove the entire chain rather than its last link. Neither is attempted here: two changes are already being
-measured against these baselines, and a third that moves the interpreter would make all three incomparable.
+**(a) Run the agent inside the item's testbed image.** Rejected on the measurement: the image has neither node nor
+npm, so opencode cannot run there. Adding a JavaScript runtime to 24 evaluation images changes the images the scorer
+uses, which is the one thing no change here may do.
+
+**(b) Build the staged tree for the pod's 3.11.** Plausible for the three items already at `cpython-311` and unlikely
+for the ones at `cpython-36`: a 2019-era scikit-learn does not build on 3.11 without patching, and patching the tree
+would change what the candidate is asked to fix.
+
+**(c) Put every item's interpreter in the agent pod.** 24 conda environments at roughly 287 MB each is about 7 GB of
+image, for a pod that currently has one interpreter and no conda.
+
+**(d) Copy the item's environment per run.** The testbed pod already has `/work` mounted and already writes
+`staged.tar` there, so it could write `env.tar` too -- 287 MB, one item live at a time. The agent pod has no
+`/opt/miniconda3`, so the env can be expanded at **the same absolute path it was built for**, which is what a conda
+env needs: its shebangs and `sys.prefix` are not relocatable.
+
+**(d) is the candidate, and it rests on one assumption that has not been checked: that the env works when copied.**
+287 MB of many small files over EFS is exactly the shape that made a six-thousand-file checkout unusably slow here,
+which is why the existing design moves one archive in each direction. Whether an env expanded on a different pod
+imports correctly is a fact, not an argument, and it is the next measurement -- deliberately not taken while an arm is
+running on the same pod and the same volume.
+
+Neither (b) nor (d) is attempted yet: two changes are already measured against these baselines, and a third that moves
+the interpreter would make all of them incomparable.
 
 ## What to do in the meantime, stated so it is a decision and not an oversight
 
