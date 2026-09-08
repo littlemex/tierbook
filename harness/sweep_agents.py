@@ -154,20 +154,29 @@ def manifest_path(workdir: Path, instance: str, run_group: str | None) -> Path:
     return workdir / (f"runs-{instance}-{run_group}.json" if run_group else f"runs-{instance}.json")
 
 
-def write_task(a, instance: str) -> bool:
+def write_task(a, instance: str) -> tuple[bool, str]:
     """The problem statement, as the task. Written once per instance and kept, so a re-run gives the
-    identical prompt rather than one regenerated from a dataset that may have moved."""
+    identical prompt rather than one regenerated from a dataset that may have moved.
+
+    Returns the reason on failure rather than a bare False. It used to return False for every cause and the caller
+    printed "not in the dataset cache", which is one of four things this can be -- and on the first changed-prompt
+    sweep it was the wrong one for all 24 items. The cache was fine; `task_prompt` was not importable, because it
+    lives beside this file while `--agent-dir` points at the checkout holding `dataset.py`."""
     # The variant is in the filename. A cached task file from the baseline would otherwise be reused for the
     # changed run, and the "change" would measure nothing at all -- the quietest way a before/after can fail.
     out = Path(a.workdir) / f"task-{instance}-{a.prompt_variant}.md"
     if out.exists():
-        return True
+        return True, ""
     # The text itself lives in `task_prompt.py` so it can be tested and so a change to it shows in a diff. It
     # used to be string literals in this heredoc, which mattered once the recordings identified the prompt as the
     # cause of two zero-edit runs.
+    # Two directories, because the two modules live in two checkouts: `dataset` comes from the agent tree named by
+    # `--agent-dir`, and `task_prompt` from beside this file. Inserting only the first is what made a whole sweep
+    # skip every item while exiting 0.
     code = f'''
 import json, sys, pathlib
 sys.path.insert(0, {str(Path(a.agent_dir))!r})
+sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})
 import dataset, task_prompt
 m = [x for x in dataset.load(pathlib.Path({str(Path(a.cache).expanduser())!r}))
      if x.instance_id == {instance!r}]
@@ -179,11 +188,16 @@ print(task_prompt.build(i.repo, i.problem_statement,
                         variant={a.prompt_variant!r}), end="")
 '''
     rc, text = run([sys.executable, "-c", code], 300)
-    if rc != 0 or not text.strip():
-        return False
+    if rc == 1 and not text.strip():
+        return False, "not in the dataset cache"
+    if rc != 0:
+        last = [l for l in text.strip().splitlines() if l.strip()]
+        return False, f"building the task text failed (rc {rc}): {last[-1] if last else 'no output'}"
+    if not text.strip():
+        return False, "the task text came back empty"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text)
-    return True
+    return True, ""
 
 
 def main() -> int:
@@ -233,11 +247,14 @@ def main() -> int:
         todo = todo[:a.limit]
     print(f"{len(instances)} instances, {len(done)} already done, {len(todo)} to run\n")
 
+    skipped = []
     for n, instance in enumerate(todo, 1):
-        if not write_task(a, instance):
-            state["instances"][instance] = {"outcome": "no task text"}
+        ok, why = write_task(a, instance)
+        if not ok:
+            state["instances"][instance] = {"outcome": "no task text", "reason": why}
             save_state(state_path, state)
-            print(f"[{n}/{len(todo)}] {instance}: SKIP, not in the dataset cache")
+            skipped.append(instance)
+            print(f"[{n}/{len(todo)}] {instance}: SKIP, {why}")
             continue
         print(f"[{n}/{len(todo)}] {instance} ... ", end="", flush=True)
         t0 = time.time()
@@ -250,6 +267,11 @@ def main() -> int:
         print(f"{rec['outcome']} in {int(time.time() - t0)}s  {got}")
 
     print(f"\nstate: {state_path}")
+    if todo and len(skipped) == len(todo):
+        # A sweep that measured nothing must not report success. The first changed-prompt sweep skipped all 24 items
+        # and exited 0, which reads downstream as a completed arm with an empty cohort.
+        print(f"REFUSED: all {len(todo)} instances were skipped, so this sweep measured nothing", file=sys.stderr)
+        return 1
     return 0
 
 
