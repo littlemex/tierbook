@@ -71,12 +71,16 @@ def main() -> int:
     outcomes = Path(a.outcomes)
 
     print("=== 1. was every run given a checkout? ===")
-    staging = run_json([str(HERE / "staging_check.py"), "--outcomes", a.outcomes, "--manifests", a.manifests],
-                       out / "staging.json")
+    staging_argv = [str(HERE / "staging_check.py"), "--outcomes", a.outcomes, "--manifests", a.manifests]
+    if a.expect_items:
+        staging_argv += ["--expect-items", str(a.expect_items)]
+    staging = run_json(staging_argv, out / "staging.json")
     counts = "  ".join(f"{k} {v}" for k, v in sorted(staging["counts"].items()))
     print(f"    {staging['runs']} runs  {counts}")
     if staging["unscoreable_items"]:
         print(f"    out of the denominator in every arm: {staging['unscoreable_items']}")
+    if staging.get("short"):
+        print(f"    TRUNCATED: {staging['runs']} runs of {staging['expected_items']} expected")
     if not staging["readable"]:
         for r in staging["per_run"]:
             if r["verdict"] not in ("staged", "unscoreable"):

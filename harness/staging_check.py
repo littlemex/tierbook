@@ -61,12 +61,21 @@ UNSCOREABLE = re.compile(r'"scoreable":\s*false|cannot be scored|could not be sc
 #: about a candidate at all.
 SETUP_FAILED = 91
 
+#: Reasons the harness recorded for not observing a run, which are facts about the harness rather than the candidate.
+#: `execution_error` is the one that happened: a run edited a file and then the kubectl stream died with
+#: `read: can't assign requested address`, so its work exists and was never scored. Treating that as an agent that
+#: failed would charge the candidate for the operator's network.
+HARNESS_REASONS = frozenset({"execution_error", "transport_error", "timeout"})
+
 
 def verdict(row: dict, manifest_run: dict | None) -> tuple[str, str]:
     """One run: `staged`, `setup-failed`, `no-checkout`, or `unknown`, and why."""
     if manifest_run is not None and (manifest_run.get("setup_failed")
                                      or manifest_run.get("returncode") == SETUP_FAILED):
         return "setup-failed", ("the driver reported a setup failure, so this run is not evidence about a candidate")
+    if row.get("unobserved_reason") in HARNESS_REASONS:
+        return "harness-error", (f"the harness recorded {row['unobserved_reason']!r}, so this run's work exists and "
+                                 f"was never scored; it is a fact about the harness and not the candidate")
     oracle = row.get("oracle") or {}
     tail = oracle.get("tail") or ""
     if UNSCOREABLE.search(tail):
@@ -83,7 +92,7 @@ def verdict(row: dict, manifest_run: dict | None) -> tuple[str, str]:
                            "looks like")
 
 
-def check(outcomes: Path, manifests: list) -> dict:
+def check(outcomes: Path, manifests: list, expect_items: int | None = None) -> dict:
     runs = {}
     for m in manifests:
         try:
@@ -106,7 +115,13 @@ def check(outcomes: Path, manifests: list) -> dict:
     counts = {}
     for r in per_run:
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
+    # A truncated arm. The reason this is here: a DNS failure on the operator's machine ended a 24-item sweep after 18,
+    # and every instrument downstream read 18 rows as a complete cohort. An arm missing a quarter of its items is not
+    # a smaller arm, it is an arm whose missing items are correlated with whatever broke.
+    short = expect_items is not None and len(per_run) < expect_items
     return {
+        "expected_items": expect_items,
+        "short": short,
         "runs": len(per_run),
         "counts": counts,
         "per_run": per_run,
@@ -116,7 +131,7 @@ def check(outcomes: Path, manifests: list) -> dict:
         # but it must come out of the denominator, so it is reported separately and named.
         "unscoreable_items": [r["item_id"] for r in per_run if r["verdict"] == "unscoreable"],
         "scoreable_runs": counts.get("staged", 0),
-        "readable": (len(per_run) > 0
+        "readable": (len(per_run) > 0 and not short
                      and counts.get("staged", 0) + counts.get("unscoreable", 0) == len(per_run)),
         "note": ("a precondition rather than an analysis: an arm with any run that did not get a checkout cannot be "
                  "read, because a run whose tree was never staged looks exactly like an agent that ran and edited "
@@ -128,16 +143,21 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--outcomes", required=True)
     ap.add_argument("--manifests", default=None, help="directory holding the driver's runs-*.json")
+    ap.add_argument("--expect-items", type=int, default=None,
+                    help="how many runs this arm should have. A transient network failure truncated one sweep at 18 "
+                         "of 24 and every instrument downstream read it as complete")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     manifests = sorted(Path(a.manifests).glob("runs-*.json")) if a.manifests else []
-    res = check(Path(a.outcomes), manifests)
+    res = check(Path(a.outcomes), manifests, a.expect_items)
     print(f"{res['runs']} runs  " + "  ".join(f"{k} {v}" for k, v in sorted(res['counts'].items())))
     for r in res["per_run"]:
         if r["verdict"] != "staged":
             print(f"  {r['verdict']:14} {r['item_id']}  -- {r['why']}")
     if res["unscoreable_items"]:
         print(f"  NOT IN THE DENOMINATOR of any rate, in any arm: {res['unscoreable_items']}")
+    if res["short"]:
+        print(f"  TRUNCATED: {res['runs']} runs recorded of {res['expected_items']} expected")
     print(f"\nreadable = {res['readable']}   scoreable runs = {res['scoreable_runs']}/{res['runs']}")
     if not res["readable"]:
         print("  " + res["note"])
