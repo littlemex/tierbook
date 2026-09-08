@@ -669,3 +669,66 @@ def test_a_malformed_parameter_blob_counts_nothing_rather_than_raising():
     assert wa.own_workspace_refs("{not json", "/tmp/w/i1") == 0
     assert wa.own_workspace_refs("", "/tmp/w/i1") == 0
     assert wa.own_workspace_refs(json.dumps({"path": "/tmp/w/i1"}), None) == 0
+
+
+# --- item naming makes an edit-close id a real sibling, not a slip ----------------------------------
+
+
+ITEMS = {"astropy__astropy-14365", "astropy__astropy-14369", "pydata__xarray-4695", "pydata__xarray-4094"}
+
+
+def test_a_sibling_items_workspace_is_contamination_not_a_mistranscription():
+    """`astropy__astropy-14365` and `astropy__astropy-14369` are ONE edit apart and both are in the 24-item set. The
+    edit-distance rule was calibrated for random hex, where an id that close was almost certainly a slip."""
+    own = "/tmp/w/astropy__astropy-14365"
+    f = wa.audit_call("read", json.dumps({"filePath": "/tmp/w/astropy__astropy-14369/astropy/a.py"}),
+                      True, None, own, set(), ITEMS)
+    assert f["other_run_workspaces"] == ["/tmp/w/astropy__astropy-14369"]
+    assert f["mangled_own_workspace"] == []
+
+
+def test_two_edits_away_and_still_a_real_item_is_contamination_too():
+    own = "/tmp/w/pydata__xarray-4695"
+    f = wa.audit_call("grep", json.dumps({"path": "/tmp/w/pydata__xarray-4094"}), True, None, own, set(), ITEMS)
+    assert f["other_run_workspaces"] == ["/tmp/w/pydata__xarray-4094"]
+
+
+def test_an_id_that_is_no_real_item_is_still_a_mistranscription():
+    """The premise's falsifier: a name made of words from the prompt, written wrong."""
+    own = "/tmp/w/pydata__xarray-4695"
+    f = wa.audit_call("grep", json.dumps({"path": "/tmp/w/pydata__xarray-4965"}), True, None, own, set(), ITEMS)
+    assert f["mangled_own_workspace"] == ["/tmp/w/pydata__xarray-4965"]
+    assert f["other_run_workspaces"] == []
+
+
+def test_without_the_item_set_the_old_behaviour_stands():
+    """An arm audited before this existed must read the same way it did, or the columns stop being comparable."""
+    own = "/tmp/w/astropy__astropy-14365"
+    f = wa.audit_call("read", json.dumps({"filePath": "/tmp/w/astropy__astropy-14369/a.py"}),
+                      True, None, own, set(), None)
+    assert f["mangled_own_workspace"] == ["/tmp/w/astropy__astropy-14369"]
+
+
+def test_the_item_set_comes_from_the_cohort_itself(tmp_path):
+    """Read from the outcomes rather than configured, because the outcomes ARE the cohort."""
+    own = "/tmp/w/astropy__astropy-14365"
+    sibling = "/tmp/w/astropy__astropy-14369"
+    span = {"traceId": "t1", "name": "opencode.tool.read",
+            "attributes": [{"key": "tool.name", "value": {"stringValue": "read"}},
+                           {"key": "tool.parameters",
+                            "value": {"stringValue": json.dumps({"filePath": f"{sibling}/a.py"})}},
+                           {"key": "tool.success", "value": {"boolValue": True}}]}
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text("".join(json.dumps(r) + "\n" for r in [
+        {"trace_id": "t1", "item_id": "astropy__astropy-14365", "state": "incorrect",
+         "oracle": {"files_touched": 1, "diff_bytes": 9}},
+        {"trace_id": "t2", "item_id": "astropy__astropy-14369", "state": "solved",
+         "oracle": {"files_touched": 1, "diff_bytes": 9}}]))
+    manifest = tmp_path / "runs-x.json"
+    manifest.write_text(json.dumps({"runs": [{"trace_id": "t1", "workspace": own}]}))
+    res = wa.audit(traces, outcomes, [manifest])
+    hit = [r for r in res["per_run"] if r["item_id"] == "astropy__astropy-14365"][0]
+    assert hit["other_run_workspaces"] == 1
+    assert hit["mangled_own_workspace"] == 0
