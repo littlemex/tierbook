@@ -223,11 +223,23 @@ def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, 
     # `rm -rf /tmp/w/<item>` resolves through it and deletes outside the root the guard exists to protect. `rm -rf` on
     # a FINAL-component symlink removes the link, which is safe; an intermediate one is the dangerous case.
     root = _shq(WORKSPACE_ROOT)
-    return ("{{ ! test -L {root} && mkdir -p {root} && "
+    # Nobody else is working here. Two reviews raised the same risk and it is one this change CREATED: a `kubectl exec`
+    # timeout does not reliably kill the remote process tree, so an orphan from an earlier run can still be alive. With
+    # random names that orphan was harmless -- it held a directory nothing would reuse. With a name derived from the
+    # item, the next run of that item takes its tree away mid-write, or the orphan writes into the freshly staged one.
+    #
+    # "Runs are sequential" is true of the driver and not of the pod, so it is checked rather than asserted. `/proc`
+    # rather than `fuser` or `lsof`, neither of which the image has. This runs BEFORE `cd`, so the run's own shell
+    # cannot match itself.
+    busy = ("for d in /proc/[0-9]*; do case \"$(readlink $d/cwd 2>/dev/null)\" in {ws_glob}) "
+            "echo \"[FATAL] another process is working in {ws_plain}\" >&2; exit {setup_rc};; esac; done").format(
+                ws_glob=_shq(workspace) + "*", ws_plain=workspace, setup_rc=SETUP_FAILED)
+    return ("{busy}; "
+            "{{ ! test -L {root} && mkdir -p {root} && "
             "rm -rf {ws} && mkdir -p {ws} && {pre}{stage}cd {ws} ; }} || "
             "{{ echo '[FATAL] setup failed before the agent started' >&2; exit {setup_rc}; }}; "
             "{env}{{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
-            "exit ${{exec_rc:-0}}").format(ws=quoted, root=root, env=env, pre=pre, stage=stage,
+            "exit ${{exec_rc:-0}}").format(ws=quoted, root=root, busy=busy, env=env, pre=pre, stage=stage,
                                            back=give_back, sweep=sweep_up, setup_rc=SETUP_FAILED)
 
 

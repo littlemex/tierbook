@@ -174,7 +174,8 @@ def test_the_pre_commands_run_inside_the_guarded_setup_and_the_exports_after_it(
     is a setup failure rather than a run of a candidate that was never configured. The exports moved out because they
     cannot fail, and putting them in the chain was what broke it -- the string ends in `; `."""
     inner = ad.build_inner(WS_T, ad.python_path_export(WS_T), "setup >/dev/null 2>&1 && ", "", "", True)
-    assert inner.index("setup") < inner.index("exit 91") < inner.index("export PYTHONPATH") < inner.index('"$@"')
+    # `exit 91` appears twice: the busy-workspace check comes first, then the setup guard. This is about the second.
+    assert inner.index("setup >") < inner.rindex("exit 91") < inner.index("export PYTHONPATH") < inner.index('"$@"')
 
 
 # --- W1/W3: a workspace name a model does not have to memorise --------------------------------------
@@ -460,3 +461,45 @@ def test_a_real_root_is_created_when_absent(monkeypatch, tmp_path):
     inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
     assert _run(inner, ["sh", "-c", "true"], cwd=tmp_path).returncode == 0
     assert root.is_dir() and not root.is_symlink()
+
+
+def test_a_live_process_working_in_the_workspace_stops_the_run(monkeypatch, tmp_path):
+    """A risk this change CREATED. A kubectl exec timeout does not reliably kill the remote process tree, so an orphan
+    from an earlier run can still be alive -- and with a name derived from the item, the next run of that item takes its
+    tree away mid-write. With random names the orphan held a directory nothing would reuse."""
+    if not Path("/proc/self/cwd").exists():
+        pytest.skip("this check reads /proc, which this platform does not have")
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = Path(ad.workspace_for("i1"))
+    ws.mkdir(parents=True)
+    (ws / "orphan-was-writing.txt").write_text("mid-write\n")
+    holder = subprocess.Popen(["sh", "-c", "sleep 30"], cwd=str(ws))
+    try:
+        inner = ad.build_inner(str(ws), ad.python_path_export(str(ws)), "", "", "", True)
+        p = _run(inner, ["sh", "-c", "true"], cwd=str(tmp_path))
+        assert p.returncode == ad.SETUP_FAILED, (p.returncode, p.stdout, p.stderr)
+        assert "another process is working" in p.stderr
+        assert (ws / "orphan-was-writing.txt").exists(), "the orphan's tree was not taken away"
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_an_empty_workspace_with_nobody_in_it_starts_normally(monkeypatch, tmp_path):
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    assert _run(inner, ["sh", "-c", "true"], cwd=str(tmp_path)).returncode == 0
+
+
+def test_the_runs_own_shell_does_not_match_itself(monkeypatch, tmp_path):
+    """The check runs before `cd`, so the shell executing it is not yet in the workspace."""
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    assert inner.index("readlink") < inner.index("cd '")
+    p = _run(inner, ["sh", "-c", "pwd"], cwd=str(tmp_path))
+    assert p.returncode == 0 and p.stdout.strip().endswith("/w/i1")
