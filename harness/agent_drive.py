@@ -116,6 +116,11 @@ OWN_CODE_SUBDIRS = ("", "src")
 #: item id would then name `/tmp` itself, and `rm -rf /tmp` on a shared pod takes every other run's tree with it.
 WORKSPACE_ROOT = "/tmp/w"
 
+#: The status a run exits with when setup failed before the agent started. Distinct from any agent status so the two
+#: can never be confused: a run whose workspace was never staged looks, in an outcome, exactly like an agent that ran
+#: and edited nothing -- and that is the signature this whole line of work was chasing.
+SETUP_FAILED = 91
+
 
 def workspace_for(tag: str, template: str | None = None) -> str:
     """A run's workspace, named after its item.
@@ -197,10 +202,26 @@ def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, 
     # W2. Fresh, not merely present. With a deterministic name a leftover from an earlier run of the SAME item would
     # otherwise be inherited, which is worse than a random name -- and `tar x` over an existing tree keeps whatever
     # the archive does not overwrite. `guard_workspace` has already refused anything this must not remove.
-    return ("rm -rf {ws} && mkdir -p {ws} && {env}{pre}{stage}cd {ws} && "
-            "{{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
+    # Setup is one chain that cannot be broken by a stray separator, and a setup failure exits with its OWN status.
+    #
+    # Both reviewers landed on the same defect from opposite directions. The environment string ends in `; `, which
+    # TERMINATED the `&&` chain: a failed `rm -rf` -- which happens when a previous run left a directory it had made
+    # unwritable, something agents do while testing permission bugs -- skipped `mkdir` and the exports and then
+    # staged over the stale tree anyway, ran the agent with no PYTHONPATH, handed back a contaminated archive, and
+    # exited with the agent's status. The clause called "the one that makes W1 safe" was a no-op in the only
+    # condition that triggers it.
+    #
+    # And `exit ${exec_rc:-0}` returned **0** whenever the agent never started, because `exec_rc` is assigned inside
+    # the braces. A staging failure was therefore recorded as an agent that ran and did nothing -- which is exactly
+    # the signature the whole workspace-binding investigation was chasing, so it must not be able to hide there.
+    #
+    # `SETUP_FAILED` is a distinct status the driver recognises, rather than a non-zero code that would read as the
+    # agent failing.
+    return ("{{ rm -rf {ws} && mkdir -p {ws} && {pre}{stage}cd {ws} ; }} || "
+            "{{ echo '[FATAL] setup failed before the agent started' >&2; exit {setup_rc}; }}; "
+            "{env}{{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
             "exit ${{exec_rc:-0}}").format(ws=quoted, env=env, pre=pre, stage=stage,
-                                           back=give_back, sweep=sweep_up)
+                                           back=give_back, sweep=sweep_up, setup_rc=SETUP_FAILED)
 
 
 def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, namespace: str,
@@ -323,6 +344,8 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
         "ended_wall": ended_wall,
         "wall_s": round(time.monotonic() - t0, 2),
         "returncode": rc,
+        # Named rather than left as a number, because the number would be read as the agent failing.
+        "setup_failed": rc == SETUP_FAILED,
         "timed_out": timed_out,
         # Truncated: the agent's transcript is not the measurement and a full one would bury the
         # manifest. Enough to see what it answered and whether it errored.

@@ -169,9 +169,12 @@ def test_a_run_with_no_staged_tree_neither_hands_back_nor_keeps_its_workspace():
     assert "tar cf" not in inner and "rm -rf" in inner
 
 
-def test_the_pre_commands_run_before_the_agent_and_after_the_environment():
+def test_the_pre_commands_run_inside_the_guarded_setup_and_the_exports_after_it():
+    """The order changed when setup became one guarded chain: `pre` is now inside it, so a failed configuration step
+    is a setup failure rather than a run of a candidate that was never configured. The exports moved out because they
+    cannot fail, and putting them in the chain was what broke it -- the string ends in `; `."""
     inner = ad.build_inner(WS_T, ad.python_path_export(WS_T), "setup >/dev/null 2>&1 && ", "", "", True)
-    assert inner.index("export PYTHONPATH") < inner.index("setup") < inner.index('"$@"')
+    assert inner.index("setup") < inner.index("exit 91") < inner.index("export PYTHONPATH") < inner.index('"$@"')
 
 
 # --- W1/W3: a workspace name a model does not have to memorise --------------------------------------
@@ -287,3 +290,143 @@ def test_removing_a_symlinked_workspace_removes_the_link_not_its_target():
     """Recorded rather than tested against a filesystem: `rm -rf` on a symlink removes the link. A workspace that is
     a symlink is therefore not a route out of the root, unlike a `..` component."""
     assert ad.guard_workspace("/tmp/w/link") == "/tmp/w/link"
+
+
+# --- the assembled command, actually executed -------------------------------------------------------
+#
+# String inspection said the ordering was right while the chain was silently broken by the `; ` at the end of the
+# environment exports: a failed opening `rm -rf` skipped `mkdir` and the exports and staged over the stale tree
+# anyway, then exited with the agent's status. Both reviewers found it and neither could have found it from a test
+# that only read the string. These run it.
+
+
+import os
+import subprocess
+
+
+def _run(inner, agent_argv, *, cwd):
+    """`sh -c inner sh <agent argv>`, which is how kubectl exec invokes it."""
+    return subprocess.run(["sh", "-c", inner, "sh", *agent_argv], capture_output=True, text=True, cwd=cwd)
+
+
+def _root(monkeypatch, tmp_path):
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    return root
+
+
+def test_a_normal_run_stages_works_hands_back_and_sweeps_up(monkeypatch, tmp_path):
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("pydata__xarray-4695")
+    src = tmp_path / "staged"
+    (src / "xarray").mkdir(parents=True)
+    (src / "xarray" / "core.py").write_text("original\n")
+    tar = tmp_path / "staged.tar"
+    subprocess.run(["tar", "cf", str(tar), "-C", str(src), "."], check=True)
+    back_dir = tmp_path / "returned"
+    back_dir.mkdir()
+    ret = back_dir / "run.tar"
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "",
+                           f"tar xf {tar} --no-same-owner -C {ws} && ",
+                           f" ; tar cf {ret} -C {ws} .", True)
+    p = _run(inner, ["sh", "-c", "test -f xarray/core.py && echo edited > xarray/core.py"], cwd=tmp_path)
+    assert p.returncode == 0, p.stderr
+    assert not os.path.exists(ws), "swept up"
+    assert ret.exists(), "handed back"
+    listing = subprocess.run(["tar", "tf", str(ret)], capture_output=True, text=True).stdout
+    assert "./xarray/core.py" in listing
+
+
+def test_the_agents_own_status_is_what_the_driver_sees(monkeypatch, tmp_path):
+    _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    assert _run(inner, ["sh", "-c", "exit 7"], cwd=tmp_path).returncode == 7
+    assert _run(inner, ["sh", "-c", "exit 0"], cwd=tmp_path).returncode == 0
+
+
+def test_a_setup_failure_exits_with_its_own_status_and_never_runs_the_agent(monkeypatch, tmp_path):
+    """The defect both reviewers found. A previous run left a directory it had made unwritable -- something agents do
+    while testing permission bugs -- so `rm -rf` fails. It used to skip mkdir and the exports, stage over the stale
+    tree, run the agent, and exit 0."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    stale = Path(ws) / "sub"
+    stale.mkdir(parents=True)
+    (stale / "leftover.py").write_text("from an earlier run\n")
+    os.chmod(stale, 0o500)             # unwritable: its child cannot be unlinked
+    marker = tmp_path / "agent-ran"
+    try:
+        inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+        p = _run(inner, ["sh", "-c", f"touch {marker}"], cwd=tmp_path)
+        assert p.returncode == ad.SETUP_FAILED, (p.returncode, p.stderr)
+        assert "setup failed" in p.stderr
+        assert not marker.exists(), "the agent must not have run"
+    finally:
+        os.chmod(stale, 0o700)
+
+
+def test_a_setup_failure_does_not_stage_over_the_stale_tree(monkeypatch, tmp_path):
+    """The contamination the freshness clause exists to prevent, and the case where it used to happen."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    stale = Path(ws) / "sub"
+    stale.mkdir(parents=True)
+    (stale / "leftover.py").write_text("from an earlier run\n")
+    os.chmod(stale, 0o500)
+    src = tmp_path / "staged"
+    src.mkdir()
+    (src / "fresh.py").write_text("staged\n")
+    tar = tmp_path / "staged.tar"
+    subprocess.run(["tar", "cf", str(tar), "-C", str(src), "."], check=True)
+    try:
+        inner = ad.build_inner(ws, ad.python_path_export(ws), "",
+                              f"tar xf {tar} --no-same-owner -C {ws} && ", "", True)
+        p = _run(inner, ["sh", "-c", "true"], cwd=tmp_path)
+        assert p.returncode == ad.SETUP_FAILED
+        assert not (Path(ws) / "fresh.py").exists(), "nothing was staged over the stale tree"
+        assert (stale / "leftover.py").exists(), "and the stale tree is left for someone to look at"
+    finally:
+        os.chmod(stale, 0o700)
+
+
+def test_a_stray_file_from_an_earlier_run_of_the_same_item_is_gone(monkeypatch, tmp_path):
+    """Clause 3 of the contract, executed rather than asserted about a string."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    Path(ws).mkdir(parents=True)
+    (Path(ws) / "stray.py").write_text("from an earlier run\n")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    p = _run(inner, ["sh", "-c", "test -e stray.py && exit 3 || exit 0"], cwd=tmp_path)
+    assert p.returncode == 0, "the agent must not have seen the stray file"
+
+
+def test_a_failed_hand_back_keeps_the_tree(monkeypatch, tmp_path):
+    """The only copy of what the run did must not be deleted because the archive could not be written."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    ret = tmp_path / "no-such-dir" / "run.tar"        # the directory does not exist, so `tar cf` fails
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", f" ; tar cf {ret} -C {ws} .", True)
+    p = _run(inner, ["sh", "-c", "echo work > done.txt"], cwd=tmp_path)
+    assert p.returncode == 0, "the agent's status, not tar's"
+    assert (Path(ws) / "done.txt").exists(), "the tree survived a failed hand-back"
+
+
+def test_pythonpath_reaches_the_agent_and_names_the_runs_own_workspace(monkeypatch, tmp_path):
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    p = _run(inner, ["sh", "-c", 'printf "%s" "$PYTHONPATH"'], cwd=tmp_path)
+    assert p.stdout == f"{ws}:{ws}/src", p.stdout
+
+
+def test_a_failing_pre_command_is_a_setup_failure_too(monkeypatch, tmp_path):
+    """`pre` configures an agent that cannot be told where to work. A run whose configuration step failed is not a
+    run of the candidate it claims to be."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    marker = tmp_path / "agent-ran"
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "false >/dev/null 2>&1 && ", "", "", True)
+    p = _run(inner, ["sh", "-c", f"touch {marker}"], cwd=tmp_path)
+    assert p.returncode == ad.SETUP_FAILED
+    assert not marker.exists()
