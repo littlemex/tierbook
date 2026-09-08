@@ -153,6 +153,14 @@ def guard_workspace(path: str) -> str:
         raise ValueError(f"{path!r} has no name below {root}/, so removing it would remove the root")
     if ".." in PurePosixPath(clean).parts:
         raise ValueError(f"{path!r} contains '..', which can resolve outside {root}/")
+    # Refused rather than relied on quoting alone. The path is also quoted where it is interpolated, and both are
+    # wanted: `rm -rf /tmp/w/x y` unquoted removes `/tmp/w/x` AND the relative path `y`, and a guard that accepts a
+    # name it cannot see the consequences of is a guard that documents nothing. SWE-bench instance ids contain none
+    # of these, which is the assumption being written down.
+    bad = set(clean) & set(" \t\n'\"`$&;|<>()*?[]!#~\\")
+    if bad:
+        raise ValueError(f"{path!r} contains {sorted(bad)!r}, which the shell would read as syntax rather than as "
+                         f"part of a directory name")
     return clean
 
 
@@ -180,13 +188,18 @@ def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, 
     exit, so the returned archive is complete and the status the driver sees is the agent's own rather than `rm`'s.
     """
     workspace = guard_workspace(workspace)
-    sweep_up = f" ; rm -rf {workspace}" if cleanup else ""
+    quoted = _shq(workspace)
+    # `&&` rather than `;` when there is an archive to hand back, so a failed `tar` keeps the tree instead of the
+    # driver deleting the only copy of what the run did. A run whose hand-back failed is unscoreable either way; the
+    # difference is whether it can be looked at. With no archive there is nothing to depend on, so `;`.
+    joiner = " && " if give_back else " ; "
+    sweep_up = f"{joiner}rm -rf {quoted}" if cleanup else ""
     # W2. Fresh, not merely present. With a deterministic name a leftover from an earlier run of the SAME item would
     # otherwise be inherited, which is worse than a random name -- and `tar x` over an existing tree keeps whatever
     # the archive does not overwrite. `guard_workspace` has already refused anything this must not remove.
     return ("rm -rf {ws} && mkdir -p {ws} && {env}{pre}{stage}cd {ws} && "
             "{{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
-            "exit ${{exec_rc:-0}}").format(ws=workspace, env=env, pre=pre, stage=stage,
+            "exit ${{exec_rc:-0}}").format(ws=quoted, env=env, pre=pre, stage=stage,
                                            back=give_back, sweep=sweep_up)
 
 

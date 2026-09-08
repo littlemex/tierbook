@@ -236,7 +236,54 @@ def test_the_assembled_command_refuses_a_workspace_the_guard_rejects():
             ad.build_inner(bad, "", "", "", "", True)
 
 
-def test_both_removals_name_the_same_guarded_path():
+def test_both_removals_name_the_same_guarded_and_quoted_path():
+    """The trailing slash is normalised once, by the guard, so the two removals cannot disagree."""
     inner = ad.build_inner("/tmp/w/i1/", "", "", "", " ; tar cf /work/returned/x.tar -C /tmp/w/i1 .", True)
-    assert inner.count("rm -rf /tmp/w/i1") == 2
-    assert "rm -rf /tmp/w/i1/" not in inner
+    assert inner.count("rm -rf '/tmp/w/i1'") == 2
+    assert "/tmp/w/i1/'" not in inner
+
+
+# --- the rm -rf lines, which are the dangerous part -------------------------------------------------
+
+
+def test_a_name_the_shell_would_split_is_refused():
+    """`rm -rf /tmp/w/x y` unquoted removes `/tmp/w/x` AND the relative path `y`. Found by reading the assembled
+    command rather than by a reviewer, and refused as well as quoted."""
+    for bad in ("/tmp/w/x y", "/tmp/w/x\ty", "/tmp/w/a;rm -rf /", "/tmp/w/$HOME", "/tmp/w/a`b`",
+                "/tmp/w/a&b", "/tmp/w/a|b", "/tmp/w/a*", "/tmp/w/a'b", '/tmp/w/a"b'):
+        with pytest.raises(ValueError, match="shell"):
+            ad.guard_workspace(bad)
+
+
+def test_real_instance_ids_are_accepted():
+    """The assumption the refusal above documents: SWE-bench ids are word characters, dashes and underscores."""
+    for ok in ("pydata__xarray-4695", "matplotlib__matplotlib-26208", "scikit-learn__scikit-learn-15100",
+               "pylint-dev__pylint-4551", "psf__requests-1142"):
+        assert ad.workspace_for(ok) == f"/tmp/w/{ok}"
+
+
+def test_the_workspace_is_quoted_wherever_it_reaches_the_shell():
+    inner = ad.build_inner("/tmp/w/i1", "", "", "", "", True)
+    assert inner.count("'/tmp/w/i1'") >= 3, "opening rm, mkdir, cd and the sweep-up"
+    assert "rm -rf /tmp/w/i1 " not in inner, "no bare occurrence"
+
+
+def test_a_failed_hand_back_keeps_the_tree_instead_of_deleting_the_only_copy():
+    """`;` would delete the workspace whether or not the archive was written, and a run whose hand-back failed is
+    unscoreable either way -- the difference is whether anybody can look at it."""
+    back = " ; mkdir -p /work/returned && tar cf /work/returned/x.tar -C /tmp/w/i1 ."
+    inner = ad.build_inner("/tmp/w/i1", "", "", "", back, True)
+    assert "tar cf /work/returned/x.tar -C /tmp/w/i1 . && rm -rf" in inner
+    assert ". ; rm -rf" not in inner
+
+
+def test_with_no_archive_to_hand_back_the_sweep_up_is_unconditional():
+    """Nothing to depend on, so nothing to condition it against."""
+    inner = ad.build_inner("/tmp/w/i1", "", "", "", "", True)
+    assert " ; rm -rf '/tmp/w/i1'" in inner
+
+
+def test_removing_a_symlinked_workspace_removes_the_link_not_its_target():
+    """Recorded rather than tested against a filesystem: `rm -rf` on a symlink removes the link. A workspace that is
+    a symlink is therefore not a route out of the root, unlike a `..` component."""
+    assert ad.guard_workspace("/tmp/w/link") == "/tmp/w/link"
