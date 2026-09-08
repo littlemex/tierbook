@@ -96,6 +96,52 @@ So for the exposed repositories the items in one arm are **order-dependent rathe
 or not any given run trips over it. That is uncontrolled in all three arms recorded so far, and it is a better reason
 to fix this than the 2-in-48 incidence is.
 
+## `PYTHONPATH` alone is necessary and not sufficient: the package resolves half from each tree
+
+A reviewer asked for the pass condition to assert on a **submodule** and not only the top-level package, because a
+`__path__` extension can make one local while the other comes from elsewhere. That is exactly what happens, measured:
+
+    PYTHONPATH=<own ws>, from /:
+      astropy        -> <own ws>/astropy/__init__.py
+      astropy.io.ascii.qdp  -> <own ws>/astropy/io/ascii/qdp.py
+      astropy.convolution._convolve -> /tmp/run-opencode-acf4781c5e/astropy/convolution/
+                                         _convolve.cpython-311-x86_64-linux-gnu.so     <-- ANOTHER RUN
+      astropy.__path__ -> ['<own ws>/astropy']
+
+The cause is the extension tag. The staged tar carries 17 `.so` files built for **cpython-39** and the pod runs
+**3.11**, so `PathFinder` searching the run's own `__path__` cannot satisfy `_convolve`; the editable finder then
+answers by name, and it names a tree where some run performed an editable install and compiled for 3.11. The
+leftover the finder points at has both tags -- 17 cpython-39 and 17 cpython-311 -- while the run's own tree has only
+the 39s.
+
+So every arm recorded so far imported a **mixture**: pure-Python modules from the run's own checkout and compiled
+extensions from another run's. No import failed, in either configuration, for any of `astropy`,
+`astropy.io.ascii.qdp`, `astropy.convolution`, `astropy.units`, `astropy.table` or `astropy.io.fits`. The wrongness
+is silent by construction.
+
+That settles a second reviewer's question in the other direction too: the worry was that pointing `PYTHONPATH` at an
+unbuilt checkout would turn silent wrongness into an `ImportError`. It does not, because the fallback quietly
+supplies the missing binary. The absence of the error **is** the defect.
+
+## Leftover trees hold earlier runs' edits of the same file
+
+One reviewer argued the 142 leftover workspaces are not only an import hazard but a channel by which an agent can
+read another run's answer to its own task. Checked against the staged tar for `astropy__astropy-14365`, comparing
+`astropy/io/ascii/qdp.py`:
+
+- 23 leftover trees contain that file; 15 differ from the staged version, 8 match.
+- Two of the differing trees are recorded workspaces **for that same item**: `700cd74ee4` from baseline 2 and
+  `99059ca0bd` from the arm currently running.
+
+So a later run of `astropy__astropy-14365` can read an earlier run's edit of the exact file it has been asked to
+change. That is contamination of an outcome, not of self-verification, and it is present in every arm.
+
+The other 13 differences are not separated here between other items' base revisions and other runs' edits, and are
+not claimed as either. Two is enough.
+
+An earlier version of this check looked for `git diff` in the leftover trees and found nothing, which proved nothing:
+no leftover workspace has a `.git` directory and `git` is not installed in the pod.
+
 ## The fix, and the tests that chose it
 
 `PYTHONPATH` wins against the editable finder, and it survives the ways a run reaches an interpreter. Measured on the
@@ -107,15 +153,31 @@ pod rather than reasoned about:
     Python `subprocess`               ->  sees it
     `env -i`                          ->  does NOT see it (clears the environment on purpose)
 
-Two entries are needed because layouts differ: `<ws>` for astropy, django and pylint, `<ws>/src` for flask. Both
-always, rather than a per-repository table, and the shadowing risk that raises was checked rather than dismissed: of
-the leftover workspaces on the pod, `src/` holds importable packages only for flask (`flask`) and pytest (`pytest`,
-`_pytest`) -- each the repository's own package -- while matplotlib's `src/` holds C++ sources with no importable
-top-level name. So on this subset the extra entry shadows nothing it should not.
+Two entries are needed because layouts differ: `<ws>` for astropy, django and pylint, `<ws>/src` for flask -- and
+`PYTHONPATH` beats the `easy-install.pth` route as well as the finders, which was worth measuring because that file
+is documented to front-load its entries. It does not front-load ahead of `PYTHONPATH`: with the variable set,
+`sys.path[0]` is its value.
 
-Rejected: `pip install -e .` per run, which costs a build per run and rewrites the same process-global artifact that
-caused this, so concurrent runs would fight over it. Also rejected: deleting the editable artifacts once, which fixes
-the pod until the next run installs one.
+Both entries always, rather than a per-repository table, and the shadowing risk that raises was checked rather than
+dismissed: of the leftover workspaces on the pod, `src/` holds importable packages only for flask (`flask`) and
+pytest (`pytest`, `_pytest`) -- each the repository's own package -- while matplotlib's `src/` holds C++ sources with
+no importable top-level name. So on this subset the extra entry shadows nothing it should not.
+
+**But `PYTHONPATH` is not the whole fix**, because of the mixed resolution above. Two more parts, both of which were
+in the rejected column before the submodule was measured:
+
+- **Remove the editable-install artifacts.** With them gone, a missing `cpython-311` extension raises instead of
+  being supplied from another run's tree. Loud is what is wanted here: the run cannot silently exercise a foreign
+  binary, and an `ImportError` naming the extension tells the agent what is actually wrong. The earlier argument
+  against this -- "it fixes the pod until the next run installs one" -- is an argument for doing it per run, not for
+  not doing it.
+- **Remove the run's workspace when the run ends.** Not for disk, though 8.9 GB on a shared node matters, but
+  because leftover trees hold earlier runs' edits of the same file. The earlier reasoning here was that cleaning
+  would "mask the defect"; two reviewers called that wrong and they are right. Failing loudly is the goal, and a
+  workspace that no longer exists cannot be imported from, read from, or written into.
+
+`pip install -e .` per run stays rejected: it rewrites the same process-global artifact that caused this, so
+concurrent runs would fight over it.
 
 ## What this does to the workspace-binding change
 
