@@ -8,7 +8,8 @@
 | The model, the endpoint, the decode policy, the agent definition, its tool set | The candidate tuple must not move or the before/after is not a paired comparison of one change. |
 | The item set, the oracle, the scorer | The scorer already applies the diff to a clean checkout in a separate testbed, so it never read through the pod's import path. It is not implicated and changing it would make the measurements incomparable. |
 | The task prompt | The workspace-binding change owns the prompt. Two changes to the same measurement in one arm cannot be told apart. |
-| ~~Removing the editable-install artifacts~~ | **Moved into scope as D2.** The reason for excluding it -- "it fixes the pod until the next run installs one" -- turned out to be an argument for doing it per run rather than for not doing it, once a submodule measurement showed `PYTHONPATH` alone leaves the package resolving half from another run's tree. |
+| Removing the editable-install artifacts | Moved into scope as D2 when a submodule measurement showed `PYTHONPATH` alone leaves the package resolving half from another run's tree, then **withdrawn** when the next measurement showed removal makes 11 of 24 items unimportable. The history is left here rather than tidied away, because the second reversal is the finding. |
+| The interpreter a run verifies with | The real fix, and larger than this contract. See `01-design/interpreter-mismatch.md`. Moving it would make all three arms incomparable. |
 | ~~Leaving the 142 leftover workspaces~~ | **Moved into scope as D3.** The original reasoning was that cleaning them would mask the defect. Two reviewers called that wrong and they are right: loud failure is the goal. A measurement settled it -- two leftover trees hold an earlier run's edit of the very file `astropy__astropy-14365` is asked to change. |
 | Making the agent pod single-use per run | It would remove this and several neighbouring problems, and it costs a pod start per run on a shared node. Worth doing and not here; this change must be measurable against the recorded baselines, which used a long-lived pod. |
 
@@ -46,13 +47,22 @@ because repository layouts differ -- `<ws>/astropy` and `<ws>/django` against `<
 rather than a per-repository table: an entry naming a directory that does not exist costs nothing, and a table is a
 second thing to keep in step with the item set.
 
-**D2.** The driver removes the editable-install artifacts from `dist-packages` before a run, because `PYTHONPATH`
-alone is **not sufficient**: measured with it set, `astropy` and `astropy.io.ascii.qdp` come from the run's own tree
-while `astropy.convolution._convolve` comes from another run's, since the staged tar carries `cpython-39` extensions
-and the pod runs 3.11, so the finder answers for what `PathFinder` cannot satisfy. With the artifacts gone that
-import raises and names the extension, which is the behaviour wanted: a run must not silently exercise a foreign
-binary. This clause was in the rejected column until the submodule was measured, and the reason it moved is recorded
-in the out-of-scope table rather than quietly dropped.
+**D2 is withdrawn**, and the reason is worth more than the clause was. It said the driver should remove the
+editable-install artifacts, on the ground that `PYTHONPATH` alone leaves `astropy.convolution._convolve` resolving
+into another run's tree. That measurement stands. What the next measurement showed is that removing the artifacts
+makes **11 of the 24 items unimportable in the agent pod at all**: each item's staged tree is its testbed image's
+`/testbed`, compiled for that image's interpreter, and the tags across the 24 tars are `cpython-36`, `-39`, `-310` and
+`-311` while the pod runs 3.11. astropy says so itself -- *"trying to import astropy from within a source checkout ...
+without building the extension modules first"*. The artifacts were not a stray leftover; they are the only thing
+making those items importable, because some earlier run took that advice and built for 3.11 in its own workspace.
+
+So the clean fix removes a capability the measurement depends on, and the right answer is upstream of this contract:
+run the agent with the interpreter its own item was built with. `01-design/interpreter-mismatch.md` holds that
+measurement and both shapes of the proper fix. Neither is attempted here, because two changes are already being
+measured against these baselines and a third that moves the interpreter would make all three incomparable.
+
+Keeping the artifacts is wrong and is the least wrong option available without moving the interpreter. Stated as a
+decision rather than left as an oversight.
 
 **D3.** The driver removes a run's workspace when the run ends. Not primarily for the 8.9 GB, but because leftover
 trees hold earlier runs' edits: 15 of 23 leftover astropy trees differ from the staged `qdp.py`, and two of them are
@@ -118,10 +128,11 @@ earlier run's edit of its own target file, which is the only one of the three th
 wrong direction. None of that should be sold as a solve-rate improvement; the honest claim is that three arms were
 measured on a harness that was not isolating runs, and the next one will be.
 
-**One consequence to state before running it.** D2 will make some imports fail that used to succeed, because the
-extensions in the staged trees are built for a Python the pod does not run. That is the intended behaviour and it may
-lower the solve count. A change that makes results worse by making the environment honest is still the right change,
-and pretending otherwise is how the previous three arms came to be measured this way.
+**What is left undone, stated plainly.** With D2 withdrawn, a run on one of the 11 mismatched items still loads
+compiled extensions from another run's workspace. D1 fixes the pure-Python half, which is where both observed failures
+were, and D3 closes the channel by which a run reads another run's edit of its own target file. The other half waits
+on the interpreter, and that is a real gap rather than a rounding error: on those items an agent is still testing a
+hybrid of its own source and a foreign binary.
 
 ## What this does to the workspace-binding result
 
