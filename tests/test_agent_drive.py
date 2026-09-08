@@ -524,3 +524,40 @@ def test_the_runs_own_shell_does_not_match_itself(monkeypatch, tmp_path):
     assert inner.index("readlink") < inner.index("cd '")
     p = _run(inner, ["sh", "-c", "pwd"], cwd=str(tmp_path))
     assert p.returncode == 0 and p.stdout.strip().endswith("/w/i1")
+
+
+def test_the_busy_check_matches_a_directory_boundary_not_a_name_prefix(monkeypatch, tmp_path):
+    """A bare `<ws>*` would also match `/tmp/w/astropy-scratch`, which is a different directory. With repo-only names
+    the workspace is short, so a prefix match has more neighbours to hit."""
+    if not Path("/proc/self/cwd").exists():
+        pytest.skip("this check reads /proc, which this platform does not have")
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("astropy__astropy-14369")
+    neighbour = Path(str(ws) + "-scratch")
+    neighbour.mkdir(parents=True)
+    holder = subprocess.Popen(["sh", "-c", "sleep 20"], cwd=str(neighbour))
+    try:
+        inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+        p = _run(inner, ["sh", "-c", "true"], cwd=str(tmp_path))
+        assert p.returncode == 0, (p.returncode, p.stderr)
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_a_process_below_the_workspace_still_stops_the_run(monkeypatch, tmp_path):
+    if not Path("/proc/self/cwd").exists():
+        pytest.skip("this check reads /proc, which this platform does not have")
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = Path(ad.workspace_for("astropy__astropy-14369"))
+    deep = ws / "astropy" / "units"
+    deep.mkdir(parents=True)
+    holder = subprocess.Popen(["sh", "-c", "sleep 20"], cwd=str(deep))
+    try:
+        inner = ad.build_inner(str(ws), ad.python_path_export(str(ws)), "", "", "", True)
+        assert _run(inner, ["sh", "-c", "true"], cwd=str(tmp_path)).returncode == ad.SETUP_FAILED
+    finally:
+        holder.kill()
+        holder.wait()

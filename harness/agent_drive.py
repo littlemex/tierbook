@@ -259,9 +259,12 @@ def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, 
     # "Runs are sequential" is true of the driver and not of the pod, so it is checked rather than asserted. `/proc`
     # rather than `fuser` or `lsof`, neither of which the image has. This runs BEFORE `cd`, so the run's own shell
     # cannot match itself.
-    busy = ("for d in /proc/[0-9]*; do case \"$(readlink $d/cwd 2>/dev/null)\" in {ws_glob}) "
+    # The pattern matches the workspace itself or anything BELOW it, not anything that merely starts with its name:
+    # a bare `<ws>*` would also match `/tmp/w/astropy-scratch`, which is a different directory.
+    q = _shq(workspace)
+    busy = ("for d in /proc/[0-9]*; do case \"$(readlink $d/cwd 2>/dev/null)\" in {q}|{q}/*) "
             "echo \"[FATAL] another process is working in {ws_plain}\" >&2; exit {setup_rc};; esac; done").format(
-                ws_glob=_shq(workspace) + "*", ws_plain=workspace, setup_rc=SETUP_FAILED)
+                q=q, ws_plain=workspace, setup_rc=SETUP_FAILED)
     return ("{busy}; "
             "{{ ! test -L {root} && mkdir -p {root} && "
             "rm -rf {ws} && mkdir -p {ws} && {pre}{stage}cd {ws} ; }} || "
