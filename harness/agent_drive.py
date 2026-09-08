@@ -104,8 +104,46 @@ def new_traceparent() -> tuple[str, str]:
     return trace_id, f"00-{trace_id}-{secrets.token_hex(8)}-01"
 
 
+#: Where a run's own code lives, relative to its workspace. `src` covers the repositories that keep their package
+#: under it -- flask and pytest on the pilot subset -- and naming a directory that does not exist costs nothing, which
+#: is why this is a constant rather than a per-repository table. The shadowing risk it raises was checked: of the
+#: leftover workspaces on the pod, `src/` holds importable names only for flask and pytest, each the repository's own
+#: package, while matplotlib's holds C++ sources.
+OWN_CODE_SUBDIRS = ("", "src")
+
+
+def python_path_export(workspace: str) -> str:
+    """`PYTHONPATH` for one run, as a shell export.
+
+    Absolute and rooted at the run's own workspace, in the order the run's own code should be found. Returns a
+    trailing `; ` so it composes with the other exports.
+    """
+    if not workspace or not workspace.startswith("/"):
+        raise ValueError(f"the workspace must be an absolute path, and {workspace!r} is not")
+    ws = workspace.rstrip("/")
+    entries = [ws if not sub else f"{ws}/{sub}" for sub in OWN_CODE_SUBDIRS]
+    return f"export PYTHONPATH={_shq(':'.join(entries))}; "
+
+
+def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, cleanup: bool) -> str:
+    """The one shell command a run is: make the workspace, set the environment, stage, work, hand back, sweep up.
+
+    `mkdir` then `cd` then exec, as one command, because the workspace must exist before the agent starts in it and
+    `kubectl exec` has no working-directory option.
+
+    Order is load-bearing in two places. The environment is exported **before** the agent starts, so every shell and
+    subprocess it spawns inherits `PYTHONPATH`. And the sweep-up comes **after** the hand-back and **before** the
+    exit, so the returned archive is complete and the status the driver sees is the agent's own rather than `rm`'s.
+    """
+    sweep_up = f" ; rm -rf {workspace}" if cleanup else ""
+    return ("mkdir -p {ws} && {env}{pre}{stage}cd {ws} && {{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
+            "exit ${{exec_rc:-0}}").format(ws=workspace, env=env, pre=pre, stage=stage, back=give_back,
+                                           sweep=sweep_up)
+
+
 def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, namespace: str,
-            timeout: int, stage_from: str | None = None, telemetry: dict | None = None) -> dict:
+            timeout: int, stage_from: str | None = None, telemetry: dict | None = None,
+            cleanup: bool = True) -> dict:
     """One agent, one task, one fresh session and workspace."""
     session = f"{agent}-{uuid.uuid4().hex[:10]}"
     trace_id, traceparent = new_traceparent()
@@ -140,7 +178,26 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
     # Telemetry is exported by the agent itself, to a collector this project runs. Nothing here computes a
     # token count or a cost: one producer of those figures, not two, or the same number is computed twice
     # and the two disagree eventually.
-    env = ""
+    # D1. The run's own checkout, ahead of anything the pod has installed. Exported before the agent starts, so
+    # every shell and subprocess it spawns inherits it -- measured on the pod: a nested `sh -c`, a `bash -lc` login
+    # shell and a Python `subprocess` all see it, and only `env -i` does not.
+    #
+    # Without this a run that invokes Python from anywhere other than the workspace root imports another run's code.
+    # `sys.path[0]` is the invoking directory, so from the root the checkout already wins; from `<ws>/<package>` --
+    # which is where the source being edited lives, and the natural place to `cd` -- it does not, and an
+    # editable-install finder left in the pod's `dist-packages` answers instead. Two recorded runs hit that, and both
+    # noticed: one compared its tree against the other's and tried to copy its fix across, the other bypassed the
+    # import system with `spec_from_file_location`.
+    #
+    # Two entries because layouts differ: `<ws>` for astropy, django and pylint, `<ws>/src` for flask. Both always,
+    # since an entry naming a directory that does not exist costs nothing and a per-repository table is a second
+    # thing to keep in step with the item set.
+    #
+    # What this does NOT fix: a compiled extension. Eleven of the twenty-four staged trees are built for a Python the
+    # pod does not run, so `PathFinder` cannot satisfy those names from the run's own tree and the finder still
+    # answers. See docs/changes/import-resolution/01-design/interpreter-mismatch.md -- the fix for that half is to
+    # give a run the interpreter its own item was built with, which is upstream of this file.
+    env = python_path_export(workspace)
     if telemetry:
         pairs = {
             "OPENCODE_ENABLE_TELEMETRY": "1",
@@ -151,9 +208,17 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
             "OPENCODE_TRACEPARENT": traceparent,
             "OPENCODE_SPAN_ATTRIBUTES": telemetry.get("span_attributes", ""),
         }
-        env = "".join(f"export {k}={_shq(v)}; " for k, v in pairs.items() if v)
-    inner = ("mkdir -p {ws} && {env}{pre}{stage}cd {ws} && {{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}; "
-             "exit ${{exec_rc:-0}}").format(ws=workspace, env=env, pre=pre, stage=stage, back=give_back)
+        env += "".join(f"export {k}={_shq(v)}; " for k, v in pairs.items() if v)
+    # D3. The workspace goes when the run is done, after the tree has been handed back. Not for the disk, though
+    # 8.9 GB of leftovers on a shared node is real: a leftover tree holds an earlier run's edits, and 15 of 23
+    # leftover astropy trees differed from the staged source -- two of them recorded workspaces for the very item a
+    # later run would be asked to fix. A workspace that no longer exists cannot be read from, imported from, or
+    # written into.
+    #
+    # After `give_back` and before `exit`, so the handed-back archive is complete and the agent's status is what the
+    # driver sees. A run killed by the exec timeout skips this and leaves its tree, which is the debugging case and
+    # the reason `--keep-workspace` exists rather than being the default.
+    inner = build_inner(workspace, env, pre, stage, give_back, cleanup)
 
     started_wall = time.time()
     t0 = time.monotonic()
@@ -272,6 +337,10 @@ def main() -> int:
                     help="override the model in agents.json. This is how a second arm is run: one element of "
                          "the candidate tuple changes and nothing else does, so the two runs are a comparison "
                          "rather than two experiments")
+    ap.add_argument("--keep-workspace", action="store_true",
+                    help="leave the run's workspace on the pod. Off by default: a leftover tree holds this run's "
+                         "edits, and a later run of the same item can read them. Use it to debug one run, not to "
+                         "measure an arm")
     ap.add_argument("--run-group",
                     help="an id for the invocation that launched this driver, written on every outcomes "
                          "row. Killing a sweep does not kill its already-launched driver, and an orphan "
@@ -358,7 +427,8 @@ def main() -> int:
                           telemetry=({"endpoint": args.otlp_endpoint,
                                       "protocol": args.otlp_protocol,
                                       "span_attributes": args.span_attributes}
-                                     if args.otlp_endpoint else None))
+                                     if args.otlp_endpoint else None),
+                          cleanup=not args.keep_workspace)
             row["iteration"] = i
             row["position"] = order.index(name)
             runs.append(row)
