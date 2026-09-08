@@ -271,6 +271,27 @@ def _edits(a: str, b: str, cap: int = 3) -> int:
 MAX_ID_EDITS = 2
 
 
+def own_workspace_refs(params_json: str, workspace: str | None) -> int:
+    """How many times one call named the run's own workspace correctly.
+
+    The denominator a review asked for. "Zero near-misses" is also what a run that never wrote an absolute path
+    produces, and those two are opposite results -- one is the fix working and the other is a run with nothing to say.
+    Separate from `audit_call` because it is a tally rather than a finding, and folding it into that return value
+    would give every consumer a dict shape it does not expect.
+    """
+    if not workspace:
+        return 0
+    try:
+        args = json.loads(params_json or "{}")
+    except json.JSONDecodeError:
+        return 0
+    n = 0
+    for v in list(args.values()):
+        if isinstance(v, str):
+            n += sum(1 for hit in OTHER_WORKSPACE.findall(v) if _inside(hit, workspace))
+    return n
+
+
 def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | None) -> str:
     """Three answers, not two, because the evidence supports three.
 
@@ -407,11 +428,14 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
     for t, row in sorted(rows.items(), key=lambda kv: kv[1].get("item_id") or ""):
         ws, ws_source = workspace_of(t, manifests, row.get("returned"))
         findings = [f for f in (audit_call(n, p, ok, e, ws, known) for n, p, ok, e in calls[t]) if f]
+        refs = sum(own_workspace_refs(p, ws) for _, p, _, _ in calls[t])
         did, why = attempted(row.get("oracle"), row.get("state"))
         per_run.append({
             "item_id": row.get("item_id"), "state": row.get("state"), "trace_id": t,
             "workspace": ws, "workspace_source": ws_source,
             "attempted": did, "attempted_note": why,
+            # The denominator: how often this run named its own workspace correctly.
+            "own_workspace_refs": refs,
             "tool_calls": len(calls[t]),
             "outside_workspace": sum(1 for f in findings if f["outside_workspace"]),
             "shell_paths_outside": sum(1 for f in findings if f["shell_paths_outside"]),
@@ -439,6 +463,8 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
         "with_outside_paths": sum(1 for r in per_run if r["outside_workspace"]),
         "with_shell_paths_outside": sum(1 for r in per_run if r["shell_paths_outside"]),
         "with_shell_fs_paths_outside": sum(1 for r in per_run if r["shell_fs_paths_outside"]),
+        "own_workspace_refs": sum(r["own_workspace_refs"] for r in per_run),
+        "runs_that_named_their_own_workspace": sum(1 for r in per_run if r["own_workspace_refs"]),
         "with_other_run_workspaces": sum(1 for r in per_run if r["other_run_workspaces"]),
         "with_mangled_own_workspace": sum(1 for r in per_run if r["mangled_own_workspace"]),
         "with_workspace_shaped_but_unknown": sum(1 for r in per_run if r["workspace_shaped_but_unknown"]),
@@ -537,6 +563,8 @@ def main() -> int:
           f"other run's workspace {res['with_other_run_workspaces']}   "
           f"own id written wrong {res['with_mangled_own_workspace']}   "
           f"workspace-shaped but unknown {res['with_workspace_shaped_but_unknown']}   "
+          f"named own ws {res['runs_that_named_their_own_workspace']}/{res['runs']} runs "
+          f"({res['own_workspace_refs']} refs)   "
           f"shell fs-arg {res['with_shell_fs_paths_outside']}   "
           f"shell parsed (reported only) {res['with_shell_paths_outside']}   network {res['with_network']}   "
           f"refused {res['with_refusals']}")

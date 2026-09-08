@@ -631,3 +631,41 @@ def test_the_tar_name_recovery_says_which_naming_scheme_it_assumes(tmp_path):
 def test_with_neither_a_manifest_nor_a_tar_the_workspace_is_unknown():
     ws, why = wa.workspace_of("t-missing", [], None)
     assert ws is None and "nothing says where" in why
+
+
+# --- the denominator: how often a run named its own workspace correctly -----------------------------
+
+
+def test_correct_self_references_are_counted():
+    """A review's point: zero near-misses is also what a run that never wrote an absolute path produces, and those two
+    are opposite results. The count tells a clean arm from a silent one."""
+    own = "/tmp/w/pydata__xarray-4695"
+    assert wa.own_workspace_refs(json.dumps({"path": f"{own}/xarray"}), own) == 1
+    assert wa.own_workspace_refs(json.dumps({"command": f"ls {own} && cat {own}/setup.py"}), own) == 2
+    assert wa.own_workspace_refs(json.dumps({"path": "/tmp/w/other-item"}), own) == 0
+    assert wa.own_workspace_refs(json.dumps({"pattern": "**/*.py"}), own) == 0
+
+
+def test_a_run_that_named_nothing_absolute_has_a_zero_denominator(tmp_path):
+    own = "/tmp/w/i1"
+    span = {"traceId": "t1", "name": "opencode.tool.glob",
+            "attributes": [{"key": "tool.name", "value": {"stringValue": "glob"}},
+                           {"key": "tool.parameters", "value": {"stringValue": json.dumps({"pattern": "**/*.py"})}},
+                           {"key": "tool.success", "value": {"boolValue": True}}]}
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "solved",
+                                    "oracle": {"files_touched": 1, "diff_bytes": 90}}) + "\n")
+    manifest = tmp_path / "runs-i1.json"
+    manifest.write_text(json.dumps({"runs": [{"trace_id": "t1", "workspace": own}]}))
+    res = wa.audit(traces, outcomes, [manifest], expect_items=1)
+    assert res["own_workspace_refs"] == 0
+    assert res["runs_that_named_their_own_workspace"] == 0
+    assert res["mechanism_pass"] is True, "silent about paths is not a mechanism failure; the count says it was silent"
+
+
+def test_a_malformed_parameter_blob_counts_nothing_rather_than_raising():
+    assert wa.own_workspace_refs("{not json", "/tmp/w/i1") == 0
+    assert wa.own_workspace_refs("", "/tmp/w/i1") == 0
+    assert wa.own_workspace_refs(json.dumps({"path": "/tmp/w/i1"}), None) == 0
