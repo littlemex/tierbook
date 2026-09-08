@@ -149,3 +149,16 @@ falls on runs that do not, so item 1 imported a leftover from a previous arm and
 three astropy items in one arm are therefore **order-dependent, not independent trials**, and the same holds for
 django, pylint and flask. That is uncontrolled in every arm recorded so far and it is the reason this change comes
 before any further arm is measured.
+
+**2026-09-08, an interaction between D3 and this contract's own verification.** D3 removes a run's workspace when the
+run ends, so the live check in clause 1 -- "what does `import <pkg>` resolve to inside a run's environment" -- cannot
+be run after the fact: there is nothing left to probe. Two consequences, both handled rather than discovered later.
+
+The probe is taken on a run started with `--keep-workspace`, which exists for exactly this and is off by default. That
+run is not part of any arm, because a run whose tree survives is a run that can contaminate the next one -- which is
+the reason D3 exists.
+
+And the deterministic replay in clause 1 becomes the primary evidence rather than a supplement, since it stages its
+own workspace and does not depend on a run having left one behind. `harness/import_replay.py` takes `--workspace` and
+`--cwd` for that reason, and defaults the cwd to the directory the two affected runs actually used rather than the
+workspace root, where `sys.path[0]` already shadows the finder and the defect is invisible.

@@ -1,0 +1,28 @@
+{
+ "workspace": "/tmp/w/astropy__astropy-14369",
+ "cwd": "/tmp/w/astropy__astropy-14369/astropy",
+ "env": {
+  "PYTHONPATH": "/tmp/w/astropy__astropy-14369:/tmp/w/astropy__astropy-14369/src"
+ },
+ "verdicts": {
+  "astropy": {
+   "origin": "/tmp/w/astropy__astropy-14369/astropy/__init__.py",
+   "error": null,
+   "compiled": false,
+   "verdict": "local"
+  },
+  "astropy.convolution._convolve": {
+   "origin": "/tmp/run-opencode-acf4781c5e/astropy/convolution/_convolve.cpython-311-x86_64-linux-gnu.so",
+   "error": null,
+   "compiled": true,
+   "verdict": "elsewhere"
+  },
+  "astropy.io.ascii.qdp": {
+   "origin": "/tmp/w/astropy__astropy-14369/astropy/io/ascii/qdp.py",
+   "error": null,
+   "compiled": false,
+   "verdict": "local"
+  }
+ },
+ "imports_local": false
+}
