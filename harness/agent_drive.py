@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -116,23 +117,55 @@ OWN_CODE_SUBDIRS = ("", "src")
 #: item id would then name `/tmp` itself, and `rm -rf /tmp` on a shared pod takes every other run's tree with it.
 WORKSPACE_ROOT = "/tmp/w"
 
+#: The status a run exits with when setup failed before the agent started. Distinct from any agent status so the two
+#: can never be confused: a run whose workspace was never staged looks, in an outcome, exactly like an agent that ran
+#: and edited nothing -- and that is the signature this whole line of work was chasing.
+SETUP_FAILED = 91
+
+
+def workspace_name(tag: str) -> str:
+    """The directory component: the repository the task already names, and a small number.
+
+    Low entropy so a model can reproduce it, and **not identifying** so it cannot be used to look the answer up.
+    Naming the workspace after the full instance id did both halves of that wrong: it was reproducible, and it handed
+    one agent its own answer. `astropy__astropy-14369` read `14369` off its path, inferred the upstream pull request,
+    and downloaded the merged diff -- 14,013 bytes, successfully -- and that run solved. It is the only run in four
+    arms that fetched its own instance id, and it could only do it because the id was there.
+
+    So: the repository the prompt states anyway, and **nothing else**. `/tmp/w/astropy` names no upstream artifact and
+    is shorter than either scheme it replaces.
+
+    The instance number is discarded rather than shortened, because any digits of it are a search key.
+
+    **There is deliberately no suffix distinguishing one astropy item from the next**, and an earlier draft had one
+    before noticing it could not work: the driver runs as a fresh process per item, so a per-process sequence gave
+    every item `astropy-1` anyway, and a sequence derived from the instance id would put the id back in the path in a
+    recoverable form. Two runs of the same repository therefore share a directory, which is safe for the same reason
+    reusing an item's directory is safe -- the workspace is removed before anything is staged into it, and the run
+    refuses to start if a live process is working there. What it costs is that the name no longer says which item a
+    leftover belonged to; the manifests carry that.
+
+    This does not make retrieval impossible: an agent can still search for the issue text, which one did in a
+    baseline. It removes the direct handoff.
+    """
+    tag = (tag or "").strip()
+    if not tag:
+        raise ValueError("a run needs an item id to name its workspace after")
+    # `pydata__xarray-4695` -> `xarray`.
+    left = tag.split("__", 1)[-1]
+    repo = left.rsplit("-", 1)[0] if "-" in left else left
+    return re.sub(r"[^A-Za-z0-9]+", "-", repo).strip("-").lower() or "repo"
+
 
 def workspace_for(tag: str, template: str | None = None) -> str:
-    """A run's workspace, named after its item.
+    """A run's workspace: low entropy to reproduce, and naming no upstream artifact.
 
-    Named after the item because a model has to reproduce this string from its prompt on every call, and six runs
-    across three arms failed to reproduce the ten-character random id it replaces -- one of them with the absolute
-    path written in its prompt. `/tmp/w/pydata__xarray-4695` is shorter and every character of it is derivable from
-    the task.
-
-    What this gives up: the name identifies an item, not a run, so two concurrent runs of one item would collide.
-    Runs are sequential today and this does not make them safe to parallelise.
+    What this gives up: the name identifies a repository and a position, not a run, so two concurrent runs of one item
+    would collide. Runs are sequential today and this does not make them safe to parallelise.
     """
     if template:
         return guard_workspace(template.format(tag=tag))
-    if not tag or not tag.strip():
-        raise ValueError("a run needs an item id to name its workspace after")
-    return guard_workspace(f"{WORKSPACE_ROOT}/{tag.strip()}")
+    return guard_workspace(f"{WORKSPACE_ROOT}/{workspace_name(tag)}")
 
 
 def guard_workspace(path: str) -> str:
@@ -197,10 +230,52 @@ def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, 
     # W2. Fresh, not merely present. With a deterministic name a leftover from an earlier run of the SAME item would
     # otherwise be inherited, which is worse than a random name -- and `tar x` over an existing tree keeps whatever
     # the archive does not overwrite. `guard_workspace` has already refused anything this must not remove.
-    return ("rm -rf {ws} && mkdir -p {ws} && {env}{pre}{stage}cd {ws} && "
-            "{{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
-            "exit ${{exec_rc:-0}}").format(ws=quoted, env=env, pre=pre, stage=stage,
-                                           back=give_back, sweep=sweep_up)
+    # Setup is one chain that cannot be broken by a stray separator, and a setup failure exits with its OWN status.
+    #
+    # Both reviewers landed on the same defect from opposite directions. The environment string ends in `; `, which
+    # TERMINATED the `&&` chain: a failed `rm -rf` -- which happens when a previous run left a directory it had made
+    # unwritable, something agents do while testing permission bugs -- skipped `mkdir` and the exports and then
+    # staged over the stale tree anyway, ran the agent with no PYTHONPATH, handed back a contaminated archive, and
+    # exited with the agent's status. The clause called "the one that makes W1 safe" was a no-op in the only
+    # condition that triggers it.
+    #
+    # And `exit ${exec_rc:-0}` returned **0** whenever the agent never started, because `exec_rc` is assigned inside
+    # the braces. A staging failure was therefore recorded as an agent that ran and did nothing -- which is exactly
+    # the signature the whole workspace-binding investigation was chasing, so it must not be able to hide there.
+    #
+    # `SETUP_FAILED` is a distinct status the driver recognises, rather than a non-zero code that would read as the
+    # agent failing.
+    # The root itself, checked in the shell because the guard above is lexical and this is not. Two reviews made the
+    # same point: `guard_workspace` compares strings and never looks at the filesystem, so if a previous run left
+    # `/tmp/w` as a symlink -- every run executes arbitrary agent-chosen code as the same user on a shared pod -- then
+    # `rm -rf /tmp/w/<item>` resolves through it and deletes outside the root the guard exists to protect. `rm -rf` on
+    # a FINAL-component symlink removes the link, which is safe; an intermediate one is the dangerous case.
+    root = _shq(WORKSPACE_ROOT)
+    # Nobody else is working here. Two reviews raised the same risk and it is one this change CREATED: a `kubectl exec`
+    # timeout does not reliably kill the remote process tree, so an orphan from an earlier run can still be alive. With
+    # random names that orphan was harmless -- it held a directory nothing would reuse. With a name derived from the
+    # item, the next run of that item takes its tree away mid-write, or the orphan writes into the freshly staged one.
+    #
+    # "Runs are sequential" is true of the driver and not of the pod, so it is checked rather than asserted. `/proc`
+    # rather than `fuser` or `lsof`, neither of which the image has. This runs BEFORE `cd`, so the run's own shell
+    # cannot match itself.
+    # The pattern matches the workspace itself or anything BELOW it, not anything that merely starts with its name:
+    # a bare `<ws>*` would also match `/tmp/w/astropy-scratch`, which is a different directory.
+    #
+    # Verified on the pod rather than in the test suite, because the tests for this skip on macOS -- there is no
+    # `/proc` to read. Four cases on Linux: nobody -> FREE, a process in `astropy-scratch` -> FREE, one in
+    # `astropy/units` -> BUSY, one in `astropy` -> BUSY.
+    q = _shq(workspace)
+    busy = ("for d in /proc/[0-9]*; do case \"$(readlink $d/cwd 2>/dev/null)\" in {q}|{q}/*) "
+            "echo \"[FATAL] another process is working in {ws_plain}\" >&2; exit {setup_rc};; esac; done").format(
+                q=q, ws_plain=workspace, setup_rc=SETUP_FAILED)
+    return ("{busy}; "
+            "{{ ! test -L {root} && mkdir -p {root} && "
+            "rm -rf {ws} && mkdir -p {ws} && {pre}{stage}cd {ws} ; }} || "
+            "{{ echo '[FATAL] setup failed before the agent started' >&2; exit {setup_rc}; }}; "
+            "{env}{{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
+            "exit ${{exec_rc:-0}}").format(ws=quoted, root=root, busy=busy, env=env, pre=pre, stage=stage,
+                                           back=give_back, sweep=sweep_up, setup_rc=SETUP_FAILED)
 
 
 def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, namespace: str,
@@ -323,6 +398,8 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
         "ended_wall": ended_wall,
         "wall_s": round(time.monotonic() - t0, 2),
         "returncode": rc,
+        # Named rather than left as a number, because the number would be read as the agent failing.
+        "setup_failed": rc == SETUP_FAILED,
         "timed_out": timed_out,
         # Truncated: the agent's transcript is not the measurement and a full one would bury the
         # manifest. Enough to see what it answered and whether it errored.

@@ -124,7 +124,7 @@ def test_the_export_composes_before_the_telemetry_exports():
 # --- D3: the workspace goes when the run is done ---------------------------------------------------
 
 
-WS_T = "/tmp/w/pydata__xarray-4695"
+WS_T = "/tmp/w/xarray"
 BACK = f" ; mkdir -p /work/returned && tar cf /work/returned/x.tar -C {WS_T} ."
 
 
@@ -148,7 +148,7 @@ def test_nothing_is_removed_at_the_END_when_cleanup_is_off():
     inherited, and `--keep-workspace` is for reading one run's tree afterwards, not for starting from a dirty one."""
     inner = ad.build_inner(WS_T, "", "", "", BACK, False)
     assert inner.count("rm -rf") == 1
-    assert inner.index("rm -rf") < inner.index("mkdir -p")
+    assert inner.index("rm -rf") < inner.index(f"mkdir -p {ad._shq(WS_T)}")
     assert inner.rindex("rm -rf") < inner.index("tar cf"), "no sweep-up after the hand-back"
     assert "tar cf" in inner
 
@@ -169,19 +169,43 @@ def test_a_run_with_no_staged_tree_neither_hands_back_nor_keeps_its_workspace():
     assert "tar cf" not in inner and "rm -rf" in inner
 
 
-def test_the_pre_commands_run_before_the_agent_and_after_the_environment():
+def test_the_pre_commands_run_inside_the_guarded_setup_and_the_exports_after_it():
+    """The order changed when setup became one guarded chain: `pre` is now inside it, so a failed configuration step
+    is a setup failure rather than a run of a candidate that was never configured. The exports moved out because they
+    cannot fail, and putting them in the chain was what broke it -- the string ends in `; `."""
     inner = ad.build_inner(WS_T, ad.python_path_export(WS_T), "setup >/dev/null 2>&1 && ", "", "", True)
-    assert inner.index("export PYTHONPATH") < inner.index("setup") < inner.index('"$@"')
+    # `exit 91` appears twice: the busy-workspace check comes first, then the setup guard. This is about the second.
+    assert inner.index("setup >") < inner.rindex("exit 91") < inner.index("export PYTHONPATH") < inner.index('"$@"')
 
 
 # --- W1/W3: a workspace name a model does not have to memorise --------------------------------------
 
 
-def test_the_workspace_is_named_after_the_item():
-    """Six runs across three arms failed to reproduce the ten-character random id this replaces, one of them with the
-    absolute path written in its prompt. Every character of this name is derivable from the task."""
-    assert ad.workspace_for("pydata__xarray-4695") == "/tmp/w/pydata__xarray-4695"
-    assert ad.workspace_for("matplotlib__matplotlib-26208") == "/tmp/w/matplotlib__matplotlib-26208"
+def test_the_workspace_is_named_after_the_repository_and_nothing_else():
+    """Low entropy so a model can reproduce it -- six runs across three arms failed to reproduce the ten-character
+    random id this replaces, one with the absolute path written in its prompt -- and NOT identifying, because naming it
+    after the full instance id handed one agent its own answer."""
+    assert ad.workspace_for("pydata__xarray-4695") == "/tmp/w/xarray"
+    assert ad.workspace_for("matplotlib__matplotlib-26208") == "/tmp/w/matplotlib"
+    assert ad.workspace_for("scikit-learn__scikit-learn-15100") == "/tmp/w/scikit-learn"
+    assert ad.workspace_for("pallets__flask-5014") == "/tmp/w/flask"
+
+
+def test_the_instance_number_never_appears_in_the_path():
+    """The whole point. `astropy__astropy-14369` read 14369 off its path, inferred the upstream pull request, and
+    downloaded the merged diff -- 14,013 bytes, successfully -- and that run solved."""
+    for tag in ("astropy__astropy-14369", "pydata__xarray-4695", "django__django-11880"):
+        ws = ad.workspace_for(tag)
+        digits = tag.rsplit("-", 1)[-1]
+        assert digits not in ws, (tag, ws)
+        assert not any(c.isdigit() for c in ws.rsplit("/", 1)[-1]), ws
+
+
+def test_two_items_from_one_repository_share_a_directory_deliberately():
+    """A per-process sequence cannot distinguish them -- the driver is a fresh process per item -- and a sequence
+    derived from the instance id would put the id back in the path recoverably. Sharing is safe because the workspace
+    is removed before anything is staged and the run refuses to start if a live process is working there."""
+    assert ad.workspace_for("astropy__astropy-14365") == ad.workspace_for("astropy__astropy-14369")
 
 
 def test_a_run_without_an_item_id_is_refused_rather_than_naming_the_root():
@@ -226,7 +250,9 @@ def test_the_workspace_is_removed_before_it_is_made():
     """With a deterministic name, inheriting a leftover from an earlier run of the same item is worse than a random
     name would have been, and `tar x` over an existing tree keeps what the archive does not overwrite."""
     inner = ad.build_inner("/tmp/w/i1", "", "", "tar xf /work/x.tar -C /tmp/w/i1 && ", "", True)
-    assert inner.index("rm -rf") < inner.index("mkdir -p") < inner.index("tar xf")
+    # `mkdir -p` appears twice: the root, which is checked for being a symlink first, then the workspace. This test is
+    # about the second, so it is named rather than found by position.
+    assert inner.index("rm -rf") < inner.index("mkdir -p '/tmp/w/i1'") < inner.index("tar xf")
 
 
 def test_the_assembled_command_refuses_a_workspace_the_guard_rejects():
@@ -257,9 +283,10 @@ def test_a_name_the_shell_would_split_is_refused():
 
 def test_real_instance_ids_are_accepted():
     """The assumption the refusal above documents: SWE-bench ids are word characters, dashes and underscores."""
-    for ok in ("pydata__xarray-4695", "matplotlib__matplotlib-26208", "scikit-learn__scikit-learn-15100",
-               "pylint-dev__pylint-4551", "psf__requests-1142"):
-        assert ad.workspace_for(ok) == f"/tmp/w/{ok}"
+    for ok, repo in (("pydata__xarray-4695", "xarray"), ("matplotlib__matplotlib-26208", "matplotlib"),
+                     ("scikit-learn__scikit-learn-15100", "scikit-learn"), ("pylint-dev__pylint-4551", "pylint"),
+                     ("psf__requests-1142", "requests")):
+        assert ad.workspace_for(ok) == f"/tmp/w/{repo}"
 
 
 def test_the_workspace_is_quoted_wherever_it_reaches_the_shell():
@@ -287,3 +314,250 @@ def test_removing_a_symlinked_workspace_removes_the_link_not_its_target():
     """Recorded rather than tested against a filesystem: `rm -rf` on a symlink removes the link. A workspace that is
     a symlink is therefore not a route out of the root, unlike a `..` component."""
     assert ad.guard_workspace("/tmp/w/link") == "/tmp/w/link"
+
+
+# --- the assembled command, actually executed -------------------------------------------------------
+#
+# String inspection said the ordering was right while the chain was silently broken by the `; ` at the end of the
+# environment exports: a failed opening `rm -rf` skipped `mkdir` and the exports and staged over the stale tree
+# anyway, then exited with the agent's status. Both reviewers found it and neither could have found it from a test
+# that only read the string. These run it.
+
+
+import os
+import subprocess
+
+
+def _run(inner, agent_argv, *, cwd):
+    """`sh -c inner sh <agent argv>`, which is how kubectl exec invokes it."""
+    return subprocess.run(["sh", "-c", inner, "sh", *agent_argv], capture_output=True, text=True, cwd=cwd)
+
+
+def _root(monkeypatch, tmp_path):
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    return root
+
+
+def test_a_normal_run_stages_works_hands_back_and_sweeps_up(monkeypatch, tmp_path):
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("pydata__xarray-4695")
+    src = tmp_path / "staged"
+    (src / "xarray").mkdir(parents=True)
+    (src / "xarray" / "core.py").write_text("original\n")
+    tar = tmp_path / "staged.tar"
+    subprocess.run(["tar", "cf", str(tar), "-C", str(src), "."], check=True)
+    back_dir = tmp_path / "returned"
+    back_dir.mkdir()
+    ret = back_dir / "run.tar"
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "",
+                           f"tar xf {tar} --no-same-owner -C {ws} && ",
+                           f" ; tar cf {ret} -C {ws} .", True)
+    p = _run(inner, ["sh", "-c", "test -f xarray/core.py && echo edited > xarray/core.py"], cwd=tmp_path)
+    assert p.returncode == 0, p.stderr
+    assert not os.path.exists(ws), "swept up"
+    assert ret.exists(), "handed back"
+    listing = subprocess.run(["tar", "tf", str(ret)], capture_output=True, text=True).stdout
+    assert "./xarray/core.py" in listing
+
+
+def test_the_agents_own_status_is_what_the_driver_sees(monkeypatch, tmp_path):
+    _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    assert _run(inner, ["sh", "-c", "exit 7"], cwd=tmp_path).returncode == 7
+    assert _run(inner, ["sh", "-c", "exit 0"], cwd=tmp_path).returncode == 0
+
+
+def test_a_setup_failure_exits_with_its_own_status_and_never_runs_the_agent(monkeypatch, tmp_path):
+    """The defect both reviewers found. A previous run left a directory it had made unwritable -- something agents do
+    while testing permission bugs -- so `rm -rf` fails. It used to skip mkdir and the exports, stage over the stale
+    tree, run the agent, and exit 0."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    stale = Path(ws) / "sub"
+    stale.mkdir(parents=True)
+    (stale / "leftover.py").write_text("from an earlier run\n")
+    os.chmod(stale, 0o500)             # unwritable: its child cannot be unlinked
+    marker = tmp_path / "agent-ran"
+    try:
+        inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+        p = _run(inner, ["sh", "-c", f"touch {marker}"], cwd=tmp_path)
+        assert p.returncode == ad.SETUP_FAILED, (p.returncode, p.stderr)
+        assert "setup failed" in p.stderr
+        assert not marker.exists(), "the agent must not have run"
+    finally:
+        os.chmod(stale, 0o700)
+
+
+def test_a_setup_failure_does_not_stage_over_the_stale_tree(monkeypatch, tmp_path):
+    """The contamination the freshness clause exists to prevent, and the case where it used to happen."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    stale = Path(ws) / "sub"
+    stale.mkdir(parents=True)
+    (stale / "leftover.py").write_text("from an earlier run\n")
+    os.chmod(stale, 0o500)
+    src = tmp_path / "staged"
+    src.mkdir()
+    (src / "fresh.py").write_text("staged\n")
+    tar = tmp_path / "staged.tar"
+    subprocess.run(["tar", "cf", str(tar), "-C", str(src), "."], check=True)
+    try:
+        inner = ad.build_inner(ws, ad.python_path_export(ws), "",
+                              f"tar xf {tar} --no-same-owner -C {ws} && ", "", True)
+        p = _run(inner, ["sh", "-c", "true"], cwd=tmp_path)
+        assert p.returncode == ad.SETUP_FAILED
+        assert not (Path(ws) / "fresh.py").exists(), "nothing was staged over the stale tree"
+        assert (stale / "leftover.py").exists(), "and the stale tree is left for someone to look at"
+    finally:
+        os.chmod(stale, 0o700)
+
+
+def test_a_stray_file_from_an_earlier_run_of_the_same_item_is_gone(monkeypatch, tmp_path):
+    """Clause 3 of the contract, executed rather than asserted about a string."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    Path(ws).mkdir(parents=True)
+    (Path(ws) / "stray.py").write_text("from an earlier run\n")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    p = _run(inner, ["sh", "-c", "test -e stray.py && exit 3 || exit 0"], cwd=tmp_path)
+    assert p.returncode == 0, "the agent must not have seen the stray file"
+
+
+def test_a_failed_hand_back_keeps_the_tree(monkeypatch, tmp_path):
+    """The only copy of what the run did must not be deleted because the archive could not be written."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    ret = tmp_path / "no-such-dir" / "run.tar"        # the directory does not exist, so `tar cf` fails
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", f" ; tar cf {ret} -C {ws} .", True)
+    p = _run(inner, ["sh", "-c", "echo work > done.txt"], cwd=tmp_path)
+    assert p.returncode == 0, "the agent's status, not tar's"
+    assert (Path(ws) / "done.txt").exists(), "the tree survived a failed hand-back"
+
+
+def test_pythonpath_reaches_the_agent_and_names_the_runs_own_workspace(monkeypatch, tmp_path):
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    p = _run(inner, ["sh", "-c", 'printf "%s" "$PYTHONPATH"'], cwd=tmp_path)
+    assert p.stdout == f"{ws}:{ws}/src", p.stdout
+
+
+def test_a_failing_pre_command_is_a_setup_failure_too(monkeypatch, tmp_path):
+    """`pre` configures an agent that cannot be told where to work. A run whose configuration step failed is not a
+    run of the candidate it claims to be."""
+    root = _root(monkeypatch, tmp_path)
+    ws = ad.workspace_for("i1")
+    marker = tmp_path / "agent-ran"
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "false >/dev/null 2>&1 && ", "", "", True)
+    p = _run(inner, ["sh", "-c", f"touch {marker}"], cwd=tmp_path)
+    assert p.returncode == ad.SETUP_FAILED
+    assert not marker.exists()
+
+
+def test_a_symlinked_root_is_a_setup_failure(monkeypatch, tmp_path):
+    """The guard is lexical and this is not. Two reviews made the same point: if a previous run left the root a
+    symlink -- every run executes arbitrary agent-chosen code as the same user on a shared pod -- then `rm -rf` under
+    it resolves through the link and deletes outside the directory the guard exists to protect."""
+    root = tmp_path / "w"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "precious.txt").write_text("someone else's data\n")
+    root.symlink_to(elsewhere)
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("i1")
+    marker = tmp_path / "agent-ran"
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    p = _run(inner, ["sh", "-c", f"touch {marker}"], cwd=tmp_path)
+    assert p.returncode == ad.SETUP_FAILED, (p.returncode, p.stderr)
+    assert not marker.exists()
+    assert (elsewhere / "precious.txt").exists(), "nothing outside the root was touched"
+
+
+def test_a_real_root_is_created_when_absent(monkeypatch, tmp_path):
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    assert _run(inner, ["sh", "-c", "true"], cwd=tmp_path).returncode == 0
+    assert root.is_dir() and not root.is_symlink()
+
+
+def test_a_live_process_working_in_the_workspace_stops_the_run(monkeypatch, tmp_path):
+    """A risk this change CREATED. A kubectl exec timeout does not reliably kill the remote process tree, so an orphan
+    from an earlier run can still be alive -- and with a name derived from the item, the next run of that item takes its
+    tree away mid-write. With random names the orphan held a directory nothing would reuse."""
+    if not Path("/proc/self/cwd").exists():
+        pytest.skip("this check reads /proc, which this platform does not have")
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = Path(ad.workspace_for("i1"))
+    ws.mkdir(parents=True)
+    (ws / "orphan-was-writing.txt").write_text("mid-write\n")
+    holder = subprocess.Popen(["sh", "-c", "sleep 30"], cwd=str(ws))
+    try:
+        inner = ad.build_inner(str(ws), ad.python_path_export(str(ws)), "", "", "", True)
+        p = _run(inner, ["sh", "-c", "true"], cwd=str(tmp_path))
+        assert p.returncode == ad.SETUP_FAILED, (p.returncode, p.stdout, p.stderr)
+        assert "another process is working" in p.stderr
+        assert (ws / "orphan-was-writing.txt").exists(), "the orphan's tree was not taken away"
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_an_empty_workspace_with_nobody_in_it_starts_normally(monkeypatch, tmp_path):
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    assert _run(inner, ["sh", "-c", "true"], cwd=str(tmp_path)).returncode == 0
+
+
+def test_the_runs_own_shell_does_not_match_itself(monkeypatch, tmp_path):
+    """The check runs before `cd`, so the shell executing it is not yet in the workspace."""
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    assert inner.index("readlink") < inner.index("cd '")
+    p = _run(inner, ["sh", "-c", "pwd"], cwd=str(tmp_path))
+    assert p.returncode == 0 and p.stdout.strip().endswith("/w/i1")
+
+
+def test_the_busy_check_matches_a_directory_boundary_not_a_name_prefix(monkeypatch, tmp_path):
+    """A bare `<ws>*` would also match `/tmp/w/astropy-scratch`, which is a different directory. With repo-only names
+    the workspace is short, so a prefix match has more neighbours to hit."""
+    if not Path("/proc/self/cwd").exists():
+        pytest.skip("this check reads /proc, which this platform does not have")
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("astropy__astropy-14369")
+    neighbour = Path(str(ws) + "-scratch")
+    neighbour.mkdir(parents=True)
+    holder = subprocess.Popen(["sh", "-c", "sleep 20"], cwd=str(neighbour))
+    try:
+        inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+        p = _run(inner, ["sh", "-c", "true"], cwd=str(tmp_path))
+        assert p.returncode == 0, (p.returncode, p.stderr)
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_a_process_below_the_workspace_still_stops_the_run(monkeypatch, tmp_path):
+    if not Path("/proc/self/cwd").exists():
+        pytest.skip("this check reads /proc, which this platform does not have")
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = Path(ad.workspace_for("astropy__astropy-14369"))
+    deep = ws / "astropy" / "units"
+    deep.mkdir(parents=True)
+    holder = subprocess.Popen(["sh", "-c", "sleep 20"], cwd=str(deep))
+    try:
+        inner = ad.build_inner(str(ws), ad.python_path_export(str(ws)), "", "", "", True)
+        assert _run(inner, ["sh", "-c", "true"], cwd=str(tmp_path)).returncode == ad.SETUP_FAILED
+    finally:
+        holder.kill()
+        holder.wait()
