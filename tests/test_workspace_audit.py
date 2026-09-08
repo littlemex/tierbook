@@ -732,3 +732,48 @@ def test_the_item_set_comes_from_the_cohort_itself(tmp_path):
     hit = [r for r in res["per_run"] if r["item_id"] == "astropy__astropy-14365"][0]
     assert hit["other_run_workspaces"] == 1
     assert hit["mangled_own_workspace"] == 0
+
+
+# --- which naming scheme the cohort used, because the rule reads differently under each ---------------
+
+
+def _cohort(tmp_path, workspaces):
+    """One run per workspace, all clean, so only the scheme is under test."""
+    spans, rows, runs = [], [], []
+    for i, ws in enumerate(workspaces):
+        t = f"t{i}"
+        spans.append({"traceId": t, "name": "opencode.tool.read",
+                      "attributes": [{"key": "tool.name", "value": {"stringValue": "read"}},
+                                     {"key": "tool.parameters",
+                                      "value": {"stringValue": json.dumps({"filePath": f"{ws}/a.py"})}},
+                                     {"key": "tool.success", "value": {"boolValue": True}}]})
+        rows.append({"trace_id": t, "item_id": f"i{i}", "state": "solved",
+                     "oracle": {"files_touched": 1, "diff_bytes": 9}})
+        runs.append({"trace_id": t, "workspace": ws})
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    man = tmp_path / "runs-x.json"
+    man.write_text(json.dumps({"runs": runs}))
+    return wa.audit(traces, outcomes, [man])
+
+
+def test_the_naming_scheme_is_reported_so_a_cross_scheme_comparison_is_visible(tmp_path):
+    """A review's point: the near-miss rule reads differently under each scheme, so a column compared across schemes
+    is not one metric measured twice. The reader should not have to infer it from the paths."""
+    assert _cohort(tmp_path, ["/tmp/run-opencode-0ae4d3229d"])["naming_scheme"] == "session-named"
+    assert _cohort(tmp_path, ["/tmp/w/pydata__xarray-4695"])["naming_scheme"] == "item-named"
+
+
+def test_a_cohort_with_both_schemes_says_so_rather_than_picking_one(tmp_path):
+    got = _cohort(tmp_path, ["/tmp/run-opencode-0ae4d3229d", "/tmp/w/pydata__xarray-4695"])
+    assert got["naming_scheme"] == "mixed:item-named,session-named"
+
+
+def test_a_cohort_whose_workspaces_are_unknown_reports_unknown(tmp_path):
+    traces = tmp_path / "t.jsonl"
+    traces.write_text("")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "solved"}) + "\n")
+    assert wa.audit(traces, outcomes, [])["naming_scheme"] == "unknown"

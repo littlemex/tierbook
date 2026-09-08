@@ -423,6 +423,14 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
                     calls[t].append((a.get("tool.name"), a.get("tool.parameters"),
                                      a.get("tool.success"), a.get("tool.error")))
 
+    # Which naming scheme this cohort used. Reported because the near-miss rule reads differently under each, so a
+    # column compared across schemes is not one metric measured twice -- a review's point, and the reason this is a
+    # field rather than something a reader has to infer from the paths.
+    #
+    # `session-named` is `/tmp/run-<agent>-<10 random hex>`, where any id within two edits of the run's own was
+    # almost certainly a mistranscription. `item-named` is `/tmp/w/<instance-id>`, where an id that close is often a
+    # real sibling item -- which is now discriminated by the item set, but the false-negative profile still differs.
+
     # Every workspace the driver ever created, so a shape-matching path that is not among them can be told apart
     # from one that is: the first is an id the agent wrote wrong, the second is a directory belonging to another run.
     known = set()
@@ -439,9 +447,12 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
     # name. Read from the outcomes rather than configured, because the outcomes are the cohort by definition.
     items = {r.get("item_id") for r in rows.values() if r.get("item_id")}
 
+    schemes = set()
     per_run = []
     for t, row in sorted(rows.items(), key=lambda kv: kv[1].get("item_id") or ""):
         ws, ws_source = workspace_of(t, manifests, row.get("returned"))
+        if ws:
+            schemes.add("item-named" if ws.startswith("/tmp/w/") else "session-named")
         findings = [f for f in (audit_call(n, p, ok, e, ws, known, items) for n, p, ok, e in calls[t]) if f]
         refs = sum(own_workspace_refs(p, ws) for _, p, _, _ in calls[t])
         did, why = attempted(row.get("oracle"), row.get("state"))
@@ -478,6 +489,8 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
         "with_outside_paths": sum(1 for r in per_run if r["outside_workspace"]),
         "with_shell_paths_outside": sum(1 for r in per_run if r["shell_paths_outside"]),
         "with_shell_fs_paths_outside": sum(1 for r in per_run if r["shell_fs_paths_outside"]),
+        "naming_scheme": (sorted(schemes)[0] if len(schemes) == 1 else
+                          ("mixed:" + ",".join(sorted(schemes)) if schemes else "unknown")),
         "own_workspace_refs": sum(r["own_workspace_refs"] for r in per_run),
         "runs_that_named_their_own_workspace": sum(1 for r in per_run if r["own_workspace_refs"]),
         "with_other_run_workspaces": sum(1 for r in per_run if r["other_run_workspaces"]),
@@ -574,7 +587,7 @@ def main() -> int:
     manifests = sorted(Path(a.manifests).glob("runs-*.json")) if a.manifests else []
     res = audit(Path(a.traces), Path(a.outcomes), manifests, a.expect_items)
 
-    print(f"{res['runs']} runs   clean {res['clean']}   out-of-workspace {res['with_outside_paths']}   "
+    print(f"[{res['naming_scheme']}] {res['runs']} runs   clean {res['clean']}   out-of-workspace {res['with_outside_paths']}   "
           f"other run's workspace {res['with_other_run_workspaces']}   "
           f"own id written wrong {res['with_mangled_own_workspace']}   "
           f"workspace-shaped but unknown {res['with_workspace_shaped_but_unknown']}   "

@@ -11,7 +11,9 @@ Three things, in this order, and the first can stop the other two:
    exactly like an agent that did nothing. Items the scorer reports as unscoreable are named and taken out of the
    denominator instead -- they are constant across arms and cannot flatter one.
 2. **Did every run stay in its own workspace?** From the telemetry, with the count of correct self-references beside
-   the errors, because "zero errors" and "never wrote an absolute path" are the same number otherwise.
+   the errors, because "zero errors" and "never wrote an absolute path" are the same number otherwise. The naming
+   scheme is printed too: the near-miss rule reads differently under each, so comparing that column across schemes is
+   not one metric measured twice, and the reader should not have to infer which they are looking at.
 3. **What did it solve**, over the scoreable items only, with the zero-edit count beside it -- which is where the
    effect of the last change actually showed, while the paired discordance table was structurally blind to it.
 
@@ -89,6 +91,7 @@ def main() -> int:
     if a.expect_items:
         audit_argv += ["--expect-items", str(a.expect_items)]
     audit = run_json(audit_argv, out / "workspace-audit.json")
+    print(f"    naming scheme: {audit['naming_scheme']}")
     print(f"    clean {audit['clean']}/{audit['runs']}   "
           f"named own ws {audit['runs_that_named_their_own_workspace']}/{audit['runs']} "
           f"({audit['own_workspace_refs']} refs)   "
