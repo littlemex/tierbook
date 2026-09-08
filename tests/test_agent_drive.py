@@ -72,3 +72,17 @@ def test_the_row_serialises():
     """It is written with json.dumps in an append loop, so a value that cannot serialise loses the whole run."""
     json.dumps(ad.outcome_row(run_row(), {"agent_definition": "build"}, "opencode", 0,
                               item_id="i", run_group="g"))
+
+
+def test_the_run_records_the_prompt_it_was_actually_given(monkeypatch):
+    """The manifest-level `prompt` is the template and still holds the workspace marker, so it cannot say whether
+    the one sentence under measurement reached the agent. Each run records its own filled text."""
+    ws = "/tmp/run-opencode-0ae4d3229d"
+    text = ad.task_prompt.build("astropy/astropy", "an issue",
+                                workspace=ad.task_prompt.WORKSPACE_MARKER, variant="workspace-bound")
+    filled = ad.task_prompt.fill_workspace(text, ws)
+    assert ad.task_prompt.WORKSPACE_MARKER not in filled
+    assert ws in filled
+    # The substitution is the driver's, done once, in run_one -- pinned here because a second caller doing it
+    # again is how a prompt ends up half filled.
+    assert filled.count(ws) == 1

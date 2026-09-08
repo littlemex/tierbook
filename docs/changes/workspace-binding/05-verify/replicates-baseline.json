@@ -1,0 +1,40 @@
+{
+ "replicates": 2,
+ "items_in_every_run": 21,
+ "excluded_partial": [
+  "mwaskom__seaborn-3187",
+  "pytest-dev__pytest-8399"
+ ],
+ "solved_per_run": [
+  10,
+  8
+ ],
+ "spread": 2,
+ "stdev": 1.414,
+ "stable_solved": 8,
+ "stable_unsolved": 11,
+ "flipped": [
+  {
+   "item_id": "astropy__astropy-14369",
+   "solved_in": 1,
+   "of": 2
+  },
+  {
+   "item_id": "scikit-learn__scikit-learn-15100",
+   "solved_in": 1,
+   "of": 2
+  }
+ ],
+ "reading": "2 of 21 items changed answer between runs of the same candidate, and the count moved by 2. Those items cannot carry a comparison: a difference between arms that rests on them is a difference between two draws of one candidate.",
+ "not_a_substitute": "this measures run-to-run movement on a FIXED item set. Item-sampling noise is separate and larger at these sizes, and the two add",
+ "unobserved_per_run": [
+  [
+   "pydata__xarray-4695",
+   "pytest-dev__pytest-8399"
+  ],
+  [
+   "pydata__xarray-4695",
+   "mwaskom__seaborn-3187"
+  ]
+ ]
+}

@@ -175,6 +175,11 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
         "agent": agent,
         "session": session,
         "workspace": workspace,
+        # The text this run was actually given, after the workspace marker was filled. The manifest-level `prompt`
+        # is the template and still contains the marker, so it is not what any run received -- and since the whole
+        # change under measurement is one sentence of this text, a record that shows the template only cannot say
+        # whether the change reached the agent. Per run because each run has its own workspace.
+        "prompt_delivered": prompt,
         "argv": argv,
         "staged_from": stage_from,
         "pre": spec.get("pre", []),
@@ -314,6 +319,10 @@ def main() -> int:
     runs: list[dict] = []
     manifest = {
         "tag": args.tag,
+        # The TEMPLATE, marker and all -- not what any run received, because each run's workspace differs. What a
+        # run was given is `prompt_delivered` on that run. The key keeps its name because renaming it while a sweep
+        # is in flight would leave one arm's manifests half under each name, and a record that changes shape
+        # mid-arm is worse than one whose name is imprecise.
         "prompt": prompt,
         "context": args.context,
         "namespace": args.namespace,

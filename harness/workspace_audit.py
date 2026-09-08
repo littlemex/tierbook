@@ -6,10 +6,15 @@ say, and an agent that wandered and recovered produces a `solved` with the wande
 one 24-item cohort.
 
 What the recordings showed, and why the check is worth having as code rather than as a query somebody remembers to
-run: 6 of 24 runs had a refused tool call and **none of the 10 that solved did**. One agent truncated its own
-workspace path by a single character and was refused for naming a directory that did not exist; another asked to
-search `/`; another tried to clone the repository from the internet. The permission system was right every time,
-and none of it appears in a solve rate.
+run: in the first baseline, 6 of 24 runs had a refused tool call and **none of the 10 that solved did**; in its
+replicate, 10 of 24 did. One agent truncated its own workspace path by a single character and was refused for naming
+a directory that did not exist; another asked to search `/`; another tried to clone the repository from the internet.
+None of it appears in a solve rate.
+
+The "none that solved" half holds for refusals and not for the wandering itself: one run in the replicate wrote its
+own workspace id wrong in a call the permission system allowed -- it checks the named argument and that call put the
+wrong id in the command string -- and went on to solve. So this reports two different things, and only the refusals
+line up with failing.
 
 **What counts as outside.** A tool argument naming a path that resolves outside the run's own workspace, or a
 shell command naming one. The run's workspace comes from the driver's manifest; when that is missing it is
@@ -86,17 +91,34 @@ SHELL_BENIGN = ("/dev", "/proc", "/sys", "/usr", "/bin", "/lib", "/etc/ssl", "/o
 #: this run's is precise enough to carry a verdict, unlike the general shell-path scan. `_classify_foreign` splits
 #: it three ways -- see there for why two was not enough.
 #:
-#: The largest class is the agent reproducing its own ten-character random id from memory and dropping characters.
-#: Across the two baseline runs that happened six times -- `0ae4d3229d` written as `d3229d`, `415edc1dee` as
-#: `415edc17`, `9ef07f454b` as `9ef07f4b`, `daf8d8a993` as `daf8d8a93`, `8c042ffb40` as `8c042ffb4` -- and it is
-#: much sharper evidence for the premise behind the workspace-binding change than the two zero-edit runs the
-#: contract was written from. It also points at a harness-side fix the contract put out of scope: a workspace name
-#: short enough to reproduce would remove the failure at the source, where prompt text only asks the model to try.
+#: The largest class is the agent writing its own ten-character random id with characters missing: `0ae4d3229d` as
+#: `d3229d`, `415edc1dee` as `415edc17`, `9ef07f454b` as `9ef07f4b`, `daf8d8a993` as `daf8d8a93`, `8c042ffb40` as
+#: `8c042ffb4`. **Six runs over the two baselines, on five distinct items of the twenty-four** -- 12.5% of runs and
+#: 20.8% of items, and an earlier version of this note called it "a quarter of the cohort", which was wrong on both
+#: readings. It is still much sharper evidence for the premise behind the workspace-binding change than the two
+#: zero-edit runs the contract was written from, and it points at a harness-side fix the contract put out of scope:
+#: a workspace name short enough to reproduce would remove the failure at the source, where prompt text only asks
+#: the model to try.
 #:
-#: The narrowest class is contamination, and the scan found it happening. One agent ran
-#: `cp /tmp/run-opencode-700cd74ee4/.../qdp.py /tmp/run-opencode-c4cd6ae898/.../qdp.py` -- copying its edit into a
-#: DIFFERENT run's directory, left on disk by an earlier sweep and still writable. A run that writes into another
-#: run's workspace can change that run's result, and nothing downstream would show where it came from.
+#: Two things that note also got wrong, both of which weaken the association it was drawing. Not every such call was
+#: refused, and one of the six runs **solved**: `astropy__astropy-14995` ran `ls /tmp/run-opencode-daf8d8a93/` with
+#: `workdir` set to the correct `daf8d8a993`, so the permission system -- which checks the argument, not the command
+#: string -- allowed it, and the run went on to solve. A path written wrong is therefore not by itself a doomed run.
+#:
+#: That same call is the strongest evidence about *why* these appear, because it carries the correct id and the wrong
+#: one in one tool call: whatever the model was working from, it had the right string in front of it. Against the
+#: alternative that the wrong string was copied from something the agent read, every occurrence of all five wrong
+#: ids across both baselines sits in `tool.parameters` -- the field the model writes -- and in no other recorded
+#: field. That check is bounded: the telemetry carries `tool.result_size_bytes` and not tool results, so a result
+#: containing the wrong id cannot be excluded from telemetry alone.
+#:
+#: The narrowest class is contamination. One agent **attempted** it and was refused:
+#: `cp /tmp/run-opencode-700cd74ee4/.../qdp.py /tmp/run-opencode-c4cd6ae898/.../qdp.py`, aiming its edit at a
+#: DIFFERENT run's directory left on disk by an earlier sweep. **The `cp` was refused, so no copy happened** -- an
+#: earlier version of this note said it did, which the audit's own `refused` field contradicts. What did go through
+#: was the `ls` of both paths immediately before it, so the other run's tree was readable. A run that writes into
+#: another run's workspace could change that run's result with nothing downstream showing where it came from, and
+#: the only reason this one did not is the permission system.
 OTHER_WORKSPACE = re.compile(r"/tmp/run-[\w.-]+")
 
 

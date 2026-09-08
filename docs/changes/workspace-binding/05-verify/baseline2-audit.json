@@ -1,0 +1,905 @@
+{
+ "runs": 24,
+ "clean": 12,
+ "with_outside_paths": 7,
+ "with_shell_paths_outside": 6,
+ "with_other_run_workspaces": 0,
+ "with_mangled_own_workspace": 4,
+ "with_workspace_shaped_but_unknown": 1,
+ "with_network": 0,
+ "with_refusals": 10,
+ "with_path_refusals": 10,
+ "solved_with_refusals": 0,
+ "workspace_unknown": [],
+ "no_tool_calls": [],
+ "expected_items": 24,
+ "cohort_complete": true,
+ "not_attempted": [
+  "mwaskom__seaborn-3187",
+  "pydata__xarray-4695"
+ ],
+ "per_run": [
+  {
+   "item_id": "astropy__astropy-14365",
+   "state": "incorrect",
+   "trace_id": "87406d6de648fb3f6f7c5d2a3d82e48e",
+   "workspace": "/tmp/run-opencode-700cd74ee4",
+   "workspace_source": "the driver's manifest runs-astropy__astropy-14365.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 617 bytes",
+   "tool_calls": 16,
+   "outside_workspace": 0,
+   "shell_paths_outside": 2,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 2,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/run-opencode-c4cd6ae898/astropy/io/ascii/qdp.py"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [
+      "/tmp/run-opencode-c4cd6ae898"
+     ],
+     "args": "{\"command\":\"ls /tmp/run-opencode-c4cd6ae898/astropy/io/ascii/qdp.py /tmp/run-opencode-700cd74ee4/astropy/io/ascii/qdp.py 2>&1\"}"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [
+      "/tmp/run-opencode-c4cd6ae898/astropy/io/ascii/qdp.py"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [
+      "/tmp/run-opencode-c4cd6ae898"
+     ],
+     "args": "{\"command\":\"cp /tmp/run-opencode-700cd74ee4/astropy/io/ascii/qdp.py /tmp/run-opencode-c4cd6ae898/astropy/io/ascii/qdp.py\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "astropy__astropy-14369",
+   "state": "incorrect",
+   "trace_id": "e2f224313812c44b30b3abb87f484481",
+   "workspace": "/tmp/run-opencode-837f295836",
+   "workspace_source": "the driver's manifest runs-astropy__astropy-14369.json",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 60,
+   "outside_workspace": 0,
+   "shell_paths_outside": 2,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/m/s/kpc2"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"command\":\"python3 -c \\\"\\nfrom astropy.units import Unit\\n# Expected: 1000 * J / m / s / kpc^2 = 1000 * J * m^{-1} * s^{-1} * kpc^{-2}\\n# Got: 1000 * J * s / (kpc^2 * m) = 1000 * J * s^1 * m^{-1} * k"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [
+      "/etc/os-release"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"command\":\"apt list --installed 2>/dev/null | grep git; dpkg -l 2>/dev/null | grep git | head -5; ls /usr/share/git* 2>/dev/null; echo \\\"---\\\"; cat /etc/os-release 2>/dev/null | head -5\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "astropy__astropy-14995",
+   "state": "solved",
+   "trace_id": "854093acd0ee019ba401e5688b615fe6",
+   "workspace": "/tmp/run-opencode-daf8d8a993",
+   "workspace_source": "the driver's manifest runs-astropy__astropy-14995.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 1258 bytes",
+   "tool_calls": 55,
+   "outside_workspace": 0,
+   "shell_paths_outside": 1,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 1,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/run-opencode-daf8d8a93/"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-daf8d8a93"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"command\":\"ls /tmp/run-opencode-daf8d8a93/\",\"workdir\":\"/tmp/run-opencode-daf8d8a993\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "django__django-11880",
+   "state": "solved",
+   "trace_id": "e2cea039429dd7e18bb9ba5062aa5601",
+   "workspace": "/tmp/run-opencode-63c166fe02",
+   "workspace_source": "the driver's manifest runs-django__django-11880.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 413 bytes",
+   "tool_calls": 5,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "django__django-15128",
+   "state": "incorrect",
+   "trace_id": "6fa09502427f86aae1d1bbffbc026c5d",
+   "workspace": "/tmp/run-opencode-6c533301b8",
+   "workspace_source": "the driver's manifest runs-django__django-15128.json",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 39,
+   "outside_workspace": 1,
+   "shell_paths_outside": 3,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 2,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/tmp"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"**/django/db/models/sql/query.py\",\"path\":\"/tmp\"}"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"command\":\"ls /tmp/\"}"
+    },
+    {
+     "tool": "task",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"description\":\"Explore Django query.py\",\"prompt\":\"Explore the Django repository in /tmp to understand the `change_aliases` method in `django/db/models/sql/query.py`. I need to understand:\\n\\n1. The f"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"command\":\"ls /tmp/ | grep django\"}"
+    },
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/tmp/"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"command\":\"ls /tmp/ | grep opencode\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "django__django-17084",
+   "state": "incorrect",
+   "trace_id": "c8db18252b3d36ddf1dd4d3146611733",
+   "workspace": "/tmp/run-opencode-fcf3193a38",
+   "workspace_source": "the driver's manifest runs-django__django-17084.json",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 1,
+   "outside_workspace": 1,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"**/*.py\",\"path\":\"/\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "matplotlib__matplotlib-26208",
+   "state": "incorrect",
+   "trace_id": "95a31d82bd21435c56deae7975c08395",
+   "workspace": "/tmp/run-opencode-9ef07f454b",
+   "workspace_source": "the driver's manifest runs-matplotlib__matplotlib-26208.json",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 8,
+   "outside_workspace": 7,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 7,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 8,
+   "refused_for_a_path": 7,
+   "findings": [
+    {
+     "tool": "task",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"description\":\"Explore stackplot/twinx bug\",\"prompt\":\"I need to understand a bug in matplotlib where using stackplot on ax1 and then twinx + plot on ax2 causes ax1's dataLim to be replaced with inf v"
+    },
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-9ef07f4b"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-9ef07f4b"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"**/stackplot*\",\"path\":\"/tmp/run-opencode-9ef07f4b\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-9ef07f4b"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-9ef07f4b"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"def stackplot\",\"path\":\"/tmp/run-opencode-9ef07f4b\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-9ef07f4b"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-9ef07f4b"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"def twinx\",\"path\":\"/tmp/run-opencode-9ef07f4b\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-9ef07f4b"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-9ef07f4b"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"dataLim.*inf\",\"path\":\"/tmp/run-opencode-9ef07f4b\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-9ef07f4b"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-9ef07f4b"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"def stackplot\",\"path\":\"/tmp/run-opencode-9ef07f4b\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-9ef07f4b"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-9ef07f4b"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"def twinx\",\"path\":\"/tmp/run-opencode-9ef07f4b\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-9ef07f4b"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-9ef07f4b"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"dataLim\",\"path\":\"/tmp/run-opencode-9ef07f4b\",\"include\":\"*.py\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "matplotlib__matplotlib-26342",
+   "state": "solved",
+   "trace_id": "ddfd3aae52e096b4d145c54f469fde90",
+   "workspace": "/tmp/run-opencode-1322fa8d4d",
+   "workspace_source": "the driver's manifest runs-matplotlib__matplotlib-26342.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 485 bytes",
+   "tool_calls": 16,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "mwaskom__seaborn-3187",
+   "state": "unobserved",
+   "trace_id": "f1532ce06227caa88a25cbde8aaf8914",
+   "workspace": "/tmp/run-opencode-0ae4d3229d",
+   "workspace_source": "the driver's manifest runs-mwaskom__seaborn-3187.json",
+   "attempted": false,
+   "attempted_note": "zero files differ from the staged tree: nothing was attempted",
+   "tool_calls": 1,
+   "outside_workspace": 1,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 1,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "read",
+     "outside_workspace": [
+      "filePath=/tmp/run-opencode-d3229d"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-d3229d"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"filePath\":\"/tmp/run-opencode-d3229d\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "pallets__flask-5014",
+   "state": "solved",
+   "trace_id": "f8d2a0fcffbf5b6fdad6e4ec8d243e6d",
+   "workspace": "/tmp/run-opencode-2cb6cb33be",
+   "workspace_source": "the driver's manifest runs-pallets__flask-5014.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 436 bytes",
+   "tool_calls": 5,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "psf__requests-1142",
+   "state": "solved",
+   "trace_id": "c864431707f14a33b054aa97bd1909e9",
+   "workspace": "/tmp/run-opencode-581efa3b3e",
+   "workspace_source": "the driver's manifest runs-psf__requests-1142.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 489 bytes",
+   "tool_calls": 5,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "psf__requests-2931",
+   "state": "incorrect",
+   "trace_id": "31ea758c66d7059bb510ce82654c8019",
+   "workspace": "/tmp/run-opencode-fdf6e27518",
+   "workspace_source": "the driver's manifest runs-psf__requests-2931.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 495 bytes",
+   "tool_calls": 13,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pydata__xarray-3993",
+   "state": "incorrect",
+   "trace_id": "015e4d451e310e7451d984efe74ea4e3",
+   "workspace": "/tmp/run-opencode-415edc1dee",
+   "workspace_source": "the driver's manifest runs-pydata__xarray-3993.json",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 2,
+   "outside_workspace": 2,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 2,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 2,
+   "refused_for_a_path": 2,
+   "findings": [
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-415edc17"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-415edc17"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"def integrate\",\"path\":\"/tmp/run-opencode-415edc17\"}"
+    },
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp/run-opencode-415edc17"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [
+      "/tmp/run-opencode-415edc17"
+     ],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"def differentiate\",\"path\":\"/tmp/run-opencode-415edc17\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "pydata__xarray-4094",
+   "state": "solved",
+   "trace_id": "4e87b6d9c38de52816493d62813e49b6",
+   "workspace": "/tmp/run-opencode-f458737050",
+   "workspace_source": "the driver's manifest runs-pydata__xarray-4094.json",
+   "attempted": true,
+   "attempted_note": "2 file(s) differ from the staged tree, 1226 bytes",
+   "tool_calls": 57,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pydata__xarray-4695",
+   "state": "unobserved",
+   "trace_id": "951489180d604a4642f9b4461425681f",
+   "workspace": "/tmp/run-opencode-1696278f29",
+   "workspace_source": "the driver's manifest runs-pydata__xarray-4695.json",
+   "attempted": false,
+   "attempted_note": "zero files differ from the staged tree: nothing was attempted",
+   "tool_calls": 1,
+   "outside_workspace": 1,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "glob",
+     "outside_workspace": [
+      "path=/"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"**/*.py\",\"path\":\"/\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "pydata__xarray-6992",
+   "state": "incorrect",
+   "trace_id": "e15b48890ff4e72a9259f50e79b50d87",
+   "workspace": "/tmp/run-opencode-577509c809",
+   "workspace_source": "the driver's manifest runs-pydata__xarray-6992.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 524 bytes",
+   "tool_calls": 10,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pylint-dev__pylint-4551",
+   "state": "incorrect",
+   "trace_id": "990b98562ff33b18846afd5c1c7b4e18",
+   "workspace": "/tmp/run-opencode-886fd7eabf",
+   "workspace_source": "the driver's manifest runs-pylint-dev__pylint-4551.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 5317 bytes",
+   "tool_calls": 68,
+   "outside_workspace": 0,
+   "shell_paths_outside": 1,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [
+      "/tmp"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"command\":\"cd /tmp && python3 -c \\\"\\nimport astroid\\n\\n# Direct import to avoid any caching\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location('writer', '/tmp/run-opencode-886fd7ea"
+    }
+   ]
+  },
+  {
+   "item_id": "pylint-dev__pylint-6386",
+   "state": "incorrect",
+   "trace_id": "c21f46b835fe792a8bcfd2ecaed38a69",
+   "workspace": "/tmp/run-opencode-8350bfa794",
+   "workspace_source": "the driver's manifest runs-pylint-dev__pylint-6386.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 535 bytes",
+   "tool_calls": 19,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pylint-dev__pylint-7277",
+   "state": "solved",
+   "trace_id": "cc78598249da35151b542274e622a137",
+   "workspace": "/tmp/run-opencode-8971c9f299",
+   "workspace_source": "the driver's manifest runs-pylint-dev__pylint-7277.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 1241 bytes",
+   "tool_calls": 6,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pytest-dev__pytest-10356",
+   "state": "incorrect",
+   "trace_id": "a51efd2f5197c9b4b60a9f5d2354de27",
+   "workspace": "/tmp/run-opencode-e68beea4d7",
+   "workspace_source": "the driver's manifest runs-pytest-dev__pytest-10356.json",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 72,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pytest-dev__pytest-7432",
+   "state": "incorrect",
+   "trace_id": "ac9078a095e8980b9999fadc2599afad",
+   "workspace": "/tmp/run-opencode-d3ec35ad0c",
+   "workspace_source": "the driver's manifest runs-pytest-dev__pytest-7432.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 597 bytes",
+   "tool_calls": 6,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "pytest-dev__pytest-8399",
+   "state": "solved",
+   "trace_id": "d2f17b0b5acdc1e85b2931c4487e89d4",
+   "workspace": "/tmp/run-opencode-2b4e3d315d",
+   "workspace_source": "the driver's manifest runs-pytest-dev__pytest-8399.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 549 bytes",
+   "tool_calls": 7,
+   "outside_workspace": 0,
+   "shell_paths_outside": 1,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": [
+    {
+     "tool": "bash",
+     "outside_workspace": [],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": false,
+     "refused_for_a_path": false,
+     "shell_paths_outside": [
+      "/name"
+     ],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"command\":\"sed -i 's/name=f\\\"unittest_{setup_name}_fixture_{obj.__qualname__}\\\"/name=f\\\"_unittest_{setup_name}_fixture_{obj.__qualname__}\\\"/' /tmp/run-opencode-2b4e3d315d/src/_pytest/unittest.py\"}"
+    }
+   ]
+  },
+  {
+   "item_id": "scikit-learn__scikit-learn-14496",
+   "state": "solved",
+   "trace_id": "ced15d82ccfaba687718ce20d7bad79f",
+   "workspace": "/tmp/run-opencode-0fce176d79",
+   "workspace_source": "the driver's manifest runs-scikit-learn__scikit-learn-14496.json",
+   "attempted": true,
+   "attempted_note": "1 file(s) differ from the staged tree, 1017 bytes",
+   "tool_calls": 9,
+   "outside_workspace": 0,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 0,
+   "refused_for_a_path": 0,
+   "findings": []
+  },
+  {
+   "item_id": "scikit-learn__scikit-learn-15100",
+   "state": "incorrect",
+   "trace_id": "a5a77240d70fa42b9dc20933ad09c909",
+   "workspace": "/tmp/run-opencode-682ff990f9",
+   "workspace_source": "the driver's manifest runs-scikit-learn__scikit-learn-15100.json",
+   "attempted": true,
+   "attempted_note": "the oracle's counts were truncated out of its captured output, so this rests on the state: 'incorrect' means a tree that differed was scored, since zero files differing is recorded as unobserved/unsupported instead",
+   "tool_calls": 1,
+   "outside_workspace": 1,
+   "shell_paths_outside": 0,
+   "other_run_workspaces": 0,
+   "mangled_own_workspace": 0,
+   "workspace_shaped_but_unknown": 0,
+   "network": 0,
+   "refused": 1,
+   "refused_for_a_path": 1,
+   "findings": [
+    {
+     "tool": "grep",
+     "outside_workspace": [
+      "path=/tmp"
+     ],
+     "network": false,
+     "network_via_granted_tool": false,
+     "refused": true,
+     "refused_for_a_path": true,
+     "shell_paths_outside": [],
+     "other_run_workspaces": [],
+     "mangled_own_workspace": [],
+     "workspace_shaped_but_unknown": [],
+     "args": "{\"pattern\":\"strip_accents_unicode\",\"path\":\"/tmp\"}"
+    }
+   ]
+  }
+ ],
+ "mechanism_pass": false,
+ "mechanism_note": "across every run and without reference to any outcome, the verdict is against: an out-of-workspace path in a named argument; one parsed out of a shell command, which is weaker evidence, reported and NOT counted because it read unit expressions out of a Python comment as directories; a path naming ANOTHER run's workspace, which is precise enough to count and was found happening; a permission refusal attributable to one of those or to a fetch, which is the backstop for paths the argument scan cannot see; a run whose workspace could not be established, since an unknown workspace cannot be audited; and a run that made no tool calls, since doing nothing would otherwise satisfy staying put. Two things are reported and do NOT count against: a refusal the tool raised about its own arguments, and reaching the network -- the contract's condition is about the workspace, and since the prompt no longer claims to be offline there is nothing for a network clause to verify"
+}
