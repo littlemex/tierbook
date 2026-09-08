@@ -492,3 +492,50 @@ def test_all_three_classes_count_against_the_mechanism(tmp_path):
                                                  {"trace_id": "t2", "workspace": "/tmp/run-opencode-c4cd6ae898"}]}))
         res = wa.audit(traces, outcomes, [manifest], expect_items=1)
         assert res["mechanism_pass"] is False, cmd
+
+
+# --- the shell signal, back in the verdict but only where a filesystem command expects a path -----------
+
+
+def test_a_path_where_a_filesystem_command_expects_one_counts():
+    """Real commands from the cohort. These are the two runs the named-argument scan could not see."""
+    f = _f("ls /tmp/run-opencode-c4cd6ae898/astropy/io/ascii/qdp.py")
+    assert f["shell_fs_paths_outside"] == ["/tmp/run-opencode-c4cd6ae898/astropy/io/ascii/qdp.py"]
+    f = _f("cp /tmp/run-opencode-0ae4d3229d/a.py /tmp/run-opencode-c4cd6ae898/a.py")
+    assert f["shell_fs_paths_outside"] == ["/tmp/run-opencode-c4cd6ae898/a.py"], "own workspace excluded"
+
+
+def test_arithmetic_in_a_python_snippet_never_reaches_the_verdict():
+    """The reason the bare regex had to leave the verdict. `python3` is not a filesystem command, so the segment is
+    not read at all -- which is a stronger guarantee than any lookbehind."""
+    cmd = 'python3 -c "\n# after J, we see /m/s/kpc2\n"'
+    f = _f(cmd)
+    assert f["shell_paths_outside"] == ["/m/s/kpc2"], "still reported"
+    assert f["shell_fs_paths_outside"] == [], "and not counted"
+
+
+def test_the_verdict_is_no_longer_blind_to_a_plain_absolute_path_in_bash():
+    """A review's point: removing the shell signal from the verdict left `/repo` and `/workspace` unseen, and neither
+    is workspace-shaped so the precise check would not catch them either."""
+    for cmd in ("cat /etc/passwd", "ls /repo", "find /workspace -name '*.py'", "grep -r x /srv/other"):
+        f = _f(cmd)
+        assert f["shell_fs_paths_outside"], cmd
+
+
+def test_each_command_in_a_chain_is_judged_on_its_own_first_word():
+    """`cd <own> && python3 -c "...J/m..."` must not inherit `cd`'s status, and `cd /a && ls /b` must catch both."""
+    own = "/tmp/run-opencode-0ae4d3229d"
+    f = _f(f'cd {own}/astropy && python3 -c "print(1/2/3)"')
+    assert f is None or f["shell_fs_paths_outside"] == []
+    f = _f("cd /elsewhere && ls /other")
+    assert f["shell_fs_paths_outside"] == ["/elsewhere", "/other"]
+
+
+def test_a_leading_environment_assignment_does_not_hide_the_command():
+    f = _f("PYTHONPATH=/x ls /other")
+    assert f["shell_fs_paths_outside"] == ["/other"]
+
+
+def test_system_directories_a_checkout_touches_stay_benign_here_too():
+    assert _f("find /usr -name git -type f") is None
+    assert _f("cat /proc/meminfo") is None

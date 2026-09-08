@@ -84,6 +84,20 @@ NETWORK_TOOLS = frozenset({"webfetch", "websearch"})
 #: `find . -path ./tests -prune` was read as `/tests`. Excluded by what precedes the slash rather than by the shape
 #: of what follows, because a pattern, a relative path and an absolute one look identical from the right.
 SHELL_PATH = re.compile(r"(?<![\w/*?\].)])(/[\w./~-]+)")
+
+#: Commands whose arguments are filesystem locations. This is what let the shell signal back into the verdict after
+#: the bare regex had to be taken out of it: a review pointed out that removing it left the verdict blind to an
+#: absolute path in a `bash` string that does not happen to look like a workspace -- `/repo`, `/workspace`, `/etc`.
+#:
+#: Reading paths only from the arguments of these commands separates the two cases that the bare regex could not. A
+#: `python3 -c "...J/m/s/kpc2..."` never reaches the scan, because its first token is not one of these; an
+#: `ls /tmp/run-opencode-c4cd6ae898/...` does, because it is. Both are real commands from the cohort.
+SHELL_FS_COMMANDS = frozenset({
+    "ls", "cat", "cd", "cp", "mv", "rm", "find", "head", "tail", "grep", "touch", "mkdir", "rmdir", "stat",
+    "chmod", "chown", "ln", "du", "wc", "diff", "sed", "awk", "tar", "rsync", "less", "more", "file", "realpath",
+})
+#: Where one command ends and the next begins, so `cd /a && ls /b` is read as two commands rather than one.
+SHELL_SPLIT = re.compile(r"(?:&&|\|\||[;\n|])")
 SHELL_BENIGN = ("/dev", "/proc", "/sys", "/usr", "/bin", "/lib", "/etc/ssl", "/opt", "/var/tmp/pytest",
                 "/sbin", "/tmp/pytest-of-")
 
@@ -91,9 +105,21 @@ SHELL_BENIGN = ("/dev", "/proc", "/sys", "/usr", "/bin", "/lib", "/etc/ssl", "/o
 #: this run's is precise enough to carry a verdict, unlike the general shell-path scan. `_classify_foreign` splits
 #: it three ways -- see there for why two was not enough.
 #:
-#: The largest class is the agent writing its own ten-character random id with characters missing: `0ae4d3229d` as
-#: `d3229d`, `415edc1dee` as `415edc17`, `9ef07f454b` as `9ef07f4b`, `daf8d8a993` as `daf8d8a93`, `8c042ffb40` as
-#: `8c042ffb4`. **Six runs over the two baselines, on five distinct items of the twenty-four** -- 12.5% of runs and
+#: What this check added, stated precisely because a review pointed out it had been overstated. Of the six runs
+#: below, **four were already flagged by the named-argument scan** as holding a path outside the workspace, and only
+#: two -- both astropy -- were visible through the shell string alone. So the shell scan did not discover the class;
+#: it was necessary for two of six. What is entirely new is the RECOGNITION: the named-argument scan reported
+#: `path=/tmp/run-opencode-9ef07f4b` the same way it reports `path=/` or `path=/tmp`, and nothing said that string
+#: was a near-miss of the run's own workspace. That is the difference between "the agent looked outside" and "the
+#: agent could not reproduce its own path", and only the second says anything about why.
+#:
+#: The largest class is the agent writing its own ten-character random id wrong: `0ae4d3229d` as `d3229d` (its own
+#: six-character suffix), `9ef07f454b` as `9ef07f4b`, `daf8d8a993` as `daf8d8a93` and `8c042ffb40` as `8c042ffb4`
+#: (characters dropped), and `415edc1dee` as `415edc17` -- which is **not** a dropped character: it keeps the
+#: seven-character prefix `415edc1` and then invents a `7` that appears nowhere in the source. A review caught that
+#: "dropping characters" was wrong for one of the five, and the difference matters, because an invented character is
+#: not a truncation of anything and cannot be explained by a display that cut the string short.
+#: **Six runs over the two baselines, on five distinct items of the twenty-four** -- 12.5% of runs and
 #: 20.8% of items, and an earlier version of this note called it "a quarter of the cohort", which was wrong on both
 #: readings. It is still much sharper evidence for the premise behind the workspace-binding change than the two
 #: zero-edit runs the contract was written from, and it points at a harness-side fix the contract put out of scope:
@@ -176,6 +202,38 @@ def _id_lengths(known_workspaces) -> set:
     return out
 
 
+def _fs_command_paths(cmd: str, workspace: str | None) -> list:
+    """Absolute paths sitting where a filesystem command expects one.
+
+    Unlike `SHELL_PATH` over the whole string, this one carries the verdict, because the thing that made the bare
+    regex unusable -- arithmetic in a `python3 -c` string reading as directories -- cannot appear here: a segment
+    whose first word is not a filesystem command is not read at all.
+    """
+    out = []
+    for segment in SHELL_SPLIT.split(cmd):
+        words = segment.split()
+        if not words:
+            continue
+        # Skip a leading environment assignment or `sudo`-style prefix so `FOO=1 ls /x` is still an `ls`.
+        i = 0
+        while i < len(words) and ("=" in words[i] and not words[i].startswith("/")):
+            i += 1
+        if i >= len(words):
+            continue
+        name = words[i].rsplit("/", 1)[-1]
+        if name not in SHELL_FS_COMMANDS:
+            continue
+        for w in words[i + 1:]:
+            w = w.strip("\"'`()")
+            if not w.startswith("/"):
+                continue
+            if w.startswith(tuple(SHELL_BENIGN)) or w in ("/", "//"):
+                continue
+            if not _inside(w, workspace):
+                out.append(w)
+    return out
+
+
 def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | None) -> str:
     """Three answers, not two, because the evidence supports three.
 
@@ -216,6 +274,7 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
     # A shell command's own paths. Read from the string because there is no argument to read, which makes this the
     # weakest part of the audit and better than the alternative of not looking.
     shell_outside = []
+    shell_fs_outside = []
     other_workspaces = []
     cmd = args.get("command")
     if isinstance(cmd, str) and workspace:
@@ -226,6 +285,9 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
                 continue
             if hit not in shell_outside:
                 shell_outside.append(hit)
+        for hit in _fs_command_paths(cmd, workspace):
+            if hit not in shell_fs_outside:
+                shell_fs_outside.append(hit)
     mangled = []
     shaped_unknown = []
 
@@ -245,7 +307,7 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
         if isinstance(v, str) and workspace:
             _foreign(v)
     if not (outside or network or network_tool or refused or shell_outside or other_workspaces or mangled
-            or shaped_unknown):
+            or shaped_unknown or shell_fs_outside):
         return None
     return {"tool": name, "outside_workspace": outside, "network": network or network_tool,
             "network_via_granted_tool": network_tool, "refused": refused,
@@ -256,6 +318,8 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
             # Kept apart from `outside_workspace`: one is a named argument the tool contract defines, the other is
             # a string this file parsed, and they do not deserve the same confidence.
             "shell_paths_outside": shell_outside,
+            # The half of the shell signal that carries the verdict: a path where a filesystem command expects one.
+            "shell_fs_paths_outside": shell_fs_outside,
             "other_run_workspaces": other_workspaces,
             "mangled_own_workspace": mangled,
             "workspace_shaped_but_unknown": shaped_unknown,
@@ -309,6 +373,7 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
             "tool_calls": len(calls[t]),
             "outside_workspace": sum(1 for f in findings if f["outside_workspace"]),
             "shell_paths_outside": sum(1 for f in findings if f["shell_paths_outside"]),
+            "shell_fs_paths_outside": sum(1 for f in findings if f["shell_fs_paths_outside"]),
             "other_run_workspaces": sum(1 for f in findings if f["other_run_workspaces"]),
             "mangled_own_workspace": sum(1 for f in findings if f["mangled_own_workspace"]),
             "workspace_shaped_but_unknown": sum(1 for f in findings if f["workspace_shaped_but_unknown"]),
@@ -318,7 +383,8 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
             "findings": findings,
         })
     clean = [r for r in per_run if not r["outside_workspace"] and not r["network"] and not r["refused"]
-             and not r["shell_paths_outside"] and not r["other_run_workspaces"]
+             and not r["shell_paths_outside"] and not r["shell_fs_paths_outside"]
+             and not r["other_run_workspaces"]
              and not r["mangled_own_workspace"] and not r["workspace_shaped_but_unknown"]]
     unknown_ws = [r["item_id"] for r in per_run if not r["workspace"]]
     # A run that made no tool calls has no out-of-workspace paths, so "clean" would be satisfied by having done
@@ -330,6 +396,7 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
         "clean": len(clean),
         "with_outside_paths": sum(1 for r in per_run if r["outside_workspace"]),
         "with_shell_paths_outside": sum(1 for r in per_run if r["shell_paths_outside"]),
+        "with_shell_fs_paths_outside": sum(1 for r in per_run if r["shell_fs_paths_outside"]),
         "with_other_run_workspaces": sum(1 for r in per_run if r["other_run_workspaces"]),
         "with_mangled_own_workspace": sum(1 for r in per_run if r["mangled_own_workspace"]),
         "with_workspace_shaped_but_unknown": sum(1 for r in per_run if r["workspace_shaped_but_unknown"]),
@@ -358,7 +425,7 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
                            and sum(1 for r in per_run
                                    if r["outside_workspace"] or r["other_run_workspaces"]
                                    or r["mangled_own_workspace"] or r["workspace_shaped_but_unknown"]
-                                   or r["refused_for_a_path"]) == 0
+                                   or r["shell_fs_paths_outside"] or r["refused_for_a_path"]) == 0
                            and not unknown_ws and not silent),
         "mechanism_note": ("across every run and without reference to any outcome, the verdict is against: an "
                            "out-of-workspace path in a named argument; one parsed out of a shell command, which is "
@@ -428,7 +495,8 @@ def main() -> int:
           f"other run's workspace {res['with_other_run_workspaces']}   "
           f"own id written wrong {res['with_mangled_own_workspace']}   "
           f"workspace-shaped but unknown {res['with_workspace_shaped_but_unknown']}   "
-          f"shell paths {res['with_shell_paths_outside']}   network {res['with_network']}   "
+          f"shell fs-arg {res['with_shell_fs_paths_outside']}   "
+          f"shell parsed (reported only) {res['with_shell_paths_outside']}   network {res['with_network']}   "
           f"refused {res['with_refusals']}")
     print(f"  refusals attributable to a path or a fetch: {res['with_path_refusals']} runs; "
           f"of all runs with any refusal, {res['solved_with_refusals']} solved")
@@ -450,6 +518,8 @@ def main() -> int:
                 bits.append("OWN ID WRITTEN WRONG " + ", ".join(f["mangled_own_workspace"][:2]))
             if f["other_run_workspaces"]:
                 bits.append("ANOTHER RUN'S WORKSPACE " + ", ".join(f["other_run_workspaces"][:2]))
+            if f["shell_fs_paths_outside"]:
+                bits.append("shell fs-arg " + ", ".join(f["shell_fs_paths_outside"][:3]))
             if f["shell_paths_outside"]:
                 bits.append("shell " + ", ".join(f["shell_paths_outside"][:3]))
             if f["network"]:

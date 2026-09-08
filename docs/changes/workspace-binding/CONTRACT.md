@@ -179,3 +179,17 @@ untouched -- they name directories that never existed and cannot be explained th
 the verification: the stale pointer is present in both baselines and in the changed arm, but it is not stationary,
 since which leftover tree wins changes whenever a run performs an editable install. That is an uncontrolled variable
 across arms and it is stated here rather than found later.
+
+**2026-09-08, two more corrections from the same review round.**
+
+*The credit for the finding was overstated.* Of the six runs, four were already flagged by the named-argument scan as
+holding a path outside the workspace; only two -- both astropy -- were visible through the shell string alone. The
+shell scan was necessary for two of six, not the discoverer of the class. What the workspace-shaped check actually
+added is recognition: the named-argument scan reports `path=/tmp/run-opencode-9ef07f4b` exactly as it reports
+`path=/`, and nothing said that string was a near-miss of the run's own workspace. That is the difference between
+"the agent looked outside" and "the agent could not reproduce its own path", and only the second explains anything.
+
+*"Dropping characters" is wrong for one of the five.* `415edc1dee` came back as `415edc17`: the seven-character
+prefix is kept and the `7` appears nowhere in the source. An invented character is not a truncation, so it cannot be
+explained by a display that cut the string short -- which was one of the two competing explanations the review
+raised, and this instance is evidence against it.
