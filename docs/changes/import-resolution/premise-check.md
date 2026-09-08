@@ -1,110 +1,129 @@
-# An agent verifying its own edit imports a different run's code
+# An agent verifying its own edit can import a different run's code
 
-Found while checking a reviewer's question about a single tool call. It is a harness defect, it is invisible in every
-outcome the harness produces, and it affects 10 of the 24 items in the pilot subset.
+Found while checking a reviewer's question about a single tool call. It is a harness defect and it is invisible in
+every outcome the harness produces. **A first version of this document said it affects 10 of the 24 items; a review
+refuted that and the measurement below replaces it. It bit 2 runs of 48.**
 
-## What is true, measured on the pod
+## The route, measured on the pod
 
-In the agent pod, four packages resolve into leftover workspaces from *previous sweeps*:
+Four packages resolve into leftover workspaces from *previous sweeps*:
 
-    astropy   -> /tmp/run-opencode-c4cd6ae898/astropy
+    astropy   -> /tmp/run-opencode-acf4781c5e/astropy      (was c4cd6ae898 an hour earlier -- see below)
     django    -> /tmp/run-opencode-4f22569e96/django
     flask     -> /tmp/run-opencode-d9cb5ac510/src/flask
     pylint    -> /tmp/run-opencode-f330e33f0e/pylint
 
-They resolve there through editable-install artifacts left in `/usr/local/lib/python3.11/dist-packages`: three
-`__editable___*_finder.py` meta-path finders and one `easy-install.pth`. 142 run workspaces and 8.9 GB survive in
-`/tmp`, so the directories those artifacts name are still present and readable, which is why nothing errors.
+through editable-install artifacts in `/usr/local/lib/python3.11/dist-packages`: three `__editable___*_finder.py`
+meta-path finders and one `easy-install.pth`. 142 run workspaces and 8.9 GB survive in `/tmp`, so the directories
+those artifacts name are still readable and nothing errors.
 
-Of the 24 items in the subset, astropy has 3, django 3, pylint 3 and pallets/flask 1: **10 items** where
-`python -c "import <pkg>"` inside a run reads code from a different run.
+Those four packages cover 10 of the 24 items in the pilot subset. That is the number **exposed**, and it is not the
+number affected.
 
-## How it was found, and what it explains
+## What decides whether a run is actually affected: its cwd
 
-A reviewer asked how a run could have named `c4cd6ae898` -- a well-formed 10-character id belonging to another
-sweep -- when a random id cannot be guessed. Reading that run's calls in order answers it. Calls 0 through 12 of
-`astropy__astropy-14365` are all inside its own workspace `700cd74ee4`: it read `astropy/io/ascii/qdp.py`, edited it,
-and then at calls 9 and 11 ran `cd <own workspace>/astropy && python -c "from astropy.io.ascii.qdp import
-_line_type; ..."` to check the edit. That import resolved to `c4cd6ae898`, so it exercised **unedited** code and
-reported the old behaviour. At call 13 the agent ran
+The correction. `sys.path[0]` is the invoking directory and is consulted before the editable finder, so a run that
+invokes Python from its workspace root already imports its own code with nothing set:
+
+    cd <ws>            && python3 -c "import astropy"  ->  <ws>/astropy/__init__.py            (correct)
+    cd <ws>/astropy    && python3 -c "import astropy"  ->  /tmp/run-opencode-acf4781c5e/...    (another run)
+    cd /               && python3 -c "import astropy"  ->  /tmp/run-opencode-acf4781c5e/...    (another run)
+
+The driver execs the agent with cwd at the workspace root, so the default case is safe. The defect bites only when a
+run moves somewhere else first -- and `cd <ws>/<package>` is the natural mistake, because that is where the source
+being edited lives.
+
+**Measured over the two recorded baselines**, counting every `bash` call containing `python` inside the 10 exposed
+items and taking each call's effective cwd from its own `cd` or `workdir`:
+
+| | exposed items | python calls in them | calls from a cwd other than the workspace root | runs affected |
+|---|---|---|---|---|
+| baseline 1 | 10 | 53 | 0 | none |
+| baseline 2 | 10 | 47 | 5 | 2 |
+
+So the incidence is **2 runs of 48**, both in the replicate, both scored `incorrect`.
+
+## The two runs, and what they did about it
+
+Both are the same shape -- `cd <ws>/<package> && python3 -c "import <package>..."` -- and in both the agent noticed
+that something was wrong and worked around it rather than trusting the answer.
+
+`astropy__astropy-14365` edited `astropy/io/ascii/qdp.py` in its own workspace, then ran
+`cd <ws>/astropy && python -c "from astropy.io.ascii.qdp import _line_type; ..."` and got the **unedited** behaviour.
+It then ran
 
     ls /tmp/run-opencode-c4cd6ae898/astropy/io/ascii/qdp.py /tmp/run-opencode-700cd74ee4/astropy/io/ascii/qdp.py
 
-comparing the two, and at call 31
+comparing the two trees, and finally tried
 
     cp /tmp/run-opencode-700cd74ee4/.../qdp.py /tmp/run-opencode-c4cd6ae898/.../qdp.py
 
-which the permission system refused. The run was recorded `incorrect`.
+which the permission system refused.
 
-So the agent diagnosed the situation correctly and acted rationally on it. The `cp` was not an agent wandering out of
-its workspace; it was an agent trying to make its own edit take effect in the tree Python was actually importing.
-The workspace-binding change's premise reads that behaviour as the prompt failing to bind the agent, and for this
-item that reading is wrong.
+`pylint-dev__pylint-4551` did the same thing and then bypassed the import system entirely. Its third attempt reads
+
+    cd /tmp && python3 -c "
+    import astroid
+    # Direct import to avoid any caching
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('writ...
+
+so it had concluded the import was giving it the wrong file and loaded the file by path instead. It scored
+`incorrect`.
+
+Both agents diagnosed their situation correctly. The harness was lying to them.
+
+**What is not established.** That this cost either solve. Both runs scored `incorrect` and both were working around
+false feedback, but a run can produce a bad patch on its own, and 2 observations decide nothing about a rate.
 
 ## Why no outcome shows it
 
-The scorer runs in a separate testbed and applies the diff to a clean checkout, so the score is not computed through
-the pod's import path. The damage is entirely to the agent's ability to test its own work: every `import` check on
-those 10 items returns another run's behaviour. An agent that trusts it concludes a correct fix did not work.
+The scorer applies the diff to a clean checkout in a separate testbed, so scoring never reads through the pod's
+import path. The damage is confined to the agent's ability to test its own work.
 
-## The pointer moved while the next arm was running, which makes this worse than stated above
+## The pointer moves, and within one arm
 
-Measured live rather than argued. Two probes of the same interpreter and the same site directory, minutes apart
-during the changed-prompt sweep:
+Two probes of the same interpreter and the same site directory, minutes apart during the changed-prompt sweep:
 
-    first probe:   import astropy -> /tmp/run-opencode-c4cd6ae898/astropy   (a leftover from the FIRST baseline)
-    second probe:  import astropy -> /tmp/run-opencode-acf4781c5e/astropy
+    first probe:   import astropy -> /tmp/run-opencode-c4cd6ae898   (a leftover from the FIRST baseline)
+    second probe:  import astropy -> /tmp/run-opencode-acf4781c5e
 
-`acf4781c5e` is the changed arm's own `astropy__astropy-14369` workspace -- item 2 of that sweep. So during item 2 a
-run performed an editable install and repointed the package to its own tree.
+`acf4781c5e` is that same sweep's `astropy__astropy-14369` workspace -- its item 2. A run that performs an editable
+install repoints the package to its own tree, which fixes that run and hands the pointer to whoever comes next. Item
+1 imported a leftover from a previous arm; item 3, running next, imported item 2's tree.
 
-Two consequences, and the second is the one that matters.
+So for the exposed repositories the items in one arm are **order-dependent rather than independent trials**, whether
+or not any given run trips over it. That is uncontrolled in all three arms recorded so far, and it is a better reason
+to fix this than the 2-in-48 incidence is.
 
-A run that installs fixes itself. The damage falls on runs that do not: item 1 (`astropy-14365`) imported the first
-baseline's leftover, and item 3 (`astropy-14995`), which ran next, imported **item 2's** tree.
+## The fix, and the tests that chose it
 
-So the three astropy items in one arm are not independent trials. Whichever astropy run installs last determines what
-every later astropy run imports, which makes the result order-dependent within a single arm -- not merely
-non-stationary across arms, which is how the workspace-binding contract's limitation first recorded it. The same
-holds for the three django items, the three pylint items and flask.
+`PYTHONPATH` wins against the editable finder, and it survives the ways a run reaches an interpreter. Measured on the
+pod rather than reasoned about:
 
-## The fix, and the test that chose it
+    PYTHONPATH=<ws>, cd <ws>/astropy  ->  <ws>/astropy/__init__.py          (the failing case, fixed)
+    nested `sh -c`                    ->  sees it
+    `bash -lc` login shell            ->  sees it
+    Python `subprocess`               ->  sees it
+    `env -i`                          ->  does NOT see it (clears the environment on purpose)
 
-`PYTHONPATH` beats the editable finder, verified on the pod rather than reasoned about:
+Two entries are needed because layouts differ: `<ws>` for astropy, django and pylint, `<ws>/src` for flask. Both
+always, rather than a per-repository table, and the shadowing risk that raises was checked rather than dismissed: of
+the leftover workspaces on the pod, `src/` holds importable packages only for flask (`flask`) and pytest (`pytest`,
+`_pytest`) -- each the repository's own package -- while matplotlib's `src/` holds C++ sources with no importable
+top-level name. So on this subset the extra entry shadows nothing it should not.
 
-    no PYTHONPATH:    import astropy -> /tmp/run-opencode-c4cd6ae898/astropy/__init__.py
-    PYTHONPATH=<ws>:  import astropy -> <ws>/astropy/__init__.py
+Rejected: `pip install -e .` per run, which costs a build per run and rewrites the same process-global artifact that
+caused this, so concurrent runs would fight over it. Also rejected: deleting the editable artifacts once, which fixes
+the pod until the next run installs one.
 
-It also survives every way a run reaches an interpreter, measured on the pod rather than assumed: a nested `sh -c`,
-a `bash -lc` login shell, and a `subprocess` spawned from Python all see it. The only probe that escaped was
-`env -i`, which clears the environment on purpose.
+## What this does to the workspace-binding change
 
-So one environment variable per run fixes it, and it needs two entries because repository layouts differ: `<ws>` for
-astropy and django, `<ws>/src` for flask. Two alternatives were rejected. Running `pip install -e .` per run is what
-a SWE-bench harness normally does but costs a build per run and repoints a process-wide artifact, so concurrent runs
-would fight over it. Deleting the editable artifacts once fixes the pod until the next run installs one, which is the
-same defect with a longer fuse.
-
-Cleaning `/tmp` is separate and also wanted: 142 leftover workspaces are what make the stale pointers resolvable
-instead of failing loudly.
+The `cp` into `c4cd6ae898` is **withdrawn** as evidence for that contract's premise: it was an agent working around
+this defect, not one failing to stay in its workspace. The other five "wrote its own workspace id wrong" observations
+are untouched -- they name directories that never existed, and no import path can produce them.
 
 ## Not implemented yet, deliberately
 
 The changed-prompt arm is running. Each item spawns a fresh driver process, so editing the driver now would give
-items 1..N one environment and N+1..24 another, and the arm could not be compared with either baseline. The fix lands
-after that arm finishes, as its own change with its own contract and its own before/after -- on which those 10 items
-are the interesting ones.
-
-## What this does to the workspace-binding change in flight
-
-It does not invalidate it, and it narrows what it can claim.
-
-- The stale pointer was present in both baselines and is present in the changed arm, so the comparison is between
-  arms that share the defect.
-- It is worse than not stationary. As the section above measures, the pointer moved during the changed arm to that
-  arm's own item 2, so within one arm the astropy items are **order-dependent**: whichever installs last decides what
-  every later astropy run imports. That is uncontrolled in all three recorded arms and belongs in the limitations
-  rather than being discovered later.
-- One of the six "wrote its own workspace id wrong" observations is now explained by something else entirely, and it
-  is the only one of the six involving a real other-run directory. The other five remain unexplained by this and
-  still name directories that never existed.
+items 1..N one environment and N+1..24 another, and the arm could not be compared with either baseline.

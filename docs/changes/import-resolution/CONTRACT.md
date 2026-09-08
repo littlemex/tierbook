@@ -15,19 +15,28 @@
 
 `01-design/premise-check.md` holds the measurement. In short, and every line of it observed rather than reasoned:
 
-- In the agent pod, `import astropy` resolves to `/tmp/run-opencode-c4cd6ae898/astropy` -- a leftover workspace from
-  an earlier sweep. `django`, `flask` and `pylint` resolve into three other leftover workspaces.
-- The route is editable-install artifacts in `/usr/local/lib/python3.11/dist-packages`: three
-  `__editable___*_finder.py` meta-path finders and one `easy-install.pth`. 142 run workspaces and 8.9 GB survive in
-  `/tmp`, so those directories are still readable and nothing errors.
-- Those four packages cover **10 of the 24 items** in the pilot subset.
-- One recorded run acted on it: `astropy__astropy-14365` edited the file in its own workspace, ran
-  `python -c "from astropy.io.ascii.qdp import _line_type"`, got the unedited behaviour, compared both trees with
-  `ls`, and tried to `cp` its fix into the tree Python was importing. Refused. Scored `incorrect`.
+- In the agent pod, `astropy`, `django`, `flask` and `pylint` resolve into four leftover workspaces from earlier
+  sweeps, through editable-install artifacts in `/usr/local/lib/python3.11/dist-packages`. 142 run workspaces and
+  8.9 GB survive in `/tmp`, so those directories are readable and nothing errors.
+- Those four packages cover 10 of the 24 items. That is the number **exposed**.
+- A run is only **affected** when it invokes Python from somewhere other than its workspace root, because
+  `sys.path[0]` is consulted before the editable finder. The driver execs at the workspace root, so the default case
+  is already correct, and `cd <ws>/<package>` is the natural way to leave it.
+- Measured over both baselines: 100 `python` calls inside the exposed items, of which **5 ran from a cwd other than
+  the workspace root, in 2 runs of 48** -- both in the replicate, both scored `incorrect`.
+- Both of those agents noticed. `astropy__astropy-14365` compared the two trees with `ls` and tried to `cp` its fix
+  into the one Python was importing (refused). `pylint-dev__pylint-4551` bypassed the import system with
+  `importlib.util.spec_from_file_location`, having written `# Direct import to avoid any caching`.
 
-**What is not established.** That this costs solves. One run is observed acting on it; the other nine items' runs may
-never have imported anything. The size of the effect is what the change measures, and the premise claims only that
-the harness returns another run's behaviour to an agent testing its own edit.
+**A first version of this contract claimed the defect affects 10 items.** A review refuted it and the measurement
+above replaces it: 10 exposed, 2 observed affected.
+
+**What is not established.** That this cost either solve. Both affected runs scored `incorrect` while working around
+false feedback, and 2 observations decide nothing about a rate.
+
+**The stronger reason to fix it is not the incidence.** A run that performs an editable install repoints the package
+to its own tree and hands the pointer to whoever runs next, so for the exposed repositories the items within one arm
+are order-dependent rather than independent trials -- measured live, see the premise document.
 
 ## What changes
 
@@ -37,10 +46,15 @@ rather than a per-repository table: an entry naming a directory that does not ex
 second thing to keep in step with the item set.
 
 **D2.** `PYTHONPATH` is chosen over the alternatives because it was **measured** to win against the editable finder
-on the pod, not assumed to. The check is in the premise document and is repeated as a test.
+on the pod, and to survive a nested `sh -c`, a `bash -lc` login shell and a Python `subprocess`. Only `env -i`
+escaped it. The checks are in the premise document and are repeated as tests.
 
-**D3.** Nothing the candidate can observe changes except that environment variable. Same tools, same model, same
-oracle, same items, same prompt variant.
+**D3.** Nothing changes except that environment variable and its consequences. A review pointed out that calling the
+variable the only observable change is false: `PYTHONPATH` alters `sys.path`, import origins, plugin discovery, test
+collection and traceback paths, and `<ws>/src` can shadow a top-level name. Those are the intended effects plus one
+risk, and the risk was checked rather than dismissed -- on this subset `src/` holds importable packages only for
+flask and pytest, each the repository's own, while matplotlib's holds C++ sources. What does not change: the model,
+the endpoint, the decode policy, the agent definition, the tools, the items, the oracle and the prompt variant.
 
 **Deliberately not fixed here: the 142 leftover workspaces.** They are what make a stale pointer resolvable instead
 of failing loudly, so cleaning them would also mask the defect rather than fix it, and it would change disk state
@@ -50,23 +64,37 @@ under a measurement in a way no arm could be compared across. Cleanup belongs to
 
 Against the two recorded baselines, paired, on all 24 items.
 
-**Pass condition, stated before the run.**
+**Pass condition, stated before the run.** A review's central point about the first version is taken: a clause that
+names one stochastic trajectory cannot gate acceptance, because the agent may simply not test its edit that time.
+The gate is a deterministic replay; the arm is a check for damage, not the evidence.
 
-1. **Mechanism, and it is the whole point.** In the changed arm, `python -c "import <pkg>"` inside a run resolves to
-   that run's own workspace for every one of the four affected packages. Checked directly by running the import in a
-   run's environment, not inferred from an outcome. Zero runs may reference another run's workspace at all.
-2. **The item that acted on it.** `astropy__astropy-14365` no longer compares two trees or attempts a `cp` into
-   another workspace. That is a statement about its tool calls, not about whether it solves.
+1. **A deterministic replay, which is the gate.** Take the recorded commands from the two affected runs verbatim --
+   `cd <ws>/astropy && python -c "from astropy.io.ascii.qdp import _line_type; ..."` and the pylint equivalent --
+   and run each in a staged workspace under both environments. The old environment must import the stale file and
+   the new one must import the edited file. Asserted on `importlib.util.find_spec(...).origin` after `realpath`, not
+   on a string prefix, and asserted for a **submodule** as well as the top-level package, because a namespace or
+   `__path__` extension can make the top level local while submodules come from elsewhere. This runs in the test
+   suite, so it does not need a measurement slot at all.
+2. **The arm, which checks for damage rather than proving the fix.** Across all 24 items, zero runs reference
+   another run's workspace, and no run shows an import error or a collection failure that the baselines did not.
+   Neither affected run repeating its workaround is worth reporting and is **not** a pass criterion: it can pass
+   spuriously (the agent never tests its edit) and fail spuriously (the agent mentions the old path while
+   diagnosing something else).
 3. **No regression, stated as a limitation rather than a guard.** With 24 items and run-to-run movement estimated
    from a single replicate pair, a regression of one to three items sits inside the noise and this design cannot
    detect it. The same limit as the workspace-binding change and for the same reason.
 
-An increase in the solve count is **not** required. If it happens on the 10 affected items and not on the other 14,
-that is worth reporting as a pattern and still not worth a causal claim at this sample size.
+An increase in the solve count is **not** required and would not be believable: 2 runs of 48 were affected, so there
+is almost nothing for a solve rate to show.
 
-**What would falsify the premise.** The imports already resolve to the run's own workspace when checked in a live
-run -- meaning the pod-level check was measuring a state no run is actually in, for instance because the driver
-already sets something that shadows the finder.
+**What would falsify the premise.** Half of it already was: the pod-level probe measured a state most runs are not
+in, because the driver's cwd already shadows the finder. What remains falsifiable is the replay -- if the recorded
+command imports the run's own file under the old environment too, then something else produced the unedited
+behaviour those two agents saw, and this change addresses nothing.
+
+**What this change is worth, said plainly.** It removes a trap that fired twice in forty-eight runs and an
+order-dependence that is present in every arm whether or not it fires. It is a cheap fix with a deterministic test
+and it should not be sold as a solve-rate improvement.
 
 ## What this does to the workspace-binding result
 
