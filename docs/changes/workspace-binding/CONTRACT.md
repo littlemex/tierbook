@@ -159,3 +159,23 @@ One further limit of the precise check, since it was wrong once: the manifests a
 overwrites an earlier one's file and the set of known workspaces is not a complete history. A well-formed id absent
 from that set is reported as undecided rather than as a mangled one -- which is how `c4cd6ae898`, the first
 baseline's real astropy workspace, was first mislabelled.
+
+**2026-09-08, from the second review round: one of the six observations has a different cause, and it is a harness
+defect worth more than this change.** A reviewer asked how a run could name `c4cd6ae898`, a well-formed
+ten-character id belonging to another sweep, when a random id cannot be guessed. It could not. In the agent pod,
+`import astropy` resolves to `/tmp/run-opencode-c4cd6ae898/astropy` through an editable-install finder left in
+`dist-packages`, and 142 leftover workspaces in `/tmp` keep that directory readable. `astropy__astropy-14365` edited
+the file in its own workspace, ran `python -c "from astropy.io.ascii.qdp import _line_type"` to check the edit,
+got the **unedited** behaviour back, compared the two trees and tried to copy its fix into the one Python was
+actually importing. That agent was right; the harness was lying to it.
+
+Four packages resolve into stale run workspaces -- astropy, django, flask and pylint -- covering **10 of the 24
+items**. The full write-up is in `docs/changes/import-resolution/premise-check.md`, with the fix (a per-run
+`PYTHONPATH`, which was measured to beat the editable finder) and why it is not being applied while this arm runs.
+
+Three consequences here. The `cp` finding is withdrawn as evidence for this contract's premise: it was an agent
+working around a harness defect, not one failing to stay in its workspace. The remaining five observations are
+untouched -- they name directories that never existed and cannot be explained this way. And a limitation is added to
+the verification: the stale pointer is present in both baselines and in the changed arm, but it is not stationary,
+since which leftover tree wins changes whenever a run performs an editable install. That is an uncontrolled variable
+across arms and it is stated here rather than found later.
