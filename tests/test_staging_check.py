@@ -155,3 +155,51 @@ def test_an_unscoreable_item_leaves_the_arm_readable_but_out_of_the_denominator(
     assert res["readable"] is True
     assert res["unscoreable_items"] == ["pylint-dev__pylint-4551"]
     assert res["scoreable_runs"] == 1
+
+
+# --- what a transient network failure taught -------------------------------------------------------
+
+
+def test_a_truncated_arm_is_not_a_smaller_arm(tmp_path):
+    """A DNS failure on the operator's machine ended a 24-item sweep after 18, and every instrument downstream read 18
+    rows as a complete cohort. The missing items are correlated with whatever broke."""
+    rows = [row(item=f"i{i}", trace=f"t{i}") for i in range(18)]
+    res = _arm(tmp_path, rows)
+    assert res["readable"] is True, "without an expectation there is nothing to be short of"
+    out = tmp_path / "outcomes.jsonl"
+    res = sc.check(out, [], expect_items=24)
+    assert res["short"] is True and res["readable"] is False
+    assert res["expected_items"] == 24 and res["runs"] == 18
+
+
+def test_a_complete_arm_is_not_short(tmp_path):
+    rows = [row(item=f"i{i}", trace=f"t{i}") for i in range(24)]
+    _arm(tmp_path, rows)
+    res = sc.check(tmp_path / "outcomes.jsonl", [], expect_items=24)
+    assert res["short"] is False and res["readable"] is True
+
+
+def test_a_harness_error_is_not_charged_to_the_candidate():
+    """`pylint-dev__pylint-6386` edited a file and then the kubectl stream died with `read: can't assign requested
+    address`. Its work exists and was never scored, and calling that an agent failure charges the candidate for the
+    operator's network."""
+    r = row(state="unobserved", tail="error reading from error stream: read: can't assign requested address\\n")
+    r["unobserved_reason"] = "execution_error"
+    v, why = sc.verdict(r, None)
+    assert v == "harness-error" and "not the candidate" in why
+
+
+def test_a_harness_error_makes_the_arm_unreadable(tmp_path):
+    good = row(item="i0", trace="t0")
+    bad = row(item="i1", trace="t1", state="unobserved")
+    bad["unobserved_reason"] = "execution_error"
+    res = _arm(tmp_path, [good, bad])
+    assert res["readable"] is False
+    assert res["counts"]["harness-error"] == 1
+
+
+def test_an_unobserved_run_with_no_harness_reason_is_judged_on_its_scorer_output():
+    """`unsupported` means the agent edited nothing, which IS a result about the candidate."""
+    r = row(state="unobserved", files=0)
+    r["unobserved_reason"] = "unsupported"
+    assert sc.verdict(r, None)[0] == "staged"

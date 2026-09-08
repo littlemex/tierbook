@@ -631,3 +631,149 @@ def test_the_tar_name_recovery_says_which_naming_scheme_it_assumes(tmp_path):
 def test_with_neither_a_manifest_nor_a_tar_the_workspace_is_unknown():
     ws, why = wa.workspace_of("t-missing", [], None)
     assert ws is None and "nothing says where" in why
+
+
+# --- the denominator: how often a run named its own workspace correctly -----------------------------
+
+
+def test_correct_self_references_are_counted():
+    """A review's point: zero near-misses is also what a run that never wrote an absolute path produces, and those two
+    are opposite results. The count tells a clean arm from a silent one."""
+    own = "/tmp/w/pydata__xarray-4695"
+    assert wa.own_workspace_refs(json.dumps({"path": f"{own}/xarray"}), own) == 1
+    assert wa.own_workspace_refs(json.dumps({"command": f"ls {own} && cat {own}/setup.py"}), own) == 2
+    assert wa.own_workspace_refs(json.dumps({"path": "/tmp/w/other-item"}), own) == 0
+    assert wa.own_workspace_refs(json.dumps({"pattern": "**/*.py"}), own) == 0
+
+
+def test_a_run_that_named_nothing_absolute_has_a_zero_denominator(tmp_path):
+    own = "/tmp/w/i1"
+    span = {"traceId": "t1", "name": "opencode.tool.glob",
+            "attributes": [{"key": "tool.name", "value": {"stringValue": "glob"}},
+                           {"key": "tool.parameters", "value": {"stringValue": json.dumps({"pattern": "**/*.py"})}},
+                           {"key": "tool.success", "value": {"boolValue": True}}]}
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "solved",
+                                    "oracle": {"files_touched": 1, "diff_bytes": 90}}) + "\n")
+    manifest = tmp_path / "runs-i1.json"
+    manifest.write_text(json.dumps({"runs": [{"trace_id": "t1", "workspace": own}]}))
+    res = wa.audit(traces, outcomes, [manifest], expect_items=1)
+    assert res["own_workspace_refs"] == 0
+    assert res["runs_that_named_their_own_workspace"] == 0
+    assert res["mechanism_pass"] is True, "silent about paths is not a mechanism failure; the count says it was silent"
+
+
+def test_a_malformed_parameter_blob_counts_nothing_rather_than_raising():
+    assert wa.own_workspace_refs("{not json", "/tmp/w/i1") == 0
+    assert wa.own_workspace_refs("", "/tmp/w/i1") == 0
+    assert wa.own_workspace_refs(json.dumps({"path": "/tmp/w/i1"}), None) == 0
+
+
+# --- item naming makes an edit-close id a real sibling, not a slip ----------------------------------
+
+
+ITEMS = {"astropy__astropy-14365", "astropy__astropy-14369", "pydata__xarray-4695", "pydata__xarray-4094"}
+
+
+def test_a_sibling_items_workspace_is_contamination_not_a_mistranscription():
+    """`astropy__astropy-14365` and `astropy__astropy-14369` are ONE edit apart and both are in the 24-item set. The
+    edit-distance rule was calibrated for random hex, where an id that close was almost certainly a slip."""
+    own = "/tmp/w/astropy__astropy-14365"
+    f = wa.audit_call("read", json.dumps({"filePath": "/tmp/w/astropy__astropy-14369/astropy/a.py"}),
+                      True, None, own, set(), ITEMS)
+    assert f["other_run_workspaces"] == ["/tmp/w/astropy__astropy-14369"]
+    assert f["mangled_own_workspace"] == []
+
+
+def test_two_edits_away_and_still_a_real_item_is_contamination_too():
+    own = "/tmp/w/pydata__xarray-4695"
+    f = wa.audit_call("grep", json.dumps({"path": "/tmp/w/pydata__xarray-4094"}), True, None, own, set(), ITEMS)
+    assert f["other_run_workspaces"] == ["/tmp/w/pydata__xarray-4094"]
+
+
+def test_an_id_that_is_no_real_item_is_still_a_mistranscription():
+    """The premise's falsifier: a name made of words from the prompt, written wrong."""
+    own = "/tmp/w/pydata__xarray-4695"
+    f = wa.audit_call("grep", json.dumps({"path": "/tmp/w/pydata__xarray-4965"}), True, None, own, set(), ITEMS)
+    assert f["mangled_own_workspace"] == ["/tmp/w/pydata__xarray-4965"]
+    assert f["other_run_workspaces"] == []
+
+
+def test_without_the_item_set_the_old_behaviour_stands():
+    """An arm audited before this existed must read the same way it did, or the columns stop being comparable."""
+    own = "/tmp/w/astropy__astropy-14365"
+    f = wa.audit_call("read", json.dumps({"filePath": "/tmp/w/astropy__astropy-14369/a.py"}),
+                      True, None, own, set(), None)
+    assert f["mangled_own_workspace"] == ["/tmp/w/astropy__astropy-14369"]
+
+
+def test_the_item_set_comes_from_the_cohort_itself(tmp_path):
+    """Read from the outcomes rather than configured, because the outcomes ARE the cohort."""
+    own = "/tmp/w/astropy__astropy-14365"
+    sibling = "/tmp/w/astropy__astropy-14369"
+    span = {"traceId": "t1", "name": "opencode.tool.read",
+            "attributes": [{"key": "tool.name", "value": {"stringValue": "read"}},
+                           {"key": "tool.parameters",
+                            "value": {"stringValue": json.dumps({"filePath": f"{sibling}/a.py"})}},
+                           {"key": "tool.success", "value": {"boolValue": True}}]}
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text("".join(json.dumps(r) + "\n" for r in [
+        {"trace_id": "t1", "item_id": "astropy__astropy-14365", "state": "incorrect",
+         "oracle": {"files_touched": 1, "diff_bytes": 9}},
+        {"trace_id": "t2", "item_id": "astropy__astropy-14369", "state": "solved",
+         "oracle": {"files_touched": 1, "diff_bytes": 9}}]))
+    manifest = tmp_path / "runs-x.json"
+    manifest.write_text(json.dumps({"runs": [{"trace_id": "t1", "workspace": own}]}))
+    res = wa.audit(traces, outcomes, [manifest])
+    hit = [r for r in res["per_run"] if r["item_id"] == "astropy__astropy-14365"][0]
+    assert hit["other_run_workspaces"] == 1
+    assert hit["mangled_own_workspace"] == 0
+
+
+# --- which naming scheme the cohort used, because the rule reads differently under each ---------------
+
+
+def _cohort(tmp_path, workspaces):
+    """One run per workspace, all clean, so only the scheme is under test."""
+    spans, rows, runs = [], [], []
+    for i, ws in enumerate(workspaces):
+        t = f"t{i}"
+        spans.append({"traceId": t, "name": "opencode.tool.read",
+                      "attributes": [{"key": "tool.name", "value": {"stringValue": "read"}},
+                                     {"key": "tool.parameters",
+                                      "value": {"stringValue": json.dumps({"filePath": f"{ws}/a.py"})}},
+                                     {"key": "tool.success", "value": {"boolValue": True}}]})
+        rows.append({"trace_id": t, "item_id": f"i{i}", "state": "solved",
+                     "oracle": {"files_touched": 1, "diff_bytes": 9}})
+        runs.append({"trace_id": t, "workspace": ws})
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    man = tmp_path / "runs-x.json"
+    man.write_text(json.dumps({"runs": runs}))
+    return wa.audit(traces, outcomes, [man])
+
+
+def test_the_naming_scheme_is_reported_so_a_cross_scheme_comparison_is_visible(tmp_path):
+    """A review's point: the near-miss rule reads differently under each scheme, so a column compared across schemes
+    is not one metric measured twice. The reader should not have to infer it from the paths."""
+    assert _cohort(tmp_path, ["/tmp/run-opencode-0ae4d3229d"])["naming_scheme"] == "session-named"
+    assert _cohort(tmp_path, ["/tmp/w/pydata__xarray-4695"])["naming_scheme"] == "item-named"
+
+
+def test_a_cohort_with_both_schemes_says_so_rather_than_picking_one(tmp_path):
+    got = _cohort(tmp_path, ["/tmp/run-opencode-0ae4d3229d", "/tmp/w/pydata__xarray-4695"])
+    assert got["naming_scheme"] == "mixed:item-named,session-named"
+
+
+def test_a_cohort_whose_workspaces_are_unknown_reports_unknown(tmp_path):
+    traces = tmp_path / "t.jsonl"
+    traces.write_text("")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "solved"}) + "\n")
+    assert wa.audit(traces, outcomes, [])["naming_scheme"] == "unknown"

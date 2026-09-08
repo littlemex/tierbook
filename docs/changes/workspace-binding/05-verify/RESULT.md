@@ -43,6 +43,35 @@ Solve counts 10, 9, **13**. No item that solved in *both* baselines failed under
 that went the other way, `astropy__astropy-14369`, solved in baseline 1 and failed in baseline 2, so it is inside
 baseline movement.
 
+**The denominator is 23, not 24, in every arm.** `pylint-dev__pylint-4551` cannot be scored in this environment at
+all: the scorer reports that this checkout does not contain the instance's `FAIL_TO_PASS` ids, so the item is recorded
+`incorrect` no matter what the agent does. It was found by `harness/staging_check.py`, which exists to say whether an
+arm can be read before its numbers are quoted, and it is constant across all three arms so it cannot flatter one. What
+it does change is every rate: 10, 9 and 13 of **23** scoreable items.
+
+The same item is also one of the two runs the import-resolution defect affected, so its agent was working around a
+lying import path on a task that could not have been scored either way.
+
+## The denominator changed the reading, and it took a reviewer to ask for it
+
+A review pointed out that "zero near-misses" and "never wrote an absolute path" produce the same number, so the audit
+now counts correct self-references too. With that beside the errors:
+
+| | runs that named their own workspace | references | wrong | wrong per reference |
+|---|---|---|---|---|
+| baseline 1 | 19/24 | 377 | 1 | 0.27% |
+| baseline 2 | 18/24 | 323 | 4 | 1.24% |
+| **changed prompt** | **24/24** | **786** | 1 | **0.13%** |
+
+That is a direct behavioural effect of the prompt and it was invisible in the bare counts. Stating the absolute path
+made every run use absolute paths -- 24 of 24 against 19 and 18 -- and roughly doubled how often they did so. The
+earlier reading in this document, that the change is "not separable from run-to-run movement", was drawn from the
+error count alone; against a denominator that more than doubled, the same single error is the lowest rate of the three
+arms rather than a tie with baseline 1.
+
+Both readings are kept. The error count is 1, 4, 1 and does not separate the arms; the rate is 0.27%, 1.24%, 0.13% and
+the usage is 19, 18, 24 of 24. What none of it supports is a claim about solving.
+
 ## The metric that reads most cleanly, and it was not in the contract
 
 Runs producing **no edit at all** -- the failure the change was written from:

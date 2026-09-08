@@ -271,7 +271,29 @@ def _edits(a: str, b: str, cap: int = 3) -> int:
 MAX_ID_EDITS = 2
 
 
-def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | None) -> str:
+def own_workspace_refs(params_json: str, workspace: str | None) -> int:
+    """How many times one call named the run's own workspace correctly.
+
+    The denominator a review asked for. "Zero near-misses" is also what a run that never wrote an absolute path
+    produces, and those two are opposite results -- one is the fix working and the other is a run with nothing to say.
+    Separate from `audit_call` because it is a tally rather than a finding, and folding it into that return value
+    would give every consumer a dict shape it does not expect.
+    """
+    if not workspace:
+        return 0
+    try:
+        args = json.loads(params_json or "{}")
+    except json.JSONDecodeError:
+        return 0
+    n = 0
+    for v in list(args.values()):
+        if isinstance(v, str):
+            n += sum(1 for hit in OTHER_WORKSPACE.findall(v) if _inside(hit, workspace))
+    return n
+
+
+def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | None,
+                      known_items: set | None = None) -> str:
     """Three answers, not two, because the evidence supports three.
 
     A path in `known_workspaces` is another run's real directory: contamination. One whose id is not even the right
@@ -282,6 +304,16 @@ def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | N
     function did first, and it mislabelled `c4cd6ae898` -- a real workspace from the first baseline whose manifest
     the second baseline had overwritten."""
     if hit.rstrip("/") in (known_workspaces or ()):
+        return "other_run"
+    leaf = hit.rstrip("/").rsplit("/", 1)[-1]
+    # A leaf that IS another item's id is that item's workspace, whatever its edit distance from this run's. Under the
+    # old random-hex naming an id within two edits of the run's own was almost certainly a mistranscription; under
+    # item naming it is often a real sibling -- `astropy__astropy-14365` and `astropy__astropy-14369` are one edit
+    # apart and both are in the 24-item set, `pydata__xarray-4695` and `pydata__xarray-4094` are two. Without this,
+    # reaching into a sibling's workspace (contamination) gets filed as writing your own id wrong (a slip), which is
+    # the less serious of the two readings. The manifest check above catches it only for items that have already run,
+    # so mid-arm it was live.
+    if known_items and leaf in known_items and leaf != (workspace or "").rstrip("/").rsplit("/", 1)[-1]:
         return "other_run"
     tail = hit.rstrip("/").rsplit("-", 1)[-1]
     own_tail = (workspace or "").rstrip("/").rsplit("-", 1)[-1]
@@ -298,7 +330,7 @@ def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | N
 
 
 def audit_call(name: str, params: str, success, error: str, workspace: str | None,
-               known_workspaces: set | None = None) -> dict | None:
+               known_workspaces: set | None = None, known_items: set | None = None) -> dict | None:
     """One finding for one tool call, or None when there is nothing to say about it."""
     try:
         args = json.loads(params or "{}")
@@ -337,7 +369,7 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
         for hit in OTHER_WORKSPACE.findall(text):
             if _inside(hit, workspace):
                 continue
-            kind = _classify_foreign(hit, workspace, known_workspaces)
+            kind = _classify_foreign(hit, workspace, known_workspaces, known_items)
             bucket = {"other_run": other_workspaces, "mangled_own": mangled}.get(kind, shaped_unknown)
             if hit not in bucket:
                 bucket.append(hit)
@@ -391,6 +423,14 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
                     calls[t].append((a.get("tool.name"), a.get("tool.parameters"),
                                      a.get("tool.success"), a.get("tool.error")))
 
+    # Which naming scheme this cohort used. Reported because the near-miss rule reads differently under each, so a
+    # column compared across schemes is not one metric measured twice -- a review's point, and the reason this is a
+    # field rather than something a reader has to infer from the paths.
+    #
+    # `session-named` is `/tmp/run-<agent>-<10 random hex>`, where any id within two edits of the run's own was
+    # almost certainly a mistranscription. `item-named` is `/tmp/w/<instance-id>`, where an id that close is often a
+    # real sibling item -- which is now discriminated by the item set, but the false-negative profile still differs.
+
     # Every workspace the driver ever created, so a shape-matching path that is not among them can be told apart
     # from one that is: the first is an id the agent wrote wrong, the second is a directory belonging to another run.
     known = set()
@@ -403,15 +443,25 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
             if isinstance(r, dict) and r.get("workspace"):
                 known.add(str(r["workspace"]).rstrip("/"))
 
+    # Every item in the cohort, so a path naming a sibling item can be told from a mistranscription of this run's own
+    # name. Read from the outcomes rather than configured, because the outcomes are the cohort by definition.
+    items = {r.get("item_id") for r in rows.values() if r.get("item_id")}
+
+    schemes = set()
     per_run = []
     for t, row in sorted(rows.items(), key=lambda kv: kv[1].get("item_id") or ""):
         ws, ws_source = workspace_of(t, manifests, row.get("returned"))
-        findings = [f for f in (audit_call(n, p, ok, e, ws, known) for n, p, ok, e in calls[t]) if f]
+        if ws:
+            schemes.add("item-named" if ws.startswith("/tmp/w/") else "session-named")
+        findings = [f for f in (audit_call(n, p, ok, e, ws, known, items) for n, p, ok, e in calls[t]) if f]
+        refs = sum(own_workspace_refs(p, ws) for _, p, _, _ in calls[t])
         did, why = attempted(row.get("oracle"), row.get("state"))
         per_run.append({
             "item_id": row.get("item_id"), "state": row.get("state"), "trace_id": t,
             "workspace": ws, "workspace_source": ws_source,
             "attempted": did, "attempted_note": why,
+            # The denominator: how often this run named its own workspace correctly.
+            "own_workspace_refs": refs,
             "tool_calls": len(calls[t]),
             "outside_workspace": sum(1 for f in findings if f["outside_workspace"]),
             "shell_paths_outside": sum(1 for f in findings if f["shell_paths_outside"]),
@@ -439,6 +489,10 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int
         "with_outside_paths": sum(1 for r in per_run if r["outside_workspace"]),
         "with_shell_paths_outside": sum(1 for r in per_run if r["shell_paths_outside"]),
         "with_shell_fs_paths_outside": sum(1 for r in per_run if r["shell_fs_paths_outside"]),
+        "naming_scheme": (sorted(schemes)[0] if len(schemes) == 1 else
+                          ("mixed:" + ",".join(sorted(schemes)) if schemes else "unknown")),
+        "own_workspace_refs": sum(r["own_workspace_refs"] for r in per_run),
+        "runs_that_named_their_own_workspace": sum(1 for r in per_run if r["own_workspace_refs"]),
         "with_other_run_workspaces": sum(1 for r in per_run if r["other_run_workspaces"]),
         "with_mangled_own_workspace": sum(1 for r in per_run if r["mangled_own_workspace"]),
         "with_workspace_shaped_but_unknown": sum(1 for r in per_run if r["workspace_shaped_but_unknown"]),
@@ -533,10 +587,12 @@ def main() -> int:
     manifests = sorted(Path(a.manifests).glob("runs-*.json")) if a.manifests else []
     res = audit(Path(a.traces), Path(a.outcomes), manifests, a.expect_items)
 
-    print(f"{res['runs']} runs   clean {res['clean']}   out-of-workspace {res['with_outside_paths']}   "
+    print(f"[{res['naming_scheme']}] {res['runs']} runs   clean {res['clean']}   out-of-workspace {res['with_outside_paths']}   "
           f"other run's workspace {res['with_other_run_workspaces']}   "
           f"own id written wrong {res['with_mangled_own_workspace']}   "
           f"workspace-shaped but unknown {res['with_workspace_shaped_but_unknown']}   "
+          f"named own ws {res['runs_that_named_their_own_workspace']}/{res['runs']} runs "
+          f"({res['own_workspace_refs']} refs)   "
           f"shell fs-arg {res['with_shell_fs_paths_outside']}   "
           f"shell parsed (reported only) {res['with_shell_paths_outside']}   network {res['with_network']}   "
           f"refused {res['with_refusals']}")
