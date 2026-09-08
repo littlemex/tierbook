@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -122,22 +123,49 @@ WORKSPACE_ROOT = "/tmp/w"
 SETUP_FAILED = 91
 
 
+def workspace_name(tag: str) -> str:
+    """The directory component: the repository the task already names, and a small number.
+
+    Low entropy so a model can reproduce it, and **not identifying** so it cannot be used to look the answer up.
+    Naming the workspace after the full instance id did both halves of that wrong: it was reproducible, and it handed
+    one agent its own answer. `astropy__astropy-14369` read `14369` off its path, inferred the upstream pull request,
+    and downloaded the merged diff -- 14,013 bytes, successfully -- and that run solved. It is the only run in four
+    arms that fetched its own instance id, and it could only do it because the id was there.
+
+    So: the repository the prompt states anyway, and **nothing else**. `/tmp/w/astropy` names no upstream artifact and
+    is shorter than either scheme it replaces.
+
+    The instance number is discarded rather than shortened, because any digits of it are a search key.
+
+    **There is deliberately no suffix distinguishing one astropy item from the next**, and an earlier draft had one
+    before noticing it could not work: the driver runs as a fresh process per item, so a per-process sequence gave
+    every item `astropy-1` anyway, and a sequence derived from the instance id would put the id back in the path in a
+    recoverable form. Two runs of the same repository therefore share a directory, which is safe for the same reason
+    reusing an item's directory is safe -- the workspace is removed before anything is staged into it, and the run
+    refuses to start if a live process is working there. What it costs is that the name no longer says which item a
+    leftover belonged to; the manifests carry that.
+
+    This does not make retrieval impossible: an agent can still search for the issue text, which one did in a
+    baseline. It removes the direct handoff.
+    """
+    tag = (tag or "").strip()
+    if not tag:
+        raise ValueError("a run needs an item id to name its workspace after")
+    # `pydata__xarray-4695` -> `xarray`.
+    left = tag.split("__", 1)[-1]
+    repo = left.rsplit("-", 1)[0] if "-" in left else left
+    return re.sub(r"[^A-Za-z0-9]+", "-", repo).strip("-").lower() or "repo"
+
+
 def workspace_for(tag: str, template: str | None = None) -> str:
-    """A run's workspace, named after its item.
+    """A run's workspace: low entropy to reproduce, and naming no upstream artifact.
 
-    Named after the item because a model has to reproduce this string from its prompt on every call, and six runs
-    across three arms failed to reproduce the ten-character random id it replaces -- one of them with the absolute
-    path written in its prompt. `/tmp/w/pydata__xarray-4695` is shorter and every character of it is derivable from
-    the task.
-
-    What this gives up: the name identifies an item, not a run, so two concurrent runs of one item would collide.
-    Runs are sequential today and this does not make them safe to parallelise.
+    What this gives up: the name identifies a repository and a position, not a run, so two concurrent runs of one item
+    would collide. Runs are sequential today and this does not make them safe to parallelise.
     """
     if template:
         return guard_workspace(template.format(tag=tag))
-    if not tag or not tag.strip():
-        raise ValueError("a run needs an item id to name its workspace after")
-    return guard_workspace(f"{WORKSPACE_ROOT}/{tag.strip()}")
+    return guard_workspace(f"{WORKSPACE_ROOT}/{workspace_name(tag)}")
 
 
 def guard_workspace(path: str) -> str:

@@ -124,7 +124,7 @@ def test_the_export_composes_before_the_telemetry_exports():
 # --- D3: the workspace goes when the run is done ---------------------------------------------------
 
 
-WS_T = "/tmp/w/pydata__xarray-4695"
+WS_T = "/tmp/w/xarray"
 BACK = f" ; mkdir -p /work/returned && tar cf /work/returned/x.tar -C {WS_T} ."
 
 
@@ -181,11 +181,31 @@ def test_the_pre_commands_run_inside_the_guarded_setup_and_the_exports_after_it(
 # --- W1/W3: a workspace name a model does not have to memorise --------------------------------------
 
 
-def test_the_workspace_is_named_after_the_item():
-    """Six runs across three arms failed to reproduce the ten-character random id this replaces, one of them with the
-    absolute path written in its prompt. Every character of this name is derivable from the task."""
-    assert ad.workspace_for("pydata__xarray-4695") == "/tmp/w/pydata__xarray-4695"
-    assert ad.workspace_for("matplotlib__matplotlib-26208") == "/tmp/w/matplotlib__matplotlib-26208"
+def test_the_workspace_is_named_after_the_repository_and_nothing_else():
+    """Low entropy so a model can reproduce it -- six runs across three arms failed to reproduce the ten-character
+    random id this replaces, one with the absolute path written in its prompt -- and NOT identifying, because naming it
+    after the full instance id handed one agent its own answer."""
+    assert ad.workspace_for("pydata__xarray-4695") == "/tmp/w/xarray"
+    assert ad.workspace_for("matplotlib__matplotlib-26208") == "/tmp/w/matplotlib"
+    assert ad.workspace_for("scikit-learn__scikit-learn-15100") == "/tmp/w/scikit-learn"
+    assert ad.workspace_for("pallets__flask-5014") == "/tmp/w/flask"
+
+
+def test_the_instance_number_never_appears_in_the_path():
+    """The whole point. `astropy__astropy-14369` read 14369 off its path, inferred the upstream pull request, and
+    downloaded the merged diff -- 14,013 bytes, successfully -- and that run solved."""
+    for tag in ("astropy__astropy-14369", "pydata__xarray-4695", "django__django-11880"):
+        ws = ad.workspace_for(tag)
+        digits = tag.rsplit("-", 1)[-1]
+        assert digits not in ws, (tag, ws)
+        assert not any(c.isdigit() for c in ws.rsplit("/", 1)[-1]), ws
+
+
+def test_two_items_from_one_repository_share_a_directory_deliberately():
+    """A per-process sequence cannot distinguish them -- the driver is a fresh process per item -- and a sequence
+    derived from the instance id would put the id back in the path recoverably. Sharing is safe because the workspace
+    is removed before anything is staged and the run refuses to start if a live process is working there."""
+    assert ad.workspace_for("astropy__astropy-14365") == ad.workspace_for("astropy__astropy-14369")
 
 
 def test_a_run_without_an_item_id_is_refused_rather_than_naming_the_root():
@@ -263,9 +283,10 @@ def test_a_name_the_shell_would_split_is_refused():
 
 def test_real_instance_ids_are_accepted():
     """The assumption the refusal above documents: SWE-bench ids are word characters, dashes and underscores."""
-    for ok in ("pydata__xarray-4695", "matplotlib__matplotlib-26208", "scikit-learn__scikit-learn-15100",
-               "pylint-dev__pylint-4551", "psf__requests-1142"):
-        assert ad.workspace_for(ok) == f"/tmp/w/{ok}"
+    for ok, repo in (("pydata__xarray-4695", "xarray"), ("matplotlib__matplotlib-26208", "matplotlib"),
+                     ("scikit-learn__scikit-learn-15100", "scikit-learn"), ("pylint-dev__pylint-4551", "pylint"),
+                     ("psf__requests-1142", "requests")):
+        assert ad.workspace_for(ok) == f"/tmp/w/{repo}"
 
 
 def test_the_workspace_is_quoted_wherever_it_reaches_the_shell():
