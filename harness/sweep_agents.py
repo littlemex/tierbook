@@ -69,10 +69,32 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def sweep_one(a, instance: str) -> dict:
-    """One instance, all agents, from image pull to scores."""
+    """One instance, all agents, from image pull to scores.
+
+    The testbed is torn down in a `finally`, because every early return used to leak its pod. A testbed image occupies
+    1-3 GB of a node's disk and its CPU request keeps that node alive, which is why the sweep runs one at a time -- so a
+    leak does not merely waste space, it defeats the design. One pod was found still running after three hours, from an
+    instance whose steps had all succeeded and whose teardown failed on the same network fault that ended the sweep.
+    Its status was thrown away, so nothing said so.
+    """
     rec: dict = {"instance": instance, "started": time.time(), "steps": {}, "runs": {}}
     tb = [sys.executable, str(HERE / "testbed.py")]
     common = ["--instance", instance, "--context", a.context, "--namespace", a.namespace]
+    try:
+        return _sweep_one_inner(a, instance, rec, tb, common)
+    finally:
+        if not a.keep:
+            # The image is the expensive thing to hold. Removed whatever happened above, and its own status is
+            # recorded: a teardown that failed is a leak somebody has to clean, and an ignored return code is how one
+            # went unnoticed for three hours.
+            rc, out = run(tb + ["down"] + common, 300)
+            rec["steps"]["down"] = {"rc": rc, "tail": out[-400:]}
+            if rc != 0:
+                print(f"  [LEAK] tearing down the testbed for {instance} failed (rc {rc}); "
+                      f"the pod is still holding a node", flush=True)
+
+
+def _sweep_one_inner(a, instance: str, rec: dict, tb: list, common: list) -> dict:
 
     for step, argv, timeout in (
         ("up", tb + ["up"] + common, 1200),
@@ -140,10 +162,6 @@ def sweep_one(a, instance: str) -> dict:
             "files_touched": (r.get("oracle") or {}).get("files_touched"),
         }
 
-    if not a.keep:
-        # The image is the expensive thing to hold: it occupies a node's disk and its CPU request keeps a
-        # node alive. Removed as soon as the instance is scored, which is why this is one at a time.
-        run(tb + ["down"] + common, 300)
     rec["outcome"] = "done"
     rec["ended"] = time.time()
     return rec

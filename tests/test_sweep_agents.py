@@ -88,3 +88,54 @@ def test_the_variant_is_in_the_task_filename_so_a_baseline_file_is_not_reused(tm
 def test_the_manifest_name_is_keyed_by_run_group(tmp_path):
     assert sa.manifest_path(tmp_path, "i1", "box-qwen-bound").name == "runs-i1-box-qwen-bound.json"
     assert sa.manifest_path(tmp_path, "i1", None).name == "runs-i1.json"
+
+
+# --- the testbed is torn down whatever happened ----------------------------------------------------
+
+
+def _sweep_args(tmp_path, **kw):
+    a = types.SimpleNamespace(workdir=str(tmp_path), prompt_variant="baseline", keep=False,
+                              agent_dir=str(tmp_path / "agent"), cache=str(tmp_path / "cache.json"),
+                              context="ctx", namespace="ns", instance=None)
+    a.__dict__.update(kw)
+    return a
+
+
+def test_a_failed_step_still_tears_the_testbed_down(tmp_path, monkeypatch):
+    """Every early return used to leak the pod. A testbed image holds 1-3 GB of a node's disk and its CPU request keeps
+    that node alive, which is why the sweep runs one at a time -- so a leak defeats the design rather than wasting
+    space."""
+    calls = []
+
+    def fake_run(argv, timeout):
+        calls.append(argv[-3] if argv[-3] in ("up", "down") else argv[2])
+        return (1, "boom") if "up" in argv else (0, "ok")
+
+    monkeypatch.setattr(sa, "run", fake_run)
+    rec = sa.sweep_one(_sweep_args(tmp_path), "i1")
+    assert rec["outcome"] == "up failed"
+    assert "down" in calls, "the teardown must run even when a step failed"
+    assert rec["steps"]["down"]["rc"] == 0
+
+
+def test_a_failed_teardown_is_recorded_and_announced(tmp_path, monkeypatch, capsys):
+    """An ignored return code is how one pod went unnoticed for three hours."""
+    def fake_run(argv, timeout):
+        return (1, "no such host") if "down" in argv else (1, "boom")
+
+    monkeypatch.setattr(sa, "run", fake_run)
+    rec = sa.sweep_one(_sweep_args(tmp_path), "i1")
+    assert rec["steps"]["down"]["rc"] == 1
+    assert "[LEAK]" in capsys.readouterr().out
+
+
+def test_keep_leaves_the_testbed_up(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(argv, timeout):
+        calls.append("down" if "down" in argv else "other")
+        return (1, "boom")
+
+    monkeypatch.setattr(sa, "run", fake_run)
+    sa.sweep_one(_sweep_args(tmp_path, keep=True), "i1")
+    assert "down" not in calls
