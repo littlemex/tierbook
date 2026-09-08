@@ -176,9 +176,11 @@ items**. The full write-up is in `docs/changes/import-resolution/premise-check.m
 Three consequences here. The `cp` finding is withdrawn as evidence for this contract's premise: it was an agent
 working around a harness defect, not one failing to stay in its workspace. The remaining five observations are
 untouched -- they name directories that never existed and cannot be explained this way. And a limitation is added to
-the verification: the stale pointer is present in both baselines and in the changed arm, but it is not stationary,
-since which leftover tree wins changes whenever a run performs an editable install. That is an uncontrolled variable
-across arms and it is stated here rather than found later.
+the verification, stronger than "not stationary": two probes minutes apart during the changed arm showed the astropy
+pointer move to that arm's own item 2, so within one arm whichever astropy run installs last decides what every later
+astropy run imports. The three astropy items are **order-dependent rather than independent trials**, and the same
+holds for django, pylint and flask -- ten items of twenty-four, uncontrolled in all three recorded arms. Stated here
+rather than found later.
 
 **2026-09-08, two more corrections from the same review round.**
 

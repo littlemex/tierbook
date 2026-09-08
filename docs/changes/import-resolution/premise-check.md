@@ -47,12 +47,37 @@ The scorer runs in a separate testbed and applies the diff to a clean checkout, 
 the pod's import path. The damage is entirely to the agent's ability to test its own work: every `import` check on
 those 10 items returns another run's behaviour. An agent that trusts it concludes a correct fix did not work.
 
+## The pointer moved while the next arm was running, which makes this worse than stated above
+
+Measured live rather than argued. Two probes of the same interpreter and the same site directory, minutes apart
+during the changed-prompt sweep:
+
+    first probe:   import astropy -> /tmp/run-opencode-c4cd6ae898/astropy   (a leftover from the FIRST baseline)
+    second probe:  import astropy -> /tmp/run-opencode-acf4781c5e/astropy
+
+`acf4781c5e` is the changed arm's own `astropy__astropy-14369` workspace -- item 2 of that sweep. So during item 2 a
+run performed an editable install and repointed the package to its own tree.
+
+Two consequences, and the second is the one that matters.
+
+A run that installs fixes itself. The damage falls on runs that do not: item 1 (`astropy-14365`) imported the first
+baseline's leftover, and item 3 (`astropy-14995`), which ran next, imported **item 2's** tree.
+
+So the three astropy items in one arm are not independent trials. Whichever astropy run installs last determines what
+every later astropy run imports, which makes the result order-dependent within a single arm -- not merely
+non-stationary across arms, which is how the workspace-binding contract's limitation first recorded it. The same
+holds for the three django items, the three pylint items and flask.
+
 ## The fix, and the test that chose it
 
 `PYTHONPATH` beats the editable finder, verified on the pod rather than reasoned about:
 
     no PYTHONPATH:    import astropy -> /tmp/run-opencode-c4cd6ae898/astropy/__init__.py
     PYTHONPATH=<ws>:  import astropy -> <ws>/astropy/__init__.py
+
+It also survives every way a run reaches an interpreter, measured on the pod rather than assumed: a nested `sh -c`,
+a `bash -lc` login shell, and a `subprocess` spawned from Python all see it. The only probe that escaped was
+`env -i`, which clears the environment on purpose.
 
 So one environment variable per run fixes it, and it needs two entries because repository layouts differ: `<ws>` for
 astropy and django, `<ws>/src` for flask. Two alternatives were rejected. Running `pip install -e .` per run is what
@@ -76,9 +101,10 @@ It does not invalidate it, and it narrows what it can claim.
 
 - The stale pointer was present in both baselines and is present in the changed arm, so the comparison is between
   arms that share the defect.
-- It is not stationary: the astropy artifact is dated 20260907 and names the *first* baseline's workspace, so which
-  leftover tree wins changes whenever a run performs an editable install. That is an uncontrolled variable across
-  arms, and it belongs in the limitations rather than being discovered later.
+- It is worse than not stationary. As the section above measures, the pointer moved during the changed arm to that
+  arm's own item 2, so within one arm the astropy items are **order-dependent**: whichever installs last decides what
+  every later astropy run imports. That is uncontrolled in all three recorded arms and belongs in the limitations
+  rather than being discovered later.
 - One of the six "wrote its own workspace id wrong" observations is now explained by something else entirely, and it
   is the only one of the six involving a real other-run directory. The other five remain unexplained by this and
   still name directories that never existed.
