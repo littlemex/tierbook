@@ -26,11 +26,20 @@ Every run of all four arms, searched for a fetch of an upstream pull request, is
 | baseline 1 | 24 | 1 | `pylint-7277`: `/issues/3636`, `/issues/4161` |
 | baseline 2 | 24 | 0 | -- |
 | changed prompt | 24 | 0 | -- |
-| **item-named** | 19 so far | 2 | `pylint-7277` as above, **and `astropy-14369`: `/issues/14369`, `/pull/14369`** |
+| **item-named** | 24 | 2 | `pylint-7277` as above, **and `astropy-14369`: `/issues/14369`, `/pull/14369`** |
 
 The `pylint-7277` fetches are not this: 3636 and 4161 are issue numbers **quoted in its own problem statement**, so
 following them is ordinary research and it happened in a baseline too. `astropy-14369` fetching `14369` is the only
 run in four arms that looked up **its own instance id**, and it could only do that because the id was in its path.
+
+**Re-run over all 24 after a review pointed out the table said "19 so far".** The claim "it happened only where the id
+was in the path" had been asserted over 19 runs with 5 unsearched. Repeated over all 24: the same two runs, the same
+one fetching its own id.
+
+**One channel a review expected and the tars do not have.** If `staged.tar` carried `.git`, then `git log -1` inside
+the workspace would give the base commit, which identifies the item more precisely than the instance id -- and renaming
+the directory would be theatre. Checked: **zero `.git/` entries** in the staged tars for astropy-14369, xarray-4695 and
+django-11880, and `git` is not installed in the agent pod at all.
 
 ## What this costs
 
@@ -49,9 +58,14 @@ to decide.
 
 ## The replacement
 
-Low entropy and **not identifying**: `/tmp/w/<repo>-<n>`, where `<repo>` is the repository the task already names and
-`<n>` is a small sequence number. `/tmp/w/astropy-2` is shorter than either scheme it replaces, has no ten-character
-random span to transcribe, and names no upstream artifact.
+Low entropy and **not identifying**: the repository the task already names.
+
+This section first proposed `/tmp/w/<repo>-<n>` -- `/tmp/w/astropy-2`. **What shipped is `/tmp/w/<repo>` with no
+sequence number**, and a review was right to notice the two documents disagreeing. The sequence could not be made to
+work: the driver is a fresh process per item, so a per-process counter gives every item `-1`, and a counter derived
+from the instance id puts the id back in the path recoverably. The cost is that two items of one repository share a
+directory, which is discussed in `agent_drive.workspace_for` and is what makes the setup guards load-bearing rather
+than defensive.
 
 It does not make retrieval impossible -- an agent can still search for the issue text, which is what `pylint-7277` did
 in a baseline -- and it removes the direct handoff, which is the part this arm created.

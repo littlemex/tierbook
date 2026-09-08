@@ -1,8 +1,9 @@
 # Phase 5: what the item-named workspace did
 
-Four arms of the same 24 items on the same candidate. **The mechanism the change targets went to zero.** The pass
-condition is still not met, for the same over-broad clause the previous arm failed. And the solve count cannot be
-used at all, for the reason recorded in `LEAKAGE.md` before this arm's numbers were read.
+Four arms of the same 24 items on the same candidate. The pass condition is not met, for the same over-broad clause the
+previous arm failed. The solve count cannot be used at all, for the reason recorded in `LEAKAGE.md` before this arm's
+numbers were read. And **the mechanism result is consistent with the change working and cannot establish it** -- an
+earlier version of this line said "the mechanism went to zero" as a finding, which the table below refutes.
 
 ## The mechanism, with its denominator
 
@@ -30,9 +31,23 @@ transcription -- setting `PYTHONPATH` and removing a workspace afterwards do not
 "no mechanism I can think of" is an argument, and the arms cannot separate them. The same applies to the fifth arm,
 which differs from the fourth by the repo-only name **and** four driver guards.
 
-What one error becoming zero supports: the six mistranscriptions across the earlier arms were about the string, not
-about the model's care. What it does not support: a rate, or a clean attribution. One event against 778 opportunities
-and zero against 778 are not distinguishable at this sample size, and three changes moved together.
+**The two baselines settle what this table can support.** They are identical in every respect and differ by 1 error
+against 4. So the between-arm movement under no change at all is larger than the 1 to 0 being examined, and no reading
+of the last two rows survives the first two. A review put it plainly and it is right: the honest finding is *consistent
+with* the transcription hypothesis at a sample size that cannot distinguish it from no effect.
+
+What the design argument still supports, stated as an argument rather than a measurement: a name with no
+ten-character random span has nothing to mistranscribe. What the data supports: not a rate, and not a clean
+attribution -- three changes moved together.
+
+**Two things about the instrument, both of which cut.** All four arms were re-audited under the final classifier, so
+the columns are one instrument's output rather than two; that was done after each change to it and is worth saying
+because the alternative would make the comparison meaningless. But the classifier is *asymmetrically sensitive*: under
+random hex, catching a corrupted span means fuzzy-matching a random string, so the baselines' 1 and 4 are plausibly
+undercounts; under item naming, a near-miss lands near a known finite list of ids and the classifier was upgraded to
+look for exactly that. So the item arm was measured by a more sensitive instrument and still found zero, which
+strengthens the zero, while the baselines were measured by a less sensitive one, which weakens the 1 and the 4. Both
+directions are stated because using only one would be picking.
 
 ## The pass condition: still not met, and for the same clause
 
@@ -65,10 +80,16 @@ The prompt change is worth keeping: it took absolute-path usage from 19 and 18 o
 every zero-edit run. The naming change removes the transcription failure the prompt change could not, and it is
 **unsafe as measured**: the name it uses hands an agent a search key for its own answer.
 
-So the version to ship is neither of the two named schemes but the third, recorded in `LEAKAGE.md` and now
-implemented: the repository the prompt already names, and nothing else. `/tmp/w/astropy` is shorter than either, has
-no ten-character random span, and names no upstream artifact. A fifth arm on that scheme is the first one whose solve
-count will be readable.
+So the version to ship is neither of the two named schemes but a third: the repository the prompt already names, and
+nothing else. `/tmp/w/astropy` is shorter than either, has no ten-character random span, and names no upstream
+artifact. `LEAKAGE.md` proposed it with a sequence number and what shipped has none -- see there for why the sequence
+could not be made to work, and for the `.git` channel a review expected and the tars do not have.
+
+A fifth arm on that scheme is the first whose solve count will be readable **on the channel this arm created**. The
+channel that predates all five arms is still open: the problem statement is itself a search key, which is how
+`pylint-7277` found its quoted issues in a baseline, and the network is reachable. Renaming a directory does not close
+that, and the honest phrasing is that this removes the channel this arm created rather than that it makes the arm
+clean.
 
 ## One thing this arm did not decide, said plainly
 
