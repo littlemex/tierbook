@@ -261,6 +261,10 @@ def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, 
     # cannot match itself.
     # The pattern matches the workspace itself or anything BELOW it, not anything that merely starts with its name:
     # a bare `<ws>*` would also match `/tmp/w/astropy-scratch`, which is a different directory.
+    #
+    # Verified on the pod rather than in the test suite, because the tests for this skip on macOS -- there is no
+    # `/proc` to read. Four cases on Linux: nobody -> FREE, a process in `astropy-scratch` -> FREE, one in
+    # `astropy/units` -> BUSY, one in `astropy` -> BUSY.
     q = _shq(workspace)
     busy = ("for d in /proc/[0-9]*; do case \"$(readlink $d/cwd 2>/dev/null)\" in {q}|{q}/*) "
             "echo \"[FATAL] another process is working in {ws_plain}\" >&2; exit {setup_rc};; esac; done").format(
