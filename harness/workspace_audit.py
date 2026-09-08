@@ -234,6 +234,34 @@ def _fs_command_paths(cmd: str, workspace: str | None) -> list:
     return out
 
 
+def _edits(a: str, b: str, cap: int = 3) -> int:
+    """Levenshtein distance, stopping once it exceeds `cap`.
+
+    Here to catch the case the length rule cannot: a same-length single-character substitution. The changed-prompt
+    arm produced `a933f30189` where the run's own workspace was `a932f30189` -- ten characters either way, so a rule
+    that only compares lengths files it as undecidable and the count stops being comparable across arms.
+    """
+    if a == b:
+        return 0
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) > cap:
+            return cap + 1
+        prev = cur
+    return prev[-1]
+
+
+#: How far a written id may be from the run's own before it stops being a plausible transcription of it. Two, because
+#: every observed case is one or two edits away -- a dropped character, a substituted one, a kept suffix -- and
+#: because a random ten-hex id is astronomically unlikely to land that close by chance.
+MAX_ID_EDITS = 2
+
+
 def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | None) -> str:
     """Three answers, not two, because the evidence supports three.
 
@@ -244,12 +272,17 @@ def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | N
     item, so a later sweep overwrites an earlier one's files. Calling that third case a mangled id is what this
     function did first, and it mislabelled `c4cd6ae898` -- a real workspace from the first baseline whose manifest
     the second baseline had overwritten."""
+    if hit.rstrip("/") in (known_workspaces or ()):
+        return "other_run"
+    tail = hit.rstrip("/").rsplit("-", 1)[-1]
+    own_tail = (workspace or "").rstrip("/").rsplit("-", 1)[-1]
+    # First: is it a near-miss of THIS run's own id? That is the strongest evidence available and it does not depend
+    # on the manifests being complete, which they are not.
+    if own_tail and 0 < _edits(tail, own_tail, MAX_ID_EDITS) <= MAX_ID_EDITS:
+        return "mangled_own"
     if not known_workspaces:
         return "other_run"
-    if hit.rstrip("/") in known_workspaces:
-        return "other_run"
     lengths = _id_lengths(known_workspaces)
-    tail = hit.rstrip("/").rsplit("-", 1)[-1]
     if lengths and len(tail) not in lengths:
         return "mangled_own"
     return "shaped_but_unknown"

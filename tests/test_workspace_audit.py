@@ -539,3 +539,55 @@ def test_a_leading_environment_assignment_does_not_hide_the_command():
 def test_system_directories_a_checkout_touches_stay_benign_here_too():
     assert _f("find /usr -name git -type f") is None
     assert _f("cat /proc/meminfo") is None
+
+
+# --- a same-length substitution is still the run's own id -------------------------------------------
+
+
+def test_a_one_character_substitution_in_the_own_id_is_a_mangled_id():
+    """Verbatim from the changed-prompt arm. `matplotlib-26208` had `a932f30189` and wrote `a933f30189` -- ten
+    characters either way, so the length rule files it as undecidable and the count stops being comparable across
+    arms. That item wrote its own id wrong in all three arms."""
+    own = "/tmp/run-opencode-a932f30189"
+    f = wa.audit_call("glob", json.dumps({"pattern": "**/stackplot*", "path": "/tmp/run-opencode-a933f30189"}),
+                      False, "The user rejected permission to use this specific tool call.", own,
+                      {"/tmp/run-opencode-c4cd6ae898"})
+    assert f["mangled_own_workspace"] == ["/tmp/run-opencode-a933f30189"]
+    assert f["workspace_shaped_but_unknown"] == []
+
+
+def test_a_genuinely_different_id_is_not_called_a_near_miss():
+    own = "/tmp/run-opencode-a932f30189"
+    f = wa.audit_call("glob", json.dumps({"path": "/tmp/run-opencode-0ae4d3229d"}), True, None, own,
+                      {"/tmp/run-opencode-c4cd6ae898"})
+    assert f["mangled_own_workspace"] == []
+    assert f["workspace_shaped_but_unknown"] == ["/tmp/run-opencode-0ae4d3229d"]
+
+
+def test_a_known_other_workspace_stays_contamination_even_if_it_is_one_edit_away():
+    """Membership in the manifests is positive evidence and outranks a coincidental near-miss."""
+    own = "/tmp/run-opencode-a932f30189"
+    other = "/tmp/run-opencode-a933f30189"
+    f = wa.audit_call("bash", json.dumps({"command": f"ls {other}"}), True, None, own, {other})
+    assert f["other_run_workspaces"] == [other]
+    assert f["mangled_own_workspace"] == []
+
+
+def test_the_distance_stops_early_rather_than_scoring_every_pair():
+    assert wa._edits("abc", "abc") == 0
+    assert wa._edits("a932f30189", "a933f30189") == 1
+    assert wa._edits("0ae4d3229d", "d3229d") == 4 > wa.MAX_ID_EDITS
+    assert wa._edits("415edc1dee", "415edc17") == 3 > wa.MAX_ID_EDITS
+    assert wa._edits("x" * 40, "y" * 40, cap=2) == 3, "capped rather than computed in full"
+
+
+def test_the_previously_observed_manglings_are_still_caught_by_one_rule_or_the_other():
+    """Five from the baselines plus one from the changed arm. Whether the length rule or the distance rule catches a
+    given one does not matter; that all six are `mangled_own` does."""
+    cases = [("0ae4d3229d", "d3229d"), ("415edc1dee", "415edc17"), ("9ef07f454b", "9ef07f4b"),
+             ("daf8d8a993", "daf8d8a93"), ("8c042ffb40", "8c042ffb4"), ("a932f30189", "a933f30189")]
+    for own_id, wrote in cases:
+        own = f"/tmp/run-opencode-{own_id}"
+        f = wa.audit_call("bash", json.dumps({"command": f"ls /tmp/run-opencode-{wrote}"}), True, None, own,
+                          {"/tmp/run-opencode-c4cd6ae898", "/tmp/run-opencode-0ae4d3229d"})
+        assert f["mangled_own_workspace"] == [f"/tmp/run-opencode-{wrote}"], (own_id, wrote)
