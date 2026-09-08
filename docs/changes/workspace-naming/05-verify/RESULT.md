@@ -13,15 +13,26 @@ used at all, for the reason recorded in `LEAKAGE.md` before this arm's numbers w
 | prompt states the path | same | 24/24 | 786 | 1 | 0.13% |
 | **item-named** | `/tmp/w/<instance-id>` | **24/24** | **778** | **0** | **0%** |
 
-The comparison that matters is the last two rows, because they hold the prompt constant and differ only in the name.
 **Same usage -- 24 of 24 runs, 778 references against 786 -- and the errors went from 1 to 0.** Also zero paths naming
 another item's workspace, which is the reading the audit had to be taught to distinguish before this arm could be read
 at all: under item naming a sibling item is often within two edits of the run's own name.
 
-What one error becoming zero supports: the six mistranscriptions across the three earlier arms were about the string,
-not about the model's care. What it does not support: a rate. One event against 778 opportunities and zero against 778
-are not distinguishable at this sample size, and the honest statement is that the change removed the only mechanism
-that produced them rather than that it lowered a frequency.
+**Attribution to the name alone is given up, and an earlier draft of this section claimed it.** It said the last two
+rows "hold the prompt constant and differ only in the name". They do not. The timestamps:
+
+    arm 3 first run          09:35
+    D1 (PYTHONPATH) and D3 (per-run workspace cleanup) merged   11:02
+    item naming merged                                          11:07
+    arm 4 first run          11:16
+
+So arm 4 carries three changes relative to arm 3, not one. No mechanism connects either of the other two to
+transcription -- setting `PYTHONPATH` and removing a workspace afterwards do not help a model copy a string -- but
+"no mechanism I can think of" is an argument, and the arms cannot separate them. The same applies to the fifth arm,
+which differs from the fourth by the repo-only name **and** four driver guards.
+
+What one error becoming zero supports: the six mistranscriptions across the earlier arms were about the string, not
+about the model's care. What it does not support: a rate, or a clean attribution. One event against 778 opportunities
+and zero against 778 are not distinguishable at this sample size, and three changes moved together.
 
 ## The pass condition: still not met, and for the same clause
 
