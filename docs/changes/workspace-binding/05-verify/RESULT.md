@@ -43,6 +43,15 @@ Solve counts 10, 9, **13**. No item that solved in *both* baselines failed under
 that went the other way, `astropy__astropy-14369`, solved in baseline 1 and failed in baseline 2, so it is inside
 baseline movement.
 
+**The denominator is 23, not 24, in every arm.** `pylint-dev__pylint-4551` cannot be scored in this environment at
+all: the scorer reports that this checkout does not contain the instance's `FAIL_TO_PASS` ids, so the item is recorded
+`incorrect` no matter what the agent does. It was found by `harness/staging_check.py`, which exists to say whether an
+arm can be read before its numbers are quoted, and it is constant across all three arms so it cannot flatter one. What
+it does change is every rate: 10, 9 and 13 of **23** scoreable items.
+
+The same item is also one of the two runs the import-resolution defect affected, so its agent was working around a
+lying import path on a task that could not have been scored either way.
+
 ## The denominator changed the reading, and it took a reviewer to ask for it
 
 A review pointed out that "zero near-misses" and "never wrote an absolute path" produce the same number, so the audit
