@@ -6,6 +6,7 @@ loudly; the sweep simply produced an empty outcomes file, and it was found by re
 state file afterwards.
 """
 import json
+import pytest
 import sys
 from pathlib import Path
 
@@ -86,3 +87,82 @@ def test_the_run_records_the_prompt_it_was_actually_given(monkeypatch):
     # The substitution is the driver's, done once, in run_one -- pinned here because a second caller doing it
     # again is how a prompt ends up half filled.
     assert filled.count(ws) == 1
+
+
+# --- D1: the run's own code comes first -----------------------------------------------------------
+
+
+def test_pythonpath_names_the_runs_own_workspace_and_its_src():
+    """Two entries because layouts differ: `<ws>` for astropy, django and pylint, `<ws>/src` for flask."""
+    got = ad.python_path_export("/tmp/run-opencode-0ae4d3229d")
+    assert got == ("export PYTHONPATH='/tmp/run-opencode-0ae4d3229d:"
+                   "/tmp/run-opencode-0ae4d3229d/src'; ")
+
+
+def test_a_trailing_slash_does_not_produce_a_doubled_separator():
+    assert "//" not in ad.python_path_export("/tmp/run-opencode-0ae4d3229d/")
+
+
+def test_a_relative_workspace_is_refused_because_it_would_depend_on_cwd():
+    """The whole defect is about cwd deciding what a run imports, so a relative entry would reintroduce it."""
+    for bad in ("", ".", "run-opencode-0ae4d3229d", "~/work"):
+        with pytest.raises(ValueError, match="absolute"):
+            ad.python_path_export(bad)
+
+
+def test_a_workspace_with_a_space_is_quoted():
+    got = ad.python_path_export("/tmp/run opencode")
+    assert "'" in got and got.endswith("; ")
+
+
+def test_the_export_composes_before_the_telemetry_exports():
+    """PYTHONPATH must be set whether or not telemetry is on, which an earlier shape got wrong by building the
+    environment string only inside the telemetry branch."""
+    assert ad.python_path_export("/tmp/x").endswith("; ")
+
+
+# --- D3: the workspace goes when the run is done ---------------------------------------------------
+
+
+WS_T = "/tmp/run-opencode-0ae4d3229d"
+BACK = f" ; mkdir -p /work/returned && tar cf /work/returned/x.tar -C {WS_T} ."
+
+
+def test_the_sweep_up_comes_after_the_hand_back_and_before_the_exit():
+    """Order is the whole correctness of this. Removing the tree before the tar would hand back nothing, and removing
+    it after the exit would never happen."""
+    inner = ad.build_inner(WS_T, ad.python_path_export(WS_T), "", "", BACK, True)
+    assert inner.index("tar cf") < inner.index("rm -rf") < inner.index("exit $")
+
+
+def test_the_agents_status_survives_the_sweep_up():
+    """`rm` must not become the command whose exit code the driver reads."""
+    inner = ad.build_inner(WS_T, "", "", "", BACK, True)
+    assert inner.endswith("exit ${exec_rc:-0}")
+
+
+def test_nothing_is_removed_when_cleanup_is_off():
+    inner = ad.build_inner(WS_T, "", "", "", BACK, False)
+    assert "rm -rf" not in inner
+    assert "tar cf" in inner
+
+
+def test_the_environment_is_exported_before_the_agent_starts():
+    """A `PYTHONPATH` set after the exec would reach nothing."""
+    inner = ad.build_inner(WS_T, ad.python_path_export(WS_T), "", "", "", True)
+    assert inner.index("export PYTHONPATH") < inner.index('"$@"')
+
+
+def test_the_workspace_is_made_before_anything_is_staged_into_it():
+    inner = ad.build_inner(WS_T, "", "", f"tar xf /work/x.tar -C {WS_T} && ", "", True)
+    assert inner.index("mkdir -p") < inner.index("tar xf")
+
+
+def test_a_run_with_no_staged_tree_neither_hands_back_nor_keeps_its_workspace():
+    inner = ad.build_inner(WS_T, "", "", "", "", True)
+    assert "tar cf" not in inner and "rm -rf" in inner
+
+
+def test_the_pre_commands_run_before_the_agent_and_after_the_environment():
+    inner = ad.build_inner(WS_T, ad.python_path_export(WS_T), "setup >/dev/null 2>&1 && ", "", "", True)
+    assert inner.index("export PYTHONPATH") < inner.index("setup") < inner.index('"$@"')
