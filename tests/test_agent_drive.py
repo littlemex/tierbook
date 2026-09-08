@@ -124,7 +124,7 @@ def test_the_export_composes_before_the_telemetry_exports():
 # --- D3: the workspace goes when the run is done ---------------------------------------------------
 
 
-WS_T = "/tmp/run-opencode-0ae4d3229d"
+WS_T = "/tmp/w/pydata__xarray-4695"
 BACK = f" ; mkdir -p /work/returned && tar cf /work/returned/x.tar -C {WS_T} ."
 
 
@@ -132,7 +132,9 @@ def test_the_sweep_up_comes_after_the_hand_back_and_before_the_exit():
     """Order is the whole correctness of this. Removing the tree before the tar would hand back nothing, and removing
     it after the exit would never happen."""
     inner = ad.build_inner(WS_T, ad.python_path_export(WS_T), "", "", BACK, True)
-    assert inner.index("tar cf") < inner.index("rm -rf") < inner.index("exit $")
+    # Two removals now: W2 makes the workspace fresh at the start, W3 sweeps it up at the end. The one this test is
+    # about is the LAST, so it is found from the right rather than from the left.
+    assert inner.index("tar cf") < inner.rindex("rm -rf") < inner.index("exit $")
 
 
 def test_the_agents_status_survives_the_sweep_up():
@@ -141,9 +143,13 @@ def test_the_agents_status_survives_the_sweep_up():
     assert inner.endswith("exit ${exec_rc:-0}")
 
 
-def test_nothing_is_removed_when_cleanup_is_off():
+def test_nothing_is_removed_at_the_END_when_cleanup_is_off():
+    """The opening removal is not optional -- a stale tree from an earlier run of the same item must never be
+    inherited, and `--keep-workspace` is for reading one run's tree afterwards, not for starting from a dirty one."""
     inner = ad.build_inner(WS_T, "", "", "", BACK, False)
-    assert "rm -rf" not in inner
+    assert inner.count("rm -rf") == 1
+    assert inner.index("rm -rf") < inner.index("mkdir -p")
+    assert inner.rindex("rm -rf") < inner.index("tar cf"), "no sweep-up after the hand-back"
     assert "tar cf" in inner
 
 
@@ -166,3 +172,71 @@ def test_a_run_with_no_staged_tree_neither_hands_back_nor_keeps_its_workspace():
 def test_the_pre_commands_run_before_the_agent_and_after_the_environment():
     inner = ad.build_inner(WS_T, ad.python_path_export(WS_T), "setup >/dev/null 2>&1 && ", "", "", True)
     assert inner.index("export PYTHONPATH") < inner.index("setup") < inner.index('"$@"')
+
+
+# --- W1/W3: a workspace name a model does not have to memorise --------------------------------------
+
+
+def test_the_workspace_is_named_after_the_item():
+    """Six runs across three arms failed to reproduce the ten-character random id this replaces, one of them with the
+    absolute path written in its prompt. Every character of this name is derivable from the task."""
+    assert ad.workspace_for("pydata__xarray-4695") == "/tmp/w/pydata__xarray-4695"
+    assert ad.workspace_for("matplotlib__matplotlib-26208") == "/tmp/w/matplotlib__matplotlib-26208"
+
+
+def test_a_run_without_an_item_id_is_refused_rather_than_naming_the_root():
+    """The failure this guards: an empty tag would name the root, and the driver removes a workspace with rm -rf."""
+    for bad in ("", "   ", None):
+        with pytest.raises(ValueError):
+            ad.workspace_for(bad or "")
+
+
+def test_the_guard_refuses_anything_outside_the_root():
+    for bad in ("/tmp", "/tmp/", "/", "/tmp/other/x", "/home/akazawt/work", "relative/path", ""):
+        with pytest.raises(ValueError):
+            ad.guard_workspace(bad)
+
+
+def test_the_guard_refuses_the_root_itself_however_it_is_spelled():
+    for bad in (ad.WORKSPACE_ROOT, ad.WORKSPACE_ROOT + "/", ad.WORKSPACE_ROOT + "//", ad.WORKSPACE_ROOT + "/."):
+        with pytest.raises(ValueError):
+            ad.guard_workspace(bad)
+
+
+def test_the_guard_refuses_a_traversal_that_would_climb_out():
+    for bad in ("/tmp/w/../../etc", "/tmp/w/x/../..", "/tmp/w/../w2/x"):
+        with pytest.raises(ValueError):
+            ad.guard_workspace(bad)
+
+
+def test_the_guard_accepts_a_real_workspace_and_normalises_the_trailing_slash():
+    assert ad.guard_workspace("/tmp/w/pydata__xarray-4695/") == "/tmp/w/pydata__xarray-4695"
+
+
+def test_a_template_still_goes_through_the_guard():
+    assert ad.workspace_for("x", "/tmp/w/custom-{tag}") == "/tmp/w/custom-x"
+    with pytest.raises(ValueError):
+        ad.workspace_for("x", "/var/lib/{tag}")
+
+
+# --- W2: fresh, not merely present -----------------------------------------------------------------
+
+
+def test_the_workspace_is_removed_before_it_is_made():
+    """With a deterministic name, inheriting a leftover from an earlier run of the same item is worse than a random
+    name would have been, and `tar x` over an existing tree keeps what the archive does not overwrite."""
+    inner = ad.build_inner("/tmp/w/i1", "", "", "tar xf /work/x.tar -C /tmp/w/i1 && ", "", True)
+    assert inner.index("rm -rf") < inner.index("mkdir -p") < inner.index("tar xf")
+
+
+def test_the_assembled_command_refuses_a_workspace_the_guard_rejects():
+    """build_inner interpolates into `rm -rf`, so it re-checks rather than trusting its caller."""
+    for bad in ("/tmp", "/", "/tmp/w"):
+        with pytest.raises(ValueError):
+            ad.build_inner(bad, "", "", "", "", True)
+
+
+def test_both_removals_name_the_same_guarded_path():
+    inner = ad.build_inner("/tmp/w/i1/", "", "", "", " ; tar cf /work/returned/x.tar -C /tmp/w/i1 .", True)
+    assert inner.count("rm -rf /tmp/w/i1") == 2
+    assert "rm -rf /tmp/w/i1/" not in inner

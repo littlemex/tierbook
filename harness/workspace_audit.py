@@ -17,9 +17,11 @@ wrong id in the command string -- and went on to solve. So this reports two diff
 line up with failing.
 
 **What counts as outside.** A tool argument naming a path that resolves outside the run's own workspace, or a
-shell command naming one. The run's workspace comes from the driver's manifest; when that is missing it is
-recovered from the returned tar's name, which is how it had to be recovered once already after a second sweep
-overwrote the manifest.
+shell command naming one. The run's workspace comes from the driver's manifest. When that is missing it can be
+recovered from the returned tar's name -- which is how it had to be recovered once, after a second sweep overwrote
+the manifest -- but only for an arm whose workspaces were named after the session. The driver now names a workspace
+after its item, so that fallback is dated, says so, and is no longer needed: manifests are keyed by run group and a
+later sweep cannot overwrite an earlier one's record.
 
 **What this cannot see, stated because a review found the prose claiming otherwise.** It reads the arguments a
 model passed, not the syscalls that followed. A repository script, a build step, a hook or a subprocess can reach
@@ -145,7 +147,9 @@ SHELL_BENIGN = ("/dev", "/proc", "/sys", "/usr", "/bin", "/lib", "/etc/ssl", "/o
 #: was the `ls` of both paths immediately before it, so the other run's tree was readable. A run that writes into
 #: another run's workspace could change that run's result with nothing downstream showing where it came from, and
 #: the only reason this one did not is the permission system.
-OTHER_WORKSPACE = re.compile(r"/tmp/run-[\w.-]+")
+#: Both naming schemes, because the recorded arms used one and everything after uses the other, and an audit that
+#: only knew the current one would report a clean arm for every cohort already measured.
+OTHER_WORKSPACE = re.compile(r"/tmp/(?:run-[\w.-]+|w/[\w.-]+)")
 
 
 def workspace_of(trace_id: str, manifests: list[Path], returned: str | None) -> tuple[str | None, str]:
@@ -161,8 +165,13 @@ def workspace_of(trace_id: str, manifests: list[Path], returned: str | None) -> 
     if returned:
         stem = Path(returned).stem                      # opencode-8c042ffb40
         if "-" in stem:
-            return f"/tmp/run-{stem}", ("recovered from the returned tar's name, because no manifest carried this "
-                                        "trace -- a second sweep over the same instances overwrites the first")
+            # Only valid for a run whose workspace was named after its session. The driver now names a workspace
+            # after its ITEM, so this reconstruction is right for the recorded arms and wrong for anything measured
+            # after that change -- and it says which it is rather than returning a path with no provenance. What
+            # replaced the need for it is manifests keyed by run group, so a later sweep no longer overwrites the
+            # record this was invented to recover.
+            return f"/tmp/run-{stem}", ("recovered from the returned tar's name, valid only for an arm whose "
+                                        "workspaces were named after the session; no manifest carried this trace")
     return None, "no manifest and no returned tree, so nothing says where this run was supposed to work"
 
 

@@ -41,7 +41,7 @@ import subprocess
 import sys
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import task_prompt  # noqa: E402
@@ -111,6 +111,50 @@ def new_traceparent() -> tuple[str, str]:
 #: package, while matplotlib's holds C++ sources.
 OWN_CODE_SUBDIRS = ("", "src")
 
+#: Where run workspaces live. A workspace is refused unless it sits under this, because the driver removes it with
+#: `rm -rf` and that is the one genuinely dangerous line here. Deliberately not `/tmp`: a bug that produced an empty
+#: item id would then name `/tmp` itself, and `rm -rf /tmp` on a shared pod takes every other run's tree with it.
+WORKSPACE_ROOT = "/tmp/w"
+
+
+def workspace_for(tag: str, template: str | None = None) -> str:
+    """A run's workspace, named after its item.
+
+    Named after the item because a model has to reproduce this string from its prompt on every call, and six runs
+    across three arms failed to reproduce the ten-character random id it replaces -- one of them with the absolute
+    path written in its prompt. `/tmp/w/pydata__xarray-4695` is shorter and every character of it is derivable from
+    the task.
+
+    What this gives up: the name identifies an item, not a run, so two concurrent runs of one item would collide.
+    Runs are sequential today and this does not make them safe to parallelise.
+    """
+    if template:
+        return guard_workspace(template.format(tag=tag))
+    if not tag or not tag.strip():
+        raise ValueError("a run needs an item id to name its workspace after")
+    return guard_workspace(f"{WORKSPACE_ROOT}/{tag.strip()}")
+
+
+def guard_workspace(path: str) -> str:
+    """Refuse a workspace the driver must not `rm -rf`.
+
+    A separate function with its own tests rather than a condition inside a shell string, because the failure mode is
+    deleting something that is not a workspace and a shell string is where that goes unnoticed.
+    """
+    if not path or not path.startswith("/"):
+        raise ValueError(f"a workspace must be an absolute path, and {path!r} is not")
+    clean = path.rstrip("/")
+    root = WORKSPACE_ROOT.rstrip("/")
+    if not clean.startswith(root + "/"):
+        raise ValueError(f"a workspace must sit under {root}/, and {path!r} does not; the driver removes it with "
+                         f"rm -rf and will not do that outside a directory it owns")
+    tail = clean[len(root) + 1:]
+    if not tail or tail in (".", "..") or tail.startswith("/"):
+        raise ValueError(f"{path!r} has no name below {root}/, so removing it would remove the root")
+    if ".." in PurePosixPath(clean).parts:
+        raise ValueError(f"{path!r} contains '..', which can resolve outside {root}/")
+    return clean
+
 
 def python_path_export(workspace: str) -> str:
     """`PYTHONPATH` for one run, as a shell export.
@@ -135,19 +179,25 @@ def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, 
     subprocess it spawns inherits `PYTHONPATH`. And the sweep-up comes **after** the hand-back and **before** the
     exit, so the returned archive is complete and the status the driver sees is the agent's own rather than `rm`'s.
     """
+    workspace = guard_workspace(workspace)
     sweep_up = f" ; rm -rf {workspace}" if cleanup else ""
-    return ("mkdir -p {ws} && {env}{pre}{stage}cd {ws} && {{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
-            "exit ${{exec_rc:-0}}").format(ws=workspace, env=env, pre=pre, stage=stage, back=give_back,
-                                           sweep=sweep_up)
+    # W2. Fresh, not merely present. With a deterministic name a leftover from an earlier run of the SAME item would
+    # otherwise be inherited, which is worse than a random name -- and `tar x` over an existing tree keeps whatever
+    # the archive does not overwrite. `guard_workspace` has already refused anything this must not remove.
+    return ("rm -rf {ws} && mkdir -p {ws} && {env}{pre}{stage}cd {ws} && "
+            "{{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
+            "exit ${{exec_rc:-0}}").format(ws=workspace, env=env, pre=pre, stage=stage,
+                                           back=give_back, sweep=sweep_up)
 
 
 def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, namespace: str,
             timeout: int, stage_from: str | None = None, telemetry: dict | None = None,
-            cleanup: bool = True) -> dict:
+            cleanup: bool = True, tag: str = "") -> dict:
     """One agent, one task, one fresh session and workspace."""
     session = f"{agent}-{uuid.uuid4().hex[:10]}"
     trace_id, traceparent = new_traceparent()
-    workspace = spec["workspace"].format(session=session)
+    # W1. Named after the item, not after a random session id. See `workspace_for`.
+    workspace = workspace_for(tag, spec.get("workspace_template"))
     # `agent_definition` is part of the candidate tuple, so it is substituted like any other field. A spec
     # that omits it gets an empty string and the run fails loudly rather than emitting telemetry whose
     # candidate is half unknown.
@@ -428,7 +478,7 @@ def main() -> int:
                                       "protocol": args.otlp_protocol,
                                       "span_attributes": args.span_attributes}
                                      if args.otlp_endpoint else None),
-                          cleanup=not args.keep_workspace)
+                          cleanup=not args.keep_workspace, tag=args.tag)
             row["iteration"] = i
             row["position"] = order.index(name)
             runs.append(row)

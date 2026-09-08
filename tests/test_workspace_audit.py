@@ -93,7 +93,9 @@ def test_the_workspace_is_recovered_from_the_returned_tar_when_no_manifest_has_i
     """It had to be, once: a second sweep over the same instances overwrote the first's manifests."""
     ws, why = wa.workspace_of("t1", [], "/work/returned/opencode-8c042ffb40.tar")
     assert ws == "/tmp/run-opencode-8c042ffb40"
-    assert "overwrites the first" in why
+    # The reason has to date the assumption: this reconstruction is only right for an arm whose workspaces were named
+    # after the session, and the driver now names them after the item.
+    assert "named after the session" in why
 
 
 def test_the_manifest_wins_over_the_recovered_name(tmp_path):
@@ -591,3 +593,41 @@ def test_the_previously_observed_manglings_are_still_caught_by_one_rule_or_the_o
         f = wa.audit_call("bash", json.dumps({"command": f"ls /tmp/run-opencode-{wrote}"}), True, None, own,
                           {"/tmp/run-opencode-c4cd6ae898", "/tmp/run-opencode-0ae4d3229d"})
         assert f["mangled_own_workspace"] == [f"/tmp/run-opencode-{wrote}"], (own_id, wrote)
+
+
+# --- both naming schemes, because the recorded arms used one and everything after uses the other -----
+
+
+def test_a_near_miss_of_an_item_named_workspace_is_still_caught():
+    """The driver now names a workspace after its item. An audit that only knew the old `/tmp/run-<hex>` shape would
+    report every arm measured after that change as clean."""
+    own = "/tmp/w/pydata__xarray-4695"
+    f = wa.audit_call("glob", json.dumps({"path": "/tmp/w/pydata__xarray-4659"}), False,
+                      "The user rejected permission to use this specific tool call.", own, {own})
+    assert f["mangled_own_workspace"] == ["/tmp/w/pydata__xarray-4659"]
+
+
+def test_a_different_items_workspace_is_contamination_under_the_new_scheme():
+    own = "/tmp/w/pydata__xarray-4695"
+    other = "/tmp/w/matplotlib__matplotlib-26208"
+    f = wa.audit_call("bash", json.dumps({"command": f"ls {other}"}), True, None, own, {own, other})
+    assert f["other_run_workspaces"] == [other]
+
+
+def test_the_runs_own_item_named_workspace_is_not_flagged():
+    own = "/tmp/w/pydata__xarray-4695"
+    assert wa.audit_call("read", json.dumps({"filePath": f"{own}/xarray/core/computation.py"}),
+                         True, None, own, {own}) is None
+
+
+def test_the_tar_name_recovery_says_which_naming_scheme_it_assumes(tmp_path):
+    """It reconstructs `/tmp/run-<session>`, which is right for the recorded arms and wrong afterwards. A path with
+    no provenance would be read as fact."""
+    ws, why = wa.workspace_of("t-missing", [], "/work/returned/opencode-8c042ffb40.tar")
+    assert ws == "/tmp/run-opencode-8c042ffb40"
+    assert "named after the session" in why
+
+
+def test_with_neither_a_manifest_nor_a_tar_the_workspace_is_unknown():
+    ws, why = wa.workspace_of("t-missing", [], None)
+    assert ws is None and "nothing says where" in why

@@ -54,7 +54,7 @@
     "{model}",
     "{prompt}"
    ],
-   "workspace": "/tmp/run-{session}",
+   "workspace_template": null,
    "notes": "`--agent` is always passed, even for the default definition: the telemetry only carries `agent.name` when a definition was named, and a candidate tuple whose first element reads `unknown` is not a candidate. **Nothing is copied into the run workspace.** An earlier version put the telemetry plugin's `node_modules` there via `pre`, and the scorer then saw thousands of edited `.test.ts` files and failed the run for editing its own examiner. The plugin belongs in the agent's global config directory; a workspace holds the task and nothing else, because everything in it lands in the diff. `--model` is passed explicitly too, and for the same reason as `--agent`: the config's default is a property of the pod rather than of the run, so a two-arm comparison in which one arm inherited it would differ in a way nothing recorded. With it, the candidate the driver asked for is the candidate the telemetry reports.",
    "preflight": [
     "opencode",
@@ -73,7 +73,7 @@
     "-p",
     "{prompt}"
    ],
-   "workspace": "/tmp/run-{session}",
+   "workspace_template": null,
    "notes": "-p is the non-interactive flag and -y is required WITH it: without -y every tool call waits for an approval that cannot arrive, and the run sits at the prompt until the driver's timeout. Twenty minutes of that looked exactly like an agent that could not solve the task.",
    "preflight": [
     "qwen",
@@ -92,7 +92,7 @@
     "-z",
     "{prompt}"
    ],
-   "workspace": "/tmp/run-{session}",
+   "workspace_template": null,
    "notes": "The hardest of the four to place. -z is the non-interactive prompt, --yolo bypasses approval, and -m is passed every call because its persisted config sits on the node's ephemeral disk and resets on restart. It also RESTORES terminal.cwd from that config and ignores both the directory it was started in and --in, so it built its own Django tree under /opt/data/work and edited that -- scoring zero while having done the task elsewhere. `pre` writes the run's workspace into the config first. Runs are sequential, so mutating a shared pod's config per run is safe here and is checked by the returned tree differing from the staged one.",
    "preflight": [
     "hermes",
@@ -123,7 +123,7 @@
     "{session}",
     "--json"
    ],
-   "workspace": "/tmp/run-{session}",
+   "workspace_template": null,
    "notes": "Refuses to run without --session-id, --to or --agent. Tries the Gateway first and falls back to an embedded agent; both paths reach the alias.",
    "preflight": [
     "openclaw",
