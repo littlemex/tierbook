@@ -217,10 +217,17 @@ def build_inner(workspace: str, env: str, pre: str, stage: str, give_back: str, 
     #
     # `SETUP_FAILED` is a distinct status the driver recognises, rather than a non-zero code that would read as the
     # agent failing.
-    return ("{{ rm -rf {ws} && mkdir -p {ws} && {pre}{stage}cd {ws} ; }} || "
+    # The root itself, checked in the shell because the guard above is lexical and this is not. Two reviews made the
+    # same point: `guard_workspace` compares strings and never looks at the filesystem, so if a previous run left
+    # `/tmp/w` as a symlink -- every run executes arbitrary agent-chosen code as the same user on a shared pod -- then
+    # `rm -rf /tmp/w/<item>` resolves through it and deletes outside the root the guard exists to protect. `rm -rf` on
+    # a FINAL-component symlink removes the link, which is safe; an intermediate one is the dangerous case.
+    root = _shq(WORKSPACE_ROOT)
+    return ("{{ ! test -L {root} && mkdir -p {root} && "
+            "rm -rf {ws} && mkdir -p {ws} && {pre}{stage}cd {ws} ; }} || "
             "{{ echo '[FATAL] setup failed before the agent started' >&2; exit {setup_rc}; }}; "
             "{env}{{ exec_rc=0; \"$@\" || exec_rc=$?; }}{back}{sweep}; "
-            "exit ${{exec_rc:-0}}").format(ws=quoted, env=env, pre=pre, stage=stage,
+            "exit ${{exec_rc:-0}}").format(ws=quoted, root=root, env=env, pre=pre, stage=stage,
                                            back=give_back, sweep=sweep_up, setup_rc=SETUP_FAILED)
 
 

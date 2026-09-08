@@ -148,7 +148,7 @@ def test_nothing_is_removed_at_the_END_when_cleanup_is_off():
     inherited, and `--keep-workspace` is for reading one run's tree afterwards, not for starting from a dirty one."""
     inner = ad.build_inner(WS_T, "", "", "", BACK, False)
     assert inner.count("rm -rf") == 1
-    assert inner.index("rm -rf") < inner.index("mkdir -p")
+    assert inner.index("rm -rf") < inner.index(f"mkdir -p {ad._shq(WS_T)}")
     assert inner.rindex("rm -rf") < inner.index("tar cf"), "no sweep-up after the hand-back"
     assert "tar cf" in inner
 
@@ -229,7 +229,9 @@ def test_the_workspace_is_removed_before_it_is_made():
     """With a deterministic name, inheriting a leftover from an earlier run of the same item is worse than a random
     name would have been, and `tar x` over an existing tree keeps what the archive does not overwrite."""
     inner = ad.build_inner("/tmp/w/i1", "", "", "tar xf /work/x.tar -C /tmp/w/i1 && ", "", True)
-    assert inner.index("rm -rf") < inner.index("mkdir -p") < inner.index("tar xf")
+    # `mkdir -p` appears twice: the root, which is checked for being a symlink first, then the workspace. This test is
+    # about the second, so it is named rather than found by position.
+    assert inner.index("rm -rf") < inner.index("mkdir -p '/tmp/w/i1'") < inner.index("tar xf")
 
 
 def test_the_assembled_command_refuses_a_workspace_the_guard_rejects():
@@ -430,3 +432,31 @@ def test_a_failing_pre_command_is_a_setup_failure_too(monkeypatch, tmp_path):
     p = _run(inner, ["sh", "-c", f"touch {marker}"], cwd=tmp_path)
     assert p.returncode == ad.SETUP_FAILED
     assert not marker.exists()
+
+
+def test_a_symlinked_root_is_a_setup_failure(monkeypatch, tmp_path):
+    """The guard is lexical and this is not. Two reviews made the same point: if a previous run left the root a
+    symlink -- every run executes arbitrary agent-chosen code as the same user on a shared pod -- then `rm -rf` under
+    it resolves through the link and deletes outside the directory the guard exists to protect."""
+    root = tmp_path / "w"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "precious.txt").write_text("someone else's data\n")
+    root.symlink_to(elsewhere)
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("i1")
+    marker = tmp_path / "agent-ran"
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    p = _run(inner, ["sh", "-c", f"touch {marker}"], cwd=tmp_path)
+    assert p.returncode == ad.SETUP_FAILED, (p.returncode, p.stderr)
+    assert not marker.exists()
+    assert (elsewhere / "precious.txt").exists(), "nothing outside the root was touched"
+
+
+def test_a_real_root_is_created_when_absent(monkeypatch, tmp_path):
+    root = tmp_path / "w"
+    monkeypatch.setattr(ad, "WORKSPACE_ROOT", str(root))
+    ws = ad.workspace_for("i1")
+    inner = ad.build_inner(ws, ad.python_path_export(ws), "", "", "", True)
+    assert _run(inner, ["sh", "-c", "true"], cwd=tmp_path).returncode == 0
+    assert root.is_dir() and not root.is_symlink()
