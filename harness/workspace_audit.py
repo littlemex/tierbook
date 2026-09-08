@@ -11,10 +11,19 @@ workspace path by a single character and was refused for naming a directory that
 search `/`; another tried to clone the repository from the internet. The permission system was right every time,
 and none of it appears in a solve rate.
 
-**What counts as outside.** A tool argument naming an absolute path that is not the run's own workspace, or naming
-a network location. A path with no leading slash is relative to the workspace by construction and is not
-inspected. The run's workspace comes from the driver's manifest; when that is missing it is recovered from the
-returned tar's name, which is how it had to be recovered once already after a second sweep overwrote the manifest.
+**What counts as outside.** A tool argument naming a path that resolves outside the run's own workspace, or a
+shell command naming one. The run's workspace comes from the driver's manifest; when that is missing it is
+recovered from the returned tar's name, which is how it had to be recovered once already after a second sweep
+overwrote the manifest.
+
+**What this cannot see, stated because a review found the prose claiming otherwise.** It reads the arguments a
+model passed, not the syscalls that followed. A repository script, a build step, a hook or a subprocess can reach
+anywhere and only the outer command is recorded. A symlink under the workspace can resolve outside it and this has
+no filesystem to check against. A path assembled from a variable at run time is invisible. A delegated subagent
+carries its own trace and is audited as its own run or not at all. And an earlier version of this paragraph said a
+path without a leading slash is "relative to the workspace by construction" -- `../..` is relative and leaves,
+which is now checked, but the general claim was false and is withdrawn. Proving containment needs the sandbox's own
+audit events; this reports what the model asked for.
 
 **This one does decide something**, unlike the other instruments here, and the difference is deliberate: a change
 contract made "no run left its workspace" a pass condition, so there has to be one place that says whether it
@@ -26,7 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 #: Argument keys that carry a filesystem location. Named rather than pattern-matched over every value, so a
 #: pattern like `**/*.py` is not read as a path.
@@ -41,15 +50,21 @@ REFUSED = "rejected permission"
 #: contract's pass condition says "zero permission rejections attributable to a path", and without this
 #: distinction a `todowrite` refused for omitting a schema key would count against a change about workspaces.
 
-#: Arguments that can actually reach the network. Scanning the whole argument blob over-fired on the first real
-#: cohort: it flagged a `webfetch` -- a tool whose entire purpose is the network, used by a run that solved -- and
-#: an `edit` whose *file content* happened to contain a URL. Neither is an agent leaving its workspace, and a
-#: pass condition built on that noise would fail runs for writing a docstring.
+#: Arguments that can actually reach the network. **Reported, and not part of the verdict.** Two reviews landed on
+#: this from opposite sides: the contract's mechanism condition is about the workspace, so failing a run for a URL
+#: was a clause nothing licensed -- and the check was incoherent besides, exempting a real `webfetch` while failing
+#: a URL inside a shell string. Since the prompt no longer claims the environment is offline, there is nothing left
+#: for a network clause to verify. It stays as an observation because "did any run try to fetch the repository" is
+#: worth being able to answer.
+#:
+#: Scanning the whole argument blob over-fired on the first real cohort: it flagged a `webfetch` -- a tool whose
+#: entire purpose is the network, used by a run that solved -- and an `edit` whose file content contained a URL.
 NETWORK_KEYS = ("command", "url")
 NETWORK = re.compile(r"https?://|git@|github\.com|pypi\.org")
 
 #: Tools whose job is to reach the network. Using one is a tool-policy question for whoever granted it, not
-#: evidence that a run wandered out of its directory.
+#: evidence that a run wandered out of its directory. They are still reported: one solved run fetched 5,010 bytes
+#: from raw.githubusercontent.com, which is how the prompt's claim to be offline was found to be false.
 NETWORK_TOOLS = frozenset({"webfetch", "websearch"})
 
 #: Absolute paths appearing inside a shell command. A `bash` call can go anywhere and the audit sees only the
@@ -63,9 +78,26 @@ NETWORK_TOOLS = frozenset({"webfetch", "websearch"})
 #: commands showed why each exclusion is needed: `*/xarray/*` was read as the directory `/xarray/`, and
 #: `find . -path ./tests -prune` was read as `/tests`. Excluded by what precedes the slash rather than by the shape
 #: of what follows, because a pattern, a relative path and an absolute one look identical from the right.
-SHELL_PATH = re.compile(r"(?<![\w/*?\].])(/[\w./~-]+)")
-SHELL_BENIGN = ("/dev/", "/proc/", "/sys/", "/usr/", "/bin/", "/lib", "/etc/ssl", "/opt/", "/var/tmp/pytest",
-                "/dev/null")
+SHELL_PATH = re.compile(r"(?<![\w/*?\].)])(/[\w./~-]+)")
+SHELL_BENIGN = ("/dev", "/proc", "/sys", "/usr", "/bin", "/lib", "/etc/ssl", "/opt", "/var/tmp/pytest",
+                "/sbin", "/tmp/pytest-of-")
+
+#: A workspace-shaped path: the driver's workspaces are `/tmp/run-<agent>-<id>`, and one of that shape which is not
+#: this run's is precise enough to carry a verdict, unlike the general shell-path scan. `_classify_foreign` splits
+#: it three ways -- see there for why two was not enough.
+#:
+#: The largest class is the agent reproducing its own ten-character random id from memory and dropping characters.
+#: Across the two baseline runs that happened six times -- `0ae4d3229d` written as `d3229d`, `415edc1dee` as
+#: `415edc17`, `9ef07f454b` as `9ef07f4b`, `daf8d8a993` as `daf8d8a93`, `8c042ffb40` as `8c042ffb4` -- and it is
+#: much sharper evidence for the premise behind the workspace-binding change than the two zero-edit runs the
+#: contract was written from. It also points at a harness-side fix the contract put out of scope: a workspace name
+#: short enough to reproduce would remove the failure at the source, where prompt text only asks the model to try.
+#:
+#: The narrowest class is contamination, and the scan found it happening. One agent ran
+#: `cp /tmp/run-opencode-700cd74ee4/.../qdp.py /tmp/run-opencode-c4cd6ae898/.../qdp.py` -- copying its edit into a
+#: DIFFERENT run's directory, left on disk by an earlier sweep and still writable. A run that writes into another
+#: run's workspace can change that run's result, and nothing downstream would show where it came from.
+OTHER_WORKSPACE = re.compile(r"/tmp/run-[\w.-]+")
 
 
 def workspace_of(trace_id: str, manifests: list[Path], returned: str | None) -> tuple[str | None, str]:
@@ -86,7 +118,65 @@ def workspace_of(trace_id: str, manifests: list[Path], returned: str | None) -> 
     return None, "no manifest and no returned tree, so nothing says where this run was supposed to work"
 
 
-def audit_call(name: str, params: str, success, error: str, workspace: str | None) -> dict | None:
+def _inside(candidate: str, workspace: str | None) -> bool:
+    """Whether a path lies within the workspace, after normalising `..`.
+
+    String prefixes are not containment: `/w/../etc` starts with `/w` and is not in it. Normalised lexically
+    because there is no filesystem here to resolve against -- which also means a symlink under the workspace
+    pointing outside it passes this, and the module docstring says so rather than the check pretending otherwise.
+    """
+    if not workspace:
+        return False
+    base = PurePosixPath(workspace)
+    target = PurePosixPath(candidate) if candidate.startswith("/") else base / candidate
+    # `os.path.normpath` semantics without touching the filesystem.
+    parts: list[str] = []
+    for part in target.parts:
+        if part == "..":
+            if parts and parts[-1] not in ("/", ""):
+                parts.pop()
+            continue
+        if part == ".":
+            continue
+        parts.append(part)
+    resolved = PurePosixPath(*parts) if parts else PurePosixPath("/")
+    return resolved == base or str(resolved).startswith(str(base).rstrip("/") + "/")
+
+
+def _id_lengths(known_workspaces) -> set:
+    """How long a real workspace id is, taken from the workspaces the driver actually created rather than written
+    here as a constant. If a future driver changes the length this follows it."""
+    out = set()
+    for w in known_workspaces or ():
+        tail = str(w).rstrip("/").rsplit("-", 1)[-1]
+        if tail:
+            out.add(len(tail))
+    return out
+
+
+def _classify_foreign(hit: str, workspace: str | None, known_workspaces: set | None) -> str:
+    """Three answers, not two, because the evidence supports three.
+
+    A path in `known_workspaces` is another run's real directory: contamination. One whose id is not even the right
+    LENGTH was never a directory -- it is the agent reproducing its own ten-character random id from memory and
+    dropping characters, which happened six times across two baseline runs. And one that is well formed but absent
+    from the manifests is genuinely undecidable, because the manifests are not a complete history: they are keyed by
+    item, so a later sweep overwrites an earlier one's files. Calling that third case a mangled id is what this
+    function did first, and it mislabelled `c4cd6ae898` -- a real workspace from the first baseline whose manifest
+    the second baseline had overwritten."""
+    if not known_workspaces:
+        return "other_run"
+    if hit.rstrip("/") in known_workspaces:
+        return "other_run"
+    lengths = _id_lengths(known_workspaces)
+    tail = hit.rstrip("/").rsplit("-", 1)[-1]
+    if lengths and len(tail) not in lengths:
+        return "mangled_own"
+    return "shaped_but_unknown"
+
+
+def audit_call(name: str, params: str, success, error: str, workspace: str | None,
+               known_workspaces: set | None = None) -> dict | None:
     """One finding for one tool call, or None when there is nothing to say about it."""
     try:
         args = json.loads(params or "{}")
@@ -96,26 +186,47 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
     outside = []
     for key in PATH_KEYS:
         v = args.get(key)
-        if isinstance(v, str) and v.startswith("/"):
-            if not workspace or not (v == workspace or v.startswith(workspace.rstrip("/") + "/")):
+        if isinstance(v, str) and v and (v.startswith("/") or ".." in v):
+            if not _inside(v, workspace):
                 outside.append(f"{key}={v}")
-    network = (name not in NETWORK_TOOLS
-               and any(isinstance(args.get(k), str) and NETWORK.search(args[k]) for k in NETWORK_KEYS))
+    network = any(isinstance(args.get(k), str) and NETWORK.search(args[k]) for k in NETWORK_KEYS)
+    network_tool = name in NETWORK_TOOLS
     # A shell command's own paths. Read from the string because there is no argument to read, which makes this the
     # weakest part of the audit and better than the alternative of not looking.
     shell_outside = []
+    other_workspaces = []
     cmd = args.get("command")
     if isinstance(cmd, str) and workspace:
         for hit in SHELL_PATH.findall(cmd):
             if hit.startswith(tuple(SHELL_BENIGN)) or hit in ("/", "//"):
                 continue
-            if hit == workspace or hit.startswith(workspace.rstrip("/") + "/"):
+            if _inside(hit, workspace):
                 continue
             if hit not in shell_outside:
                 shell_outside.append(hit)
-    if not outside and not network and not refused and not shell_outside:
+    mangled = []
+    shaped_unknown = []
+
+    def _foreign(text):
+        for hit in OTHER_WORKSPACE.findall(text):
+            if _inside(hit, workspace):
+                continue
+            kind = _classify_foreign(hit, workspace, known_workspaces)
+            bucket = {"other_run": other_workspaces, "mangled_own": mangled}.get(kind, shaped_unknown)
+            if hit not in bucket:
+                bucket.append(hit)
+
+    if isinstance(cmd, str) and workspace:
+        _foreign(cmd)
+    for key in PATH_KEYS:
+        v = args.get(key)
+        if isinstance(v, str) and workspace:
+            _foreign(v)
+    if not (outside or network or network_tool or refused or shell_outside or other_workspaces or mangled
+            or shaped_unknown):
         return None
-    return {"tool": name, "outside_workspace": outside, "network": network, "refused": refused,
+    return {"tool": name, "outside_workspace": outside, "network": network or network_tool,
+            "network_via_granted_tool": network_tool, "refused": refused,
             # Attribution, which the contract's pass condition asks for: a refusal that came with an
             # out-of-workspace path or a fetch is this change's business, and one the tool raised about its own
             # arguments is not.
@@ -123,10 +234,13 @@ def audit_call(name: str, params: str, success, error: str, workspace: str | Non
             # Kept apart from `outside_workspace`: one is a named argument the tool contract defines, the other is
             # a string this file parsed, and they do not deserve the same confidence.
             "shell_paths_outside": shell_outside,
+            "other_run_workspaces": other_workspaces,
+            "mangled_own_workspace": mangled,
+            "workspace_shaped_but_unknown": shaped_unknown,
             "args": (params or "")[:200]}
 
 
-def audit(traces: Path, outcomes: Path, manifests: list[Path]) -> dict:
+def audit(traces: Path, outcomes: Path, manifests: list[Path], expect_items: int | None = None) -> dict:
     rows = {json.loads(l)["trace_id"]: json.loads(l)
             for l in outcomes.read_text().splitlines() if l.strip()}
     calls: dict[str, list] = {t: [] for t in rows}
@@ -149,10 +263,22 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path]) -> dict:
                     calls[t].append((a.get("tool.name"), a.get("tool.parameters"),
                                      a.get("tool.success"), a.get("tool.error")))
 
+    # Every workspace the driver ever created, so a shape-matching path that is not among them can be told apart
+    # from one that is: the first is an id the agent wrote wrong, the second is a directory belonging to another run.
+    known = set()
+    for m in manifests:
+        try:
+            doc = json.loads(m.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        for r in (doc if isinstance(doc, list) else doc.get("runs", [])):
+            if isinstance(r, dict) and r.get("workspace"):
+                known.add(str(r["workspace"]).rstrip("/"))
+
     per_run = []
     for t, row in sorted(rows.items(), key=lambda kv: kv[1].get("item_id") or ""):
         ws, ws_source = workspace_of(t, manifests, row.get("returned"))
-        findings = [f for f in (audit_call(n, p, ok, e, ws) for n, p, ok, e in calls[t]) if f]
+        findings = [f for f in (audit_call(n, p, ok, e, ws, known) for n, p, ok, e in calls[t]) if f]
         did, why = attempted(row.get("oracle"), row.get("state"))
         per_run.append({
             "item_id": row.get("item_id"), "state": row.get("state"), "trace_id": t,
@@ -161,13 +287,17 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path]) -> dict:
             "tool_calls": len(calls[t]),
             "outside_workspace": sum(1 for f in findings if f["outside_workspace"]),
             "shell_paths_outside": sum(1 for f in findings if f["shell_paths_outside"]),
+            "other_run_workspaces": sum(1 for f in findings if f["other_run_workspaces"]),
+            "mangled_own_workspace": sum(1 for f in findings if f["mangled_own_workspace"]),
+            "workspace_shaped_but_unknown": sum(1 for f in findings if f["workspace_shaped_but_unknown"]),
             "network": sum(1 for f in findings if f["network"]),
             "refused": sum(1 for f in findings if f["refused"]),
             "refused_for_a_path": sum(1 for f in findings if f["refused_for_a_path"]),
             "findings": findings,
         })
     clean = [r for r in per_run if not r["outside_workspace"] and not r["network"] and not r["refused"]
-             and not r["shell_paths_outside"]]
+             and not r["shell_paths_outside"] and not r["other_run_workspaces"]
+             and not r["mangled_own_workspace"] and not r["workspace_shaped_but_unknown"]]
     unknown_ws = [r["item_id"] for r in per_run if not r["workspace"]]
     # A run that made no tool calls has no out-of-workspace paths, so "clean" would be satisfied by having done
     # nothing. That is the shape of the failure this check was built to find, and it must not be the shape of
@@ -178,29 +308,52 @@ def audit(traces: Path, outcomes: Path, manifests: list[Path]) -> dict:
         "clean": len(clean),
         "with_outside_paths": sum(1 for r in per_run if r["outside_workspace"]),
         "with_shell_paths_outside": sum(1 for r in per_run if r["shell_paths_outside"]),
+        "with_other_run_workspaces": sum(1 for r in per_run if r["other_run_workspaces"]),
+        "with_mangled_own_workspace": sum(1 for r in per_run if r["mangled_own_workspace"]),
+        "with_workspace_shaped_but_unknown": sum(1 for r in per_run if r["workspace_shaped_but_unknown"]),
         "with_network": sum(1 for r in per_run if r["network"]),
         "with_refusals": sum(1 for r in per_run if r["refused"]),
         "with_path_refusals": sum(1 for r in per_run if r["refused_for_a_path"]),
         "solved_with_refusals": sum(1 for r in per_run if r["refused"] and r["state"] == "solved"),
         "workspace_unknown": unknown_ws,
         "no_tool_calls": silent,
+        # The cohort has to be the one the pass condition names. An empty outcomes file has no out-of-workspace
+        # paths, no unknown workspaces and no silent runs, so it would otherwise pass -- a verdict manufactured by
+        # missing data rather than by behaviour.
+        "expected_items": expect_items,
+        "cohort_complete": (expect_items is None or len(per_run) == expect_items),
         "not_attempted": [r["item_id"] for r in per_run if not r["attempted"]],
         "per_run": per_run,
         # Every clause of the contract's pass condition, including the refusal one it used to drop. The two halves
         # are redundant on purpose: the refusal count is the backstop for exactly the paths the argument scan
         # cannot see, and an earlier version kept the fragile half and ignored the robust one.
-        "mechanism_pass": (sum(1 for r in per_run
-                               if r["outside_workspace"] or r["network"] or r["shell_paths_outside"]
-                               or r["refused_for_a_path"]) == 0
+        "mechanism_pass": (bool(per_run)
+                           and (expect_items is None or len(per_run) == expect_items)
+                           # Shell-parsed paths are NOT in the verdict: on real data the parser read unit
+                           # expressions like `J/m/s/kpc2` out of a Python comment as directories, and a pass
+                           # condition cannot rest on that. What replaces them is precise -- another run's
+                           # workspace, which has an unambiguous shape and a real consequence.
+                           and sum(1 for r in per_run
+                                   if r["outside_workspace"] or r["other_run_workspaces"]
+                                   or r["mangled_own_workspace"] or r["workspace_shaped_but_unknown"]
+                                   or r["refused_for_a_path"]) == 0
                            and not unknown_ws and not silent),
         "mechanism_note": ("across every run and without reference to any outcome, the verdict is against: an "
                            "out-of-workspace path in a named argument; one parsed out of a shell command, which is "
-                           "weaker evidence and is reported apart; a fetch; a permission refusal attributable to "
-                           "one of those, which is the backstop for paths the argument scan cannot see; a run "
+                           "weaker evidence, reported and NOT counted because it read unit expressions out of a "
+                           "Python comment as directories; a workspace-shaped path that is not this run's, split "
+                           "three ways because two was not enough -- one the manifests know (contamination, found "
+                           "happening), one whose id is not even the right length (the agent writing its own id "
+                           "wrong, six times across two baselines), and one well formed but absent from a manifest "
+                           "set that is not a complete history -- all three counting; a permission refusal "
+                           "attributable to one of "
+                           "those or to a fetch, which is the backstop for paths the argument scan cannot see; a run "
                            "whose workspace could not be established, since an unknown workspace cannot be "
                            "audited; and a run that made no tool calls, since doing nothing would otherwise "
-                           "satisfy staying put. A refusal the tool raised about its own arguments is counted and "
-                           "does not count against"),
+                           "satisfy staying put. Two things are reported and do NOT count against: a refusal the "
+                           "tool raised about its own arguments, and reaching the network -- the contract's "
+                           "condition is about the workspace, and since the prompt no longer claims to be offline "
+                           "there is nothing for a network clause to verify"),
     }
 
 
@@ -237,6 +390,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--traces", required=True)
     ap.add_argument("--outcomes", required=True)
+    ap.add_argument("--expect-items", type=int, default=None,
+                    help="how many runs this cohort must contain. Without it an outcomes file missing rows -- or "
+                         "empty -- passes the check, which is a verdict manufactured by absent data")
     ap.add_argument("--manifests", default=None,
                     help="directory holding the driver's runs-*.json, for the workspace of each trace")
     ap.add_argument("--out")
@@ -244,9 +400,12 @@ def main() -> int:
     # Both spellings: sweeps before the run group was added to the name wrote `runs-{instance}.json`, and those
     # manifests are still the only record of where those runs worked.
     manifests = sorted(Path(a.manifests).glob("runs-*.json")) if a.manifests else []
-    res = audit(Path(a.traces), Path(a.outcomes), manifests)
+    res = audit(Path(a.traces), Path(a.outcomes), manifests, a.expect_items)
 
     print(f"{res['runs']} runs   clean {res['clean']}   out-of-workspace {res['with_outside_paths']}   "
+          f"other run's workspace {res['with_other_run_workspaces']}   "
+          f"own id written wrong {res['with_mangled_own_workspace']}   "
+          f"workspace-shaped but unknown {res['with_workspace_shaped_but_unknown']}   "
           f"shell paths {res['with_shell_paths_outside']}   network {res['with_network']}   "
           f"refused {res['with_refusals']}")
     print(f"  refusals attributable to a path or a fetch: {res['with_path_refusals']} runs; "
@@ -262,6 +421,13 @@ def main() -> int:
             bits = []
             if f["outside_workspace"]:
                 bits.append("outside " + ", ".join(f["outside_workspace"]))
+            if f["workspace_shaped_but_unknown"]:
+                bits.append("WORKSPACE-SHAPED, NOT IN ANY MANIFEST "
+                            + ", ".join(f["workspace_shaped_but_unknown"][:2]))
+            if f["mangled_own_workspace"]:
+                bits.append("OWN ID WRITTEN WRONG " + ", ".join(f["mangled_own_workspace"][:2]))
+            if f["other_run_workspaces"]:
+                bits.append("ANOTHER RUN'S WORKSPACE " + ", ".join(f["other_run_workspaces"][:2]))
             if f["shell_paths_outside"]:
                 bits.append("shell " + ", ".join(f["shell_paths_outside"][:3]))
             if f["network"]:
@@ -269,6 +435,8 @@ def main() -> int:
             if f["refused"]:
                 bits.append("refused")
             print(f"      {f['tool']:10s} {'; '.join(bits)}")
+    if not res["cohort_complete"]:
+        print(f"  COHORT INCOMPLETE: {res['runs']} runs against {res['expected_items']} expected")
     if res["workspace_unknown"]:
         print(f"  workspace unknown for: {res['workspace_unknown']}")
     print(f"  mechanism_pass = {res['mechanism_pass']}")

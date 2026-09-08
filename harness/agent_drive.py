@@ -115,7 +115,7 @@ def run_one(spec: dict, agent: str, prompt: str, model: str, context: str, names
     # candidate is half unknown.
     # The workspace is a per-session directory this function creates, so a task text that names it carries a
     # marker until now. Filled here and nowhere else.
-    prompt = task_prompt.fill_workspace(prompt, workspace)
+    prompt = task_prompt.check_deliverable(task_prompt.fill_workspace(prompt, workspace))
     fills = dict(prompt=prompt, session=session, workspace=workspace, model=model,
                  agent_definition=spec.get("agent_definition", ""))
     argv = _fill(spec["argv"], **fills)

@@ -131,3 +131,42 @@ def test_a_problem_statement_containing_braces_is_not_mangled_by_the_marker_path
     assert problem in filled, "the issue text is untouched"
     assert "{workspace}" in filled, "a brace in the issue stays a brace"
     assert filled.count("/tmp/run-x") == 1, "only the marker was replaced"
+
+
+# --- C1 says absolute, and the delivery gate ------------------------------------------------------
+
+
+def test_a_relative_workspace_is_refused_because_c1_says_absolute():
+    """`.` or `../repo` passes every other check while telling the agent the relative thing this change replaces."""
+    for bad in (".", "../repo", "tmp/run-opencode-0ae4d3229d", "~/work"):
+        with pytest.raises(ValueError, match="absolute"):
+            tp.build("astropy/astropy", "an issue", workspace=bad, variant="workspace-bound")
+        with pytest.raises(ValueError, match="absolute"):
+            tp.fill_workspace(f"work at {tp.WORKSPACE_MARKER}", bad)
+
+
+def test_the_marker_itself_is_allowed_through_build_because_the_driver_fills_it_later():
+    text = tp.build("astropy/astropy", "an issue", workspace=tp.WORKSPACE_MARKER, variant="workspace-bound")
+    assert tp.WORKSPACE_MARKER in text
+    assert tp.fill_workspace(text, "/tmp/run-opencode-0ae4d3229d").count("/tmp/run-opencode-0ae4d3229d") == 1
+
+
+def test_an_unfilled_marker_is_refused_at_delivery_rather_than_shipped():
+    """Without this gate a skipped substitution produces a run, an outcome, and a row in a comparison, with the one
+    sentence the change is about reading `at <<WORKSPACE>>`. Nothing downstream tells that from the change working."""
+    text = tp.build("astropy/astropy", "an issue", workspace=tp.WORKSPACE_MARKER, variant="workspace-bound")
+    with pytest.raises(ValueError, match="fill_workspace"):
+        tp.check_deliverable(text)
+
+
+def test_the_gate_passes_a_filled_prompt_and_returns_it_unchanged():
+    text = tp.fill_workspace(
+        tp.build("astropy/astropy", "an issue", workspace=tp.WORKSPACE_MARKER, variant="workspace-bound"),
+        "/tmp/run-opencode-0ae4d3229d")
+    assert tp.check_deliverable(text) is text
+
+
+def test_the_baseline_variant_needs_no_workspace_and_passes_the_gate():
+    text = tp.build("astropy/astropy", "an issue")
+    assert "current directory" in text
+    assert tp.check_deliverable(text) is text

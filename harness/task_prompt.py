@@ -1,14 +1,25 @@
 """The task text handed to an agent, as a function so it can be tested and so a change to it is visible.
 
 It lived inside a heredoc in the sweep, which meant no test could see it and a change to it left no trace in a
-diff anybody would read. That mattered once the recordings showed the prompt was the thing at fault.
+diff anybody would read. That mattered once the recordings made the prompt a plausible cause.
 
-**What the recordings said.** Two runs of twenty-four returned zero edits in 8 and 12 seconds with exit code 0.
-Their first tool calls were `glob {"path":"/tmp"}` and `bash cd /tmp && git clone ...github.com/pytest-dev/pytest`,
-both refused by the permission system, followed by a subagent instructed to "Search the xarray repository in /".
-Neither run looked inside its own workspace. A run that solved, by contrast, addressed every one of its eighteen
-tool calls to an absolute path under its own workspace. The prompt said "in the current directory", and the agents
-that failed did not act as though a current directory existed.
+**What the recordings said**, and what they did not. Two runs of twenty-four returned zero edits in 8 and 12
+seconds with exit code 0. One, on `pydata__xarray-4695`, opened with `glob {"path":"/tmp"}`, was refused, and went
+on to instruct a subagent to "Search the xarray repository in /": that run never addressed its own workspace. The
+other, on `pytest-dev__pytest-8399`, did -- its first `glob` was workspace-relative and succeeded -- and then ran
+`cd /tmp && git clone ...github.com/pytest-dev/pytest` and stopped when that was refused. Those are two different
+failures, and an earlier version of this paragraph said neither run looked inside its workspace, which the
+recording contradicts. `pytest-dev__pytest-8399` later solved on a replicate of the same prompt, so it is
+stochastic and is not evidence for anything here.
+
+**What is much stronger evidence, found later by the mechanism check.** Six runs across two baselines addressed a
+path that was their own workspace with characters missing -- `0ae4d3229d` written as `d3229d`, `415edc1dee` as
+`415edc17`, `9ef07f454b` as `9ef07f4b`, `daf8d8a993` as `daf8d8a93`, `8c042ffb40` as `8c042ffb4`. Every one was
+refused and none of those runs solved. A quarter of the cohort could not reproduce a ten-character random
+directory name it was never told. That is what this prompt addresses by stating it.
+
+It also shows what would address it better: a workspace named after the item, so there is nothing to reproduce.
+That is a driver change, held out of this one so that a prompt effect could be told from a harness effect.
 
 So the workspace is stated as an absolute path, and the checkout is stated to be complete at the revision in
 question, so there is nothing to fetch.
@@ -54,6 +65,14 @@ VARIANTS = {"baseline": BASELINE, "workspace-bound": WORKSPACE_BOUND}
 WORKSPACE_MARKER = "<<WORKSPACE>>"
 
 
+def _require_absolute(workspace: str) -> None:
+    """C1 says an absolute path, and `.` or `../repo` would satisfy every other check here while telling the agent
+    exactly the thing the change exists to stop telling it."""
+    if not workspace.startswith("/"):
+        raise ValueError(f"the workspace must be an absolute path, and {workspace!r} is not; a relative one is "
+                         f"the wording this change replaces")
+
+
 def fill_workspace(text: str, workspace: str) -> str:
     """Replace the marker with the run's actual workspace.
 
@@ -64,7 +83,21 @@ def fill_workspace(text: str, workspace: str) -> str:
         return text
     if not workspace:
         raise ValueError(f"the task text contains {WORKSPACE_MARKER} and no workspace was given to fill it")
+    _require_absolute(workspace)
     return text.replace(WORKSPACE_MARKER, workspace)
+
+
+def check_deliverable(text: str) -> str:
+    """The last thing between a prompt and an agent. Called by the driver rather than trusted to have happened.
+
+    A text that still contains the marker means the substitution was skipped somewhere upstream, and the run would
+    proceed, produce an outcome, and count in a comparison -- with the one sentence the change is about reading
+    `at <<WORKSPACE>>`. Nothing downstream distinguishes that from the change working.
+    """
+    if WORKSPACE_MARKER in text:
+        raise ValueError(f"the prompt still contains {WORKSPACE_MARKER}; fill_workspace() did not run, and shipping "
+                         f"this would measure a prompt naming a directory that does not exist")
+    return text
 
 
 def build(repo: str, problem: str, *, workspace: str | None = None, variant: str = "baseline") -> str:
@@ -77,8 +110,11 @@ def build(repo: str, problem: str, *, workspace: str | None = None, variant: str
     if variant not in VARIANTS:
         raise ValueError(f"unknown prompt variant {variant!r}; one of {sorted(VARIANTS)}")
     template = VARIANTS[variant]
-    if "{workspace}" in template and not workspace:
-        raise ValueError(f"variant {variant!r} names the workspace, so it must be given one")
+    if "{workspace}" in template:
+        if not workspace:
+            raise ValueError(f"variant {variant!r} names the workspace, so it must be given one")
+        if workspace != WORKSPACE_MARKER:
+            _require_absolute(workspace)
     if not problem.strip():
         raise ValueError("an empty problem statement would ask the agent to fix nothing")
     return template.format(repo=repo, problem=problem, workspace=workspace or "")

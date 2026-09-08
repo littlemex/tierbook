@@ -118,10 +118,13 @@ def test_a_clean_cohort_passes_the_mechanism_check(tmp_path):
     assert res["mechanism_pass"] is True and res["clean"] == 1
 
 
-def test_a_tool_whose_purpose_is_the_network_is_not_a_wandering_run():
+def test_a_tool_whose_purpose_is_the_network_is_reported_but_not_a_wandering_run():
     """The first real cohort flagged a `webfetch` from a run that SOLVED. Using a granted tool is a tool-policy
-    question for whoever granted it, not evidence that a run left its directory."""
-    assert call("webfetch", {"url": "https://matplotlib.org/stable/api.html"}) is None
+    question for whoever granted it, not evidence that a run left its directory -- so it is recorded and kept out
+    of the verdict, rather than being invisible."""
+    f = call("webfetch", {"url": "https://matplotlib.org/stable/api.html"})
+    assert f["network_via_granted_tool"] is True
+    assert f["outside_workspace"] == [] and f["refused_for_a_path"] is False
 
 
 def test_a_url_inside_file_content_is_not_a_network_call():
@@ -295,3 +298,197 @@ def test_the_weaker_basis_is_not_used_where_the_counts_exist():
 
 def test_an_unobserved_run_is_not_attempted_on_either_basis():
     assert wa.attempted({"rc": 0}, "unobserved")[0] is False
+
+
+# --- the cohort, containment, and the clause that lost its contract basis --------------------------
+
+
+def test_an_empty_cohort_does_not_pass_by_having_no_data(tmp_path):
+    """No out-of-workspace paths, no unknown workspaces, no silent runs -- a verdict manufactured by absent data."""
+    traces = tmp_path / "t.jsonl"
+    traces.write_text("")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text("")
+    assert wa.audit(traces, outcomes, [])["mechanism_pass"] is False
+
+
+def test_a_cohort_short_of_its_expected_size_is_reported_and_fails(tmp_path):
+    span = {"traceId": "t1", "name": "opencode.tool.read",
+            "attributes": [{"key": "tool.name", "value": {"stringValue": "read"}},
+                           {"key": "tool.parameters",
+                            "value": {"stringValue": json.dumps({"filePath": f"{WS}/a.py"})}},
+                           {"key": "tool.success", "value": {"boolValue": True}}]}
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "solved",
+                                    "oracle": {"files_touched": 1, "diff_bytes": 100},
+                                    "returned": "/work/returned/opencode-8c042ffb40.tar"}) + "\n")
+    assert wa.audit(traces, outcomes, [], expect_items=1)["mechanism_pass"] is True
+    short = wa.audit(traces, outcomes, [], expect_items=24)
+    assert short["cohort_complete"] is False and short["mechanism_pass"] is False
+
+
+def test_a_prefix_is_not_containment():
+    """`/w/../etc` starts with `/w` and is not inside it. A string comparison would have passed it."""
+    assert wa._inside(f"{WS}/a/b.py", WS) is True
+    assert wa._inside(WS, WS) is True
+    assert wa._inside(f"{WS}/../etc/passwd", WS) is False
+    assert wa._inside(f"{WS}-other/a.py", WS) is False, "a sibling sharing the prefix"
+
+
+def test_a_relative_path_that_leaves_is_caught():
+    """An earlier docstring said a path without a leading slash is relative to the workspace "by construction".
+    `../..` is relative and leaves."""
+    assert call("read", {"filePath": "../../etc/passwd"})["outside_workspace"]
+    assert call("read", {"filePath": "astropy/units/cds.py"}) is None
+
+
+def test_reaching_the_network_is_reported_and_does_not_fail_the_verdict(tmp_path):
+    """The contract's condition is about the workspace, and since the prompt no longer claims to be offline there
+    is nothing for a network clause to verify. The incoherence was worse than the overreach: a real webfetch was
+    exempt while a URL inside a shell string failed the run."""
+    f = call("webfetch", {"url": "https://raw.githubusercontent.com/x/y/z.py"})
+    assert f is not None and f["network"] is True and f["network_via_granted_tool"] is True
+    assert f["outside_workspace"] == [] and f["shell_paths_outside"] == []
+
+    span = {"traceId": "t1", "name": "opencode.tool.webfetch",
+            "attributes": [{"key": "tool.name", "value": {"stringValue": "webfetch"}},
+                           {"key": "tool.parameters",
+                            "value": {"stringValue": json.dumps({"url": "https://example.com/a"})}},
+                           {"key": "tool.success", "value": {"boolValue": True}}]}
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "solved",
+                                    "oracle": {"files_touched": 1, "diff_bytes": 50},
+                                    "returned": "/work/returned/opencode-8c042ffb40.tar"}) + "\n")
+    res = wa.audit(traces, outcomes, [], expect_items=1)
+    assert res["with_network"] == 1
+    assert res["mechanism_pass"] is True, "reported, not fatal"
+    assert "nothing for a network clause to verify" in res["mechanism_note"]
+
+
+# --- another run's workspace, which the noisy scan found happening ---------------------------------
+
+
+KNOWN = {"/tmp/run-opencode-700cd74ee4", "/tmp/run-opencode-c4cd6ae898", "/tmp/run-opencode-0ae4d3229d"}
+
+
+def test_writing_into_another_runs_workspace_is_caught_and_counts():
+    """Found by the noisy shell scan, and precise enough to carry a verdict. One agent ran
+    `cp /tmp/run-opencode-700cd74ee4/.../qdp.py /tmp/run-opencode-c4cd6ae898/.../qdp.py` -- copying its edit into a
+    different run's directory, left on disk by an earlier sweep and still writable. That can change another run's
+    result with nothing downstream showing where it came from."""
+    mine = "/tmp/run-opencode-700cd74ee4"
+    f = wa.audit_call("bash", json.dumps({"command":
+                                          f"cp {mine}/astropy/io/ascii/qdp.py "
+                                          "/tmp/run-opencode-c4cd6ae898/astropy/io/ascii/qdp.py"}),
+                      True, None, mine, KNOWN)
+    assert f["other_run_workspaces"] == ["/tmp/run-opencode-c4cd6ae898"]
+
+
+def test_a_named_argument_pointing_at_another_run_is_caught_too():
+    f = call("read", {"filePath": "/tmp/run-opencode-deadbeef/astropy/a.py"})
+    assert f["other_run_workspaces"] == ["/tmp/run-opencode-deadbeef"]
+
+
+def test_a_path_inside_this_runs_own_workspace_is_not_another_run():
+    assert call("bash", {"command": f"ls {WS}/astropy"}) is None
+
+
+def test_unit_expressions_are_why_shell_paths_do_not_carry_the_verdict(tmp_path):
+    """On real data the parser read `J/m/s/kpc2` out of a Python comment as the directories /m/s/kpc2, /s and
+    /kpc2. A pass condition cannot rest on that, so shell paths are reported and the verdict uses the precise
+    check instead."""
+    # Verbatim from the run. A closing bracket before a slash is never a path and is now excluded, but the second
+    # form has a SPACE before `/m/s/kpc2`, which is exactly what a real absolute path looks like. No lookbehind can
+    # separate them, which is the whole reason this signal is reported and not counted.
+    assert call("bash", {"command": 'python3 -c "\n# should be ((J/m)/s)/kpc2 = J\n"'}) is None
+    cmd = 'python3 -c "\n# after J, we see /m/s/kpc2\n"'
+    f = call("bash", {"command": cmd})
+    assert f is not None and f["shell_paths_outside"] == ["/m/s/kpc2"], "still reported"
+    span = {"traceId": "t1", "name": "opencode.tool.bash",
+            "attributes": [{"key": "tool.name", "value": {"stringValue": "bash"}},
+                           {"key": "tool.parameters",
+                            "value": {"stringValue": json.dumps({"command": cmd})}},
+                           {"key": "tool.success", "value": {"boolValue": True}}]}
+    traces = tmp_path / "t.jsonl"
+    traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+    outcomes = tmp_path / "o.jsonl"
+    outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "solved",
+                                    "oracle": {"files_touched": 1, "diff_bytes": 90},
+                                    "returned": "/work/returned/opencode-8c042ffb40.tar"}) + "\n")
+    res = wa.audit(traces, outcomes, [], expect_items=1)
+    assert res["with_shell_paths_outside"] == 1
+    assert res["mechanism_pass"] is True, "reported, not counted"
+
+
+def test_bare_system_directories_are_benign():
+    """`find /usr -name git` was flagged because the benign list required a trailing slash."""
+    assert call("bash", {"command": "find /usr -name git -type f | head -5"}) is None
+    assert call("bash", {"command": "ls /proc"}) is None
+
+
+# --- and the class that is much larger than contamination: the agent writing its own id wrong ---------------
+
+
+def _f(cmd, ws="/tmp/run-opencode-0ae4d3229d", known=None):
+    return wa.audit_call("bash", json.dumps({"command": cmd}), True, None, ws,
+                         KNOWN if known is None else known)
+
+
+def test_a_shortened_own_id_is_reported_as_a_mangled_id_not_as_another_run():
+    """Verbatim from the baselines. `0ae4d3229d` came back as `d3229d`, `415edc1dee` as `415edc17`, `9ef07f454b` as
+    `9ef07f4b`, `daf8d8a993` as `daf8d8a93`, `8c042ffb40` as `8c042ffb4` -- six runs across two baselines. None of
+    those directories ever existed, so calling them another run's workspace would have been wrong."""
+    for wrong in ("/tmp/run-opencode-d3229d", "/tmp/run-opencode-415edc17", "/tmp/run-opencode-9ef07f4b",
+                  "/tmp/run-opencode-daf8d8a93", "/tmp/run-opencode-8c042ffb4"):
+        f = _f(f"ls {wrong}/astropy")
+        assert f["mangled_own_workspace"] == [wrong], wrong
+        assert f["other_run_workspaces"] == []
+        assert f["workspace_shaped_but_unknown"] == []
+
+
+def test_a_well_formed_id_absent_from_the_manifests_is_left_undecided():
+    """The manifests are keyed by item, so a later sweep overwrites an earlier one's file. `c4cd6ae898` was the
+    first baseline's real astropy workspace and the second baseline's manifest had replaced it -- an earlier version
+    of this code called that a mangled id, which was wrong."""
+    f = _f("ls /tmp/run-opencode-abcdef0123/astropy", known={"/tmp/run-opencode-0ae4d3229d"})
+    assert f["workspace_shaped_but_unknown"] == ["/tmp/run-opencode-abcdef0123"]
+    assert f["mangled_own_workspace"] == [] and f["other_run_workspaces"] == []
+
+
+def test_the_id_length_is_derived_from_the_real_workspaces_not_written_here():
+    """A driver that changes its id length must not turn every path into a mangled one."""
+    assert wa._id_lengths({"/tmp/run-opencode-0ae4d3229d"}) == {10}
+    assert wa._id_lengths({"/tmp/run-x-abc", "/tmp/run-y-defg"}) == {3, 4}
+    long_known = {"/tmp/run-opencode-" + "a" * 16}
+    f = _f("ls /tmp/run-opencode-" + "b" * 16, known=long_known)
+    assert f["workspace_shaped_but_unknown"], "right length for this driver, so not a mangled id"
+
+
+def test_with_no_manifests_the_softer_label_is_not_invented():
+    f = _f("ls /tmp/run-opencode-d3229d", known=set())
+    assert f["other_run_workspaces"] == ["/tmp/run-opencode-d3229d"]
+    assert f["mangled_own_workspace"] == []
+
+
+def test_all_three_classes_count_against_the_mechanism(tmp_path):
+    for cmd in ("ls /tmp/run-opencode-d3229d", "ls /tmp/run-opencode-abcdef0123",
+                "ls /tmp/run-opencode-c4cd6ae898"):
+        span = {"traceId": "t1", "name": "opencode.tool.bash",
+                "attributes": [{"key": "tool.name", "value": {"stringValue": "bash"}},
+                               {"key": "tool.parameters", "value": {"stringValue": json.dumps({"command": cmd})}},
+                               {"key": "tool.success", "value": {"boolValue": True}}]}
+        traces = tmp_path / "t.jsonl"
+        traces.write_text(json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n")
+        outcomes = tmp_path / "o.jsonl"
+        outcomes.write_text(json.dumps({"trace_id": "t1", "item_id": "i1", "state": "solved",
+                                        "oracle": {"files_touched": 1, "diff_bytes": 90},
+                                        "returned": "/work/returned/opencode-0ae4d3229d.tar"}) + "\n")
+        manifest = tmp_path / "runs-i1.json"
+        manifest.write_text(json.dumps({"runs": [{"trace_id": "t1", "workspace": "/tmp/run-opencode-0ae4d3229d"},
+                                                 {"trace_id": "t2", "workspace": "/tmp/run-opencode-c4cd6ae898"}]}))
+        res = wa.audit(traces, outcomes, [manifest], expect_items=1)
+        assert res["mechanism_pass"] is False, cmd
