@@ -398,3 +398,59 @@ refused in two places, a test written against the refusal's effect cannot tell w
 that only one of them produces, and build the fixture so that exactly one refusal can apply. Found by mutating each
 refusal in turn, which is the check `/split-impl` requires before a phase is called finished and which no amount of
 reading would have produced — both tests looked correct, and were, about the wrong thing.
+
+## Amendment 4 — C4 was aimed at the measurement schema, and would have invented a second vocabulary for a concept the schema already has
+
+Found before C4's workers were launched, which is the only cheap moment: an assertion in an interface section is built
+on by every worker who reads it. Three checks, each a single file read.
+
+**A4.1 — `schema.json` is the wrong file.** Its title is `tier record` and its `families` block holds `solved`,
+`attempted`, `suite` and the evidence pair: *what one tier was measured to do on that family*. `label_source` and
+`max_label_latency_s` are policy inputs describing how a **future** request's label will be produced and how long to
+wait for one. Putting them there would make an operator's rule a property of a past measurement, let two tiers measured
+on the same family declare different labellers with nothing reconciling them, and cross the boundary this repository
+already enforces in both directions — `tests/test_boundary.py` refuses a candidate that hand-writes a measurement, and
+refuses configuration presented as evidence.
+
+They move to the per-family declaration in `candidates.json` — the object C2 created for the floor. `SEAMS.md` S1
+already said C4 appends to that object, and it was right for a reason the interface section had lost.
+
+**A4.2 — `validate` is therefore the wrong verb.** `cmd_validate` reads the tier registry and never opens the config.
+The refusal belongs in `load_config`, beside C2's, and reaches an operator through whichever command loads the config.
+
+**A4.3 — the enum already exists, in a stronger form.** The tier record's `oracle.kind` names what decided an outcome
+with seven values ordered from strongest to weakest, from `executable_acceptance` to `model_judge`. C4's proposed
+`executable_check | caller_supplied | none` is a third, coarser vocabulary for the same concept, sitting beside it with
+no mapping between them. The declaration takes `oracle.kind`'s enum, extended by exactly one value — `none`, meaning no
+labeller for online traffic, which is a state a measurement record has no reason to express.
+
+**A4.4 — and the coarse enum silently drops a gate the offline path has.** `oracle.independent_of_candidate` exists
+because "a standard produced by a model that is also a candidate scores that candidate perfectly by construction," in
+the schema's own words. A three-value `label_source` cannot express that, so the online path would be able to declare a
+judge that is also a candidate in the family — and exploration exists to generate evidence, which a candidate grading
+itself is not. The declaration carries `independent_of_candidate`, and a family whose labeller is not independent of one
+of its own candidates cannot have an exploration rate. That is the same mechanical refusal C4 already specifies for a
+missing labeller, applied to the second way the label can fail to mean anything, rather than a new mechanism.
+
+### C4's interface, replacing the section above
+
+**`config.FamilyDeclaration`** gains `label_source: str`, `max_label_latency_s: float | None`, and
+`label_independent_of_candidate: bool`. `load_config` refuses a family that omits any of them, naming the family and
+the field. This is `config_format` 2's shape, set by C2 and appended to here without a second bump — S1.
+
+`label_source` is one of `oracle.kind`'s seven values or `none`. The reader takes the enum **from the schema file** so
+the two cannot drift; a hardcoded copy is the duplication this amendment exists to remove.
+
+`max_label_latency_s` is a number, or `null` exactly when `label_source` is `none`. A number with `none`, or `null`
+with anything else, is refused naming both.
+
+`label_independent_of_candidate` is a boolean and has no default. `false` is a legitimate declaration — an operator may
+be running a judge that is also a candidate and should be able to say so — and it costs the family its exploration rate.
+
+**`exploration_rate`** may appear on a family only when `label_source != "none"` **and**
+`label_independent_of_candidate` is true. Otherwise `load_config` refuses, naming both the rate and the reason. The
+artifact cannot represent the combination, so the omission is a load failure and not a runtime discovery.
+
+**`record.classify_label(decided_at, now, max_label_latency_s, label) -> str`** — unchanged from the section above,
+including the `ValueError` on `max_label_latency_s is None` and `Log.read` not reclassifying a row below
+`schema_version` 2.
