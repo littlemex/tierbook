@@ -363,19 +363,30 @@ def _mixture_guarded(criterion: str, compute, *, version_counts: dict, pool_acro
     uncertified share and a v0.2.0 log's are not one statistic), and to `spend_regret` (a v0.1.0 row reads as
     propensity 1 and contributes infinite-weight certainty to a weighted estimate built across the boundary).
 
-    So `compute` -- the criterion's own logic -- is not even called when more than one `schema_version` is
-    present and `pool_across_versions` is false: the refusal names the versions and the count in each, per
-    CONTRACT C5's interface, instead of answering a question about "the mechanism" that a mixed log cannot
-    answer. With `pool_across_versions=True` `compute` runs as it always did, and the versions pooled are named
-    in the verdict's own detail -- "on the caller's instruction", because pooling across a policy version
-    boundary is now something a caller asked for, not something that happened by not asking.
+    DEFECT this replaces (amendment 9, A9.1): an earlier version of this guard refused to even call `compute`
+    when the log was mixed and unpooled, so `spend_regret` -- which is UNSUPPORTED in every log regardless of
+    mixture, because no estimator is implemented -- was reported as blocked on "your log spans two schema
+    versions" instead of on the real reason, its own message. That sends an operator to fix a log that was
+    never the blocker. `compute` always runs now, and only a `PASS` or a `FAIL` -- a value the criterion
+    actually produced by looking at the mixed traffic -- is replaced by the mixture refusal. An `UNSUPPORTED`
+    `compute` already returned is left exactly as it was: it is already saying, in its own words, what it
+    needs, which is the property `accept.py`'s own module docstring calls the reason `UNSUPPORTED` exists.
+    Computing and discarding the result costs nothing and is what tells "would have answered" apart from
+    "could not have answered anyway."
+
+    With `pool_across_versions=True`, a `PASS` or `FAIL` that `compute` produced from the mixed traffic keeps
+    its value and gains a note in its own detail -- "on the caller's instruction" -- because pooling across a
+    policy version boundary is now something a caller asked for, not something that happened by not asking. An
+    `UNSUPPORTED` result gains no such note either, for the same reason as above: it was not affected by the
+    pooling, so there is nothing pooled to disclose.
 
     Not applied to `no_false_certification`: CONTRACT C5 is explicit that it is a per-decision universal claim
     rather than a rate, so a mixture does not change what it means, and `check_all` below calls it directly,
     unguarded.
     """
-    if len(version_counts) <= 1:
-        return compute()
+    verdict = compute()
+    if len(version_counts) <= 1 or verdict.verdict == UNSUPPORTED:
+        return verdict
     versions = _versions_named(version_counts)
     if not pool_across_versions:
         return Verdict(criterion, UNSUPPORTED,
@@ -384,7 +395,6 @@ def _mixture_guarded(criterion: str, compute, *, version_counts: dict, pool_acro
                        f"were not the same mechanism into one number. Pass pool_across_versions=True to "
                        f"compute it pooled anyway",
                        {"version_counts": dict(version_counts)})
-    verdict = compute()
     verdict.detail = (f"{verdict.detail} -- schema versions {versions} were pooled on the caller's "
                       f"instruction (pool_across_versions=True)")
     return verdict
@@ -400,13 +410,18 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
     The three that cannot be computed from a log at all say what they need instead of sharing a message: a reader told
     "insufficient data" learns nothing about what to collect.
 
-    `pool_across_versions` (CONTRACT C5) now has the behaviour C1 only reserved the keyword for: when `decisions`
-    carries more than one `schema_version`, `floor_compliance`, `default_is_not_a_hiding_place`,
-    `exploration_cost` and `spend_regret` -- the criteria a mixture changes the value of -- return `UNSUPPORTED`
-    through `_mixture_guarded` instead of computing, naming the versions present and the count in each.
-    `no_false_certification` is a per-decision universal claim rather than a rate, so a mixture does not change
-    what it means and it is never guarded. `pool_across_versions=True` computes the four anyway and says, in
-    each affected verdict's own detail, that the versions were pooled on the caller's instruction.
+    `pool_across_versions` (CONTRACT C5) now has the behaviour C1 only reserved the keyword for: `floor_compliance`,
+    `default_is_not_a_hiding_place`, `exploration_cost` and `spend_regret` -- the criteria a mixture changes the
+    value of -- go through `_mixture_guarded`, which always computes the criterion first (amendment 9, A9.1: an
+    `UNSUPPORTED` a criterion returns for its own reason, such as `spend_regret` having no estimator at all, is
+    left exactly as it was rather than replaced with a refusal that sends an operator to fix a log that was
+    never the blocker). When `decisions` carries more than one `schema_version` and the criterion would
+    otherwise have produced a `PASS` or a `FAIL`, that value is replaced with `UNSUPPORTED` naming the versions
+    present and the count in each -- computing and discarding the result is how "would have answered" is told
+    apart from "could not have answered anyway". `no_false_certification` is a per-decision universal claim
+    rather than a rate, so a mixture does not change what it means and it is never guarded.
+    `pool_across_versions=True` keeps a `PASS`/`FAIL` computed from the mixed traffic and says, in that verdict's
+    own detail, that the versions were pooled on the caller's instruction.
 
     `max_age_days` (amendment 7, C6) is the family's declared freshness limit, passed down to the two falsifiers
     that call `record.check_certification`. It is not in the record the way an age is -- it is a policy input, so
@@ -436,10 +451,15 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
         guard("spend_regret",
              lambda: _needs_a_design(
                  "spend_regret",
-                 "an off-policy estimate with an interval, by the method section 9 declares. It needs logged "
-                 "selection probabilities that vary -- every decision in a deterministic policy has "
-                 "propensity 1, under which the counterfactual arm has no data and the estimate is "
-                 "unidentified. Randomised exploration is the prerequisite, not a refinement")),
+                 "an off-policy estimate with an interval, by the method section 9 declares, and no estimator "
+                 "for it exists yet -- that is the blocker, not the log. Amendment 9 corrects an earlier "
+                 "version of this message, written a release before C3 shipped: a family with no declared "
+                 "exploration_rate still gives every decision propensity 1, under which the counterfactual arm "
+                 "has no data and the estimate stays unidentified, so that dependency is real and unchanged. "
+                 "But where a family DOES declare a rate, C3's randomised draw already makes "
+                 "selection_probability vary -- the prerequisite this criterion needed is now met for that "
+                 "traffic, and what remains missing is the estimator and its confidence interval, not "
+                 "exploration itself")),
         guard("exploration_cost", lambda: exploration_cost(decisions, budgeted_share=budgeted_exploration)),
         _needs_a_design("adaptation",
                         "an injected change -- a price change, a model release, an agent swap, a capacity loss -- and "
