@@ -1,153 +1,146 @@
-# v0.2.0: settle what cannot be retrofitted, then stop wasting the log
+# Phase 1 — the design for v0.2.0, its assumptions, and the findings that go to triage
 
-## What this exists to do
+This is the phase-1 output: a design statement, the assumption table, and a list of design-level findings. **It does
+not decide the scope.** Deciding what will and will not change is phase 2's job, and the first draft of this document
+conflated the two — it merged the review findings straight into a revised scope, which is convergence wearing
+divergence's clothes. That draft is kept as `design-draft1.md`.
 
-Decide the v0.2.0 scope by cost of deferral, not by value. Two costs are being distinguished and they were being
-conflated:
+## 1. The design statement
 
-- **Irreversible.** A field absent from a record today cannot be told apart later from a field whose value was absent.
-  Every day of logging makes the retrofit less possible, and at some point it is simply not.
-- **Recurring.** The mechanism works and the data it collects cannot answer a question it will be asked. Adding the
-  capability later costs nothing structurally; what is lost is the data in between.
+### What this exists to do, and who operates it
 
-The instruction was "start with what is hard to change later", which is the first kind. An early draft of this
-document put the record first and exploration third on the grounds that the record already has room for exploration.
-That was wrong, and the assumption table below shows the check that reversed it.
+v0.2.0 makes the mechanism able to learn from its own log. v0.1.0 produced one turn — observe, decide, record, check —
+in a form that cannot answer the question SCOPE section 9 exists for: *would another choice have been better*. Two
+things stand between the log and that question, and both are mechanism rather than analysis.
 
-## The assumptions, all checked before the scope was written
+Operated by whoever runs the routing layer. Read by whoever later asks the log a counterfactual question, who is not the
+same person and will not be able to ask the author what a field meant.
 
-| assumption | load-bearing for | how it was checked | result |
-|---|---|---|---|
-| The decision record is versioned, so fields can be added without ambiguity | everything in S1 | read `Decision`'s fields; read what `schema.json` covers | **FALSE.** No `schema_version` on a decision. `schema.json` is titled *tier record* and constrains the measurement ledger, not the decision log, and nothing validates a decision record at all |
-| A bound's sample size is available to be recorded beside it | S1's third item | read a family block in `examples/ledger/tiers` | **TRUE.** `solved: 16, attempted: 20` is already in the ledger. Recording it on `Candidate` is plumbing, not a new measurement |
-| Bounds are recomputed as evidence accrues, which is what makes a fixed-sample margin actively anti-conservative | S2 | looked for an accrual path; read `evidence.py` | **FALSE TODAY.** `trials_per_item` must be 1 and a cohort is fixed before any run, so a bound is computed once per cohort. The defect is *latent* and becomes active on the first re-measure |
-| Exploration requires a change to the record | the ORDER of S1 against S3 | read `Decision`'s fields | **FALSE.** `selection_probability` and `exploration` already exist. Exploration is not schema-expensive |
-| Deferring exploration costs only the data collected in between | the whole S1-before-S3 argument | ran `admissible` against a candidate whose evidence ages while it is never chosen | **FALSE, and this reversed the ordering.** See below |
+### The responsibilities, and which layer owns each
 
-**The check that changed the answer.** Deterministic routing plus a freshness limit is a **one-way door**, and the door
-was installed in v0.1.0:
+| Value | Owner | Why not elsewhere |
+|---|---|---|
+| The state a decision is made from | `observe` | Already so. The one collector that exists. |
+| Which candidate is chosen deterministically | `decide` | Already so. |
+| **Whether this request is explored, and into which arm** | a new randomiser, above `decide` | It must know what `decide` would have chosen, so it cannot live inside `decide`; and it must be the only place a draw happens, or two draws make the propensity unreconstructible. |
+| **The propensity of the arm that was chosen** | the same randomiser | It is the only component that knows the eligible set and the draw. A caller computing it would be computing a second copy of the mechanism. |
+| **What produces a label, and how long to wait for one** | the family's declaration in the ledger | SCOPE section 2: the label's source and maximum latency are declared *per family*. Not the caller's — a caller that decides when a label is late decides the success rate. |
+| **Whether a label is late or absent** | the outcome join, reading that declaration | Today nothing decides it and the record's three-way label state is settled by whoever looks. |
+| The identity of the evidence a bound came from | the compiler | It computed the bound. Routing cannot reconstruct which observations, exclusions or weighting produced one. |
+| The record's schema version | the record's writer | The component that serialises knows what shape it wrote. A caller passing it in is a second copy of that knowledge. |
 
-    age  30d  bound 0.95 vs floor 0.80 -> admissible=True
-    age  89d  bound 0.95 vs floor 0.80 -> admissible=True
-    age  91d  bound 0.95 vs floor 0.80 -> admissible=False (evidence_expired)
-    age 365d  bound 0.95 vs floor 0.80 -> admissible=False (evidence_expired)
+### The contracts at each boundary, failure included
 
-A candidate the policy routes away from stops receiving labels. Its evidence ages. Past the limit it is inadmissible
-**regardless of its bound** — so it cannot be chosen, so it cannot be refreshed. A candidate that loses once loses
-permanently, and its 0.95 bound is irrelevant after ninety days.
+**randomiser → `decide`.** The randomiser may assume `decide` is a pure function of state. It must not assume `decide`'s
+choice is admissible. On a state where `decide` falls to the default, exploration still applies — the default is a
+choice like any other, and excluding it from randomisation would fix the default's propensity at 1 forever.
 
-The freshness check in `admissible` is mine, added in v0.1.0 in response to a review that correctly pointed out
-`evidence_expired` sat in the vocabulary with nothing able to produce it. Adding it was right and it made the ratchet
-real: before it, a stale bound still competed. So **v0.1.0 introduced a lock-in that only exploration opens**, and the
-labels not collected for the unchosen arm during the deterministic period do not exist and cannot be back-filled.
+**randomiser → record.** The record may assume the propensity is the conditional probability of the arm actually
+chosen, under the draw actually performed, with the eligible set recorded beside it. On failure — an empty eligible set
+— the randomiser does not draw and the decision is the deterministic one, recorded with `exploration: false` and
+propensity 1. Silence here would look identical to a policy that chose not to explore.
 
-That is irreversible in the same sense S1 is, and it is why the ordering below is not the one this document first
-argued for.
+**outcome join → the family declaration.** The join may assume a labeller and a maximum label latency are declared. On
+their absence it must **refuse to classify** rather than choose a default: a label declared late by a rule nobody wrote
+is a success rate nobody can defend.
 
-## The scope
+**compiler → routing.** Routing may assume a bound cites an evidence artifact that exists and matches. On mismatch the
+compiler refuses to certify. It may not assume the artifact is unchanged because its row count is unchanged.
 
-### S0 — exploration with logged propensities. Irreversible, and active since v0.1.0.
+## 2. The assumption table
 
-Promoted from third to first by the check above. It was described here as a recurring cost and it is a ratchet.
+| # | Assumption | Load-bearing | How it was checked | Result |
+|---|---|---|---|---|
+| A1 | The decision record is versioned, so a field added later is distinguishable from one whose value was absent | no — see F13 | read `Decision`'s fields; read what `schema.json` covers | **FALSE.** No `schema_version`. `schema.json` is titled *tier record* and constrains the ledger, not the decision log, which nothing validates |
+| A2 | Bounds are recomputed as evidence accrues, so fixed-sample margins are *actively* anti-conservative | yes, for whether bounds belong in this release | looked for an accrual path; read `evidence.py` | **FALSE TODAY.** `trials_per_item` must be 1 and a cohort is fixed before any run. Latent, not active |
+| A3 | Deferring exploration costs only the data collected in between | **yes** | ran `admissible` on a candidate whose evidence ages while it is never chosen | **FALSE.** A one-way door: `age 30d → True`, `age 91d → False (evidence_expired)` *regardless of a 0.95 bound*. Not chosen ⇒ not labelled ⇒ expired ⇒ cannot be chosen |
+| A4 | Recording a field now, unused, preserves the ability to use it later | **yes**, for the stratum and consequence proposals | asked what would *produce* the value in this release | **FALSE.** Nothing produces a stratum here, so the field is present-and-absent: it distinguishes schema versions and loses the data anyway |
+| A5 | A decide-time signal slot lets a later signal be compared against earlier decisions | yes, for the slot | asked when each intended occupant exists | **FALSE twice.** Old events lack the measurement whatever the slot; and an answer-token margin exists only *after* generation, so a decide-time field is the wrong home for it |
+| A6 | The family declaration carries a labeller and a maximum label latency | **yes**, for the outcome join | read a family block and the schema's `required` | **FALSE.** Family requires only `solved`, `attempted`, `suite`. SCOPE section 2 requires the label's source and maximum latency per family; neither the record nor the schema carries them |
+| A7 | A candidate whose evidence expired still has a bound that clears the floor, so exploration can reach it | **yes**, for opening the door | read `admissible`'s ordering: `no_bound → evidence_expired → below_floor → …` | **TRUE**, and the ordering matters: expiry is decided *before* the bound is compared, so a separate `clears_floor` predicate is needed rather than reusing `admissible` |
 
-Three things are lost and only the first is recoverable:
+A3 is the release's centre. One review sharpened what is lost, and the sharpening is the point: it is not log lines at a
+constant rate but **the counterfactual arm's behaviour in the interim environment, and that environment will not exist
+later.** Under the mechanism's own premise that environments move, "would the alternative have been better last quarter"
+is permanently unidentified for every quarter before exploration ships.
 
-- **The off-policy estimate.** Every decision at propensity 1 leaves the counterfactual arm with no data, so
-  `accept.spend_regret` reports `unsupported` and will keep doing so. Recoverable in the sense that a later log with
-  varying propensities answers the question for the period it covers.
-- **The labels for the unchosen arm during the deterministic period.** Not recoverable. They were never produced.
-- **The unchosen arm's admissibility, permanently, once its evidence expires.** Not recoverable without a re-measure
-  outside the loop, which is precisely the thing the mechanism is supposed to make unnecessary.
+The freshness check that creates the door is mine, added in v0.1.0 because a review correctly noted `evidence_expired`
+sat in the vocabulary with nothing able to produce it. Adding it was right; it made the ratchet real.
 
-Two design decisions it forces, stated here rather than discovered in implementation:
+## 3. Design-level findings, for phase 2 to triage
 
-- **An explored assignment is uncertified by construction.** It goes to a candidate the policy would not have chosen,
-  whose bound may not clear the floor, so the floor is not claimed for it. `accept.floor_compliance` already computes
-  over certified decisions only, so exploration does not contaminate the floor — a property of the existing design
-  rather than something being added.
-- **The propensity is the probability of the arm that was chosen, under the randomisation actually used.** Not a
-  nominal rate. Exploring 5% over two arms makes the chosen arm's propensity 0.95 or 0.025 depending on which it was,
-  and recording 0.05 would make every estimate wrong by a factor.
+Numbered so the contract can accept or reject each by name. **None is decided here.**
 
-**And a third that the ratchet forces, which a naive exploration design would miss.** Exploration has to be able to
-reach a candidate whose evidence has **expired**, or it cannot open the door it exists to open. A design that explores
-only among admissible candidates is a design that cannot rescue the arm it locked out. So the exploration arm is drawn
-from the candidates the policy *names*, not from the ones currently admissible, and an assignment to an expired
-candidate is uncertified and labelled as exploration — which is exactly what the record already distinguishes.
+### Class D — ordering and load-bearing position
 
-### S1 — version and complete the decision record. Irreversible if deferred.
+**F1. A rule appended to a policy changes what every earlier propensity meant.** `decide` returns the first matching
+rule and exploration draws from the eligible set that policy defines. Append a rule and the eligible set changes, so a
+propensity recorded under the old policy is not comparable with one recorded under the new. `policy_version` is already
+recorded, which makes the condition *available*; nothing states the pooling rule that uses it.
 
-Four additions, each of which cannot be reconstructed from a log written without it.
+**F2. Two random draws would make the propensity unreconstructible.** If exploration draws and a retry policy also
+draws, the recorded propensity is one factor of the true one. Nothing today forbids a second draw.
 
-**`schema_version` on every decision.** Without it, a v0.1.0 record that lacks `stratum` is indistinguishable from a
-v0.2.0 record whose stratum was unknown. With it, the first is a different schema and the second is a gap. This is the
-whole reason the rest of S1 depends on it: a one-line field whose absence makes every other addition ambiguous
-forever.
+### Class G — duplicated knowledge
 
-**The bound's sample size, on `Candidate`.** A bound over 4 items and a bound over 24 are the same number today, and a
-reader cannot tell them apart. swe-router's discipline, and the ledger already carries `solved`/`attempted`, so this is
-plumbing. Recorded as `bound_n` and `bound_attempted` rather than a rate, because the pair is what a later reader needs
-and a rate discards it.
+**F3. The floor is supplied twice and nothing compares the copies.** `assign_family` takes it, `accept --floor` takes it
+from a human, and exploration eligibility needs it. A criterion computed against a floor different from the one the
+policy used is a silent wrong answer, and today that is one CLI flag away.
 
-**A stratum and a consequence class.** swe-router's second device: what happens if this is wrong sets the floor, and how
-hard the work is selects which measured bound to compare against it. Neither can be recovered from a log that did not
-record them — a request's difficulty is not in its outcome. Recorded here **without** being used to decide anything,
-because the per-stratum bounds do not exist yet: the pilot subset is 24 items with one permanently unscoreable and will
-not carry four strata. So this release records the field and the decision ignores it.
+**F4. `max_age_days` exists in two places** — the compiler's default and `admissible`'s argument — and the ratchet in A3
+is exactly what that number controls.
 
-That split is deliberate and worth stating plainly: **a field recorded and unused is cheap; a field wanted and
-unrecorded is impossible.** The alternative — waiting until the strata can be bounded — throws away every log line
-written in between.
+**F5. The exploration rate must have one home.** The policy artifact, the CLI and the record are three candidates; the
+record's realised propensity is a *different quantity* and must not be mistaken for a copy of the rate.
 
-**A signal slot: the versioned feature vector section 9 asks for.** Today `feature_vector_version` versions a vector
-nobody records. That is the slot a per-request signal lands in, and the two candidates named in `docs/issues/` are
-exactly that shape: a hidden-state probe, and an answer-token margin. Recording `features` as a named mapping with its
-version means a signal introduced later can be compared against decisions made before it existed, which a log without
-the slot cannot support.
+### Class H — capability claimed but not declared
 
-`accept` gains nothing from S1 by itself. That is expected: S1 buys the ability to ask questions later, and a release
-whose value is entirely in the future has to say so rather than dress it up.
+**F6. The ledger declares a capability SCOPE requires and the schema does not carry** (A6). An outcome join cannot decide
+`pending` versus `missing` without a declared maximum label latency, and that is the distinction the record's three-way
+label state exists for.
 
-### S2 — refuse the claim a latent defect would make wrong. Cheap now, prevents a wrong claim later.
+**F7. `attach_outcome` exists and nothing calls it.** The mechanism advertises a labelled log and supplies no producer of
+labels. Exploration on top of this yields randomised assignments nobody can learn from.
 
-The margins are fixed-sample. Recomputing a bound as evidence accrues and admitting at a data-dependent stopping time
-makes them anti-conservative, which is one of the six gaps. The check above found that nothing accrues today, so the
-defect is latent.
+### From the review rounds, on the first draft's proposals
 
-The fix is not anytime-valid bounds. It is a **refusal**: the compiler declines to certify against a cohort that has
-grown since the bound it is reading was computed, and names anytime-valid bounds as what would lift the refusal.
+**F8. "Explored assignments are uncertified by construction" preserves the metric, not the floor.** Certification says
+whether an action clears the floor; exploration says why it was selected. Conflating them permits serving below the floor
+and then removing that traffic from `floor_compliance`'s denominator.
 
-That keeps the ordering honest. Implementing anytime-valid bounds is a real piece of statistics and does not belong in a
-release whose theme is "record what cannot be retrofitted". Refusing the claim costs a comparison and means no
-certification made in the interim is anti-conservative.
+**F9. The first draft's propensity example was arithmetically wrong.** Two arms with 5% exploration spread over both
+gives 0.975 and 0.025; exploration always taking the alternative gives 0.95 and 0.05. The draft said 0.95 and 0.025,
+which needs three arms. The error is the argument for specifying the randomisation before implementing it.
 
-## Out of scope, with the reason
+**F10. "Refuse if the cohort grew" is a proxy with a hole shaped like its purpose.** A 24-item cohort can change
+completely and stay 24; and an operator hitting the refusal can freeze the evidence under a new cohort name and
+recompute — optional stopping laundered through a rename.
 
-| Not in v0.2.0 | Why |
-|---|---|
-| Anytime-valid bounds | S2 makes waiting safe. Doing the statistics belongs in a release about bounds. |
-| Change-point detection | A policy expires by age today. Additive later, and nothing about it is foreclosed by a log that lacks it. |
-| A value for the reserved candidate's scarce capacity | It changes the objective, and the objective is not what this release touches. |
-| The hidden-state measurement itself | `docs/issues/hidden-state-signal-from-the-box.md`. Needs GPU and a J-lens that may not survive an MoE. **The slot it would use is S1.** |
-| Deriving the tie band | `docs/issues/adopt-the-four-devices-from-swe-router.md`. A computation over recorded cohorts, not a schema change. **Its provenance field is S1.** |
-| Using the stratum to decide | The per-stratum bounds do not exist. Recording it is S1; deciding from it needs a cohort that can carry four strata. |
-| A bandit, a scheduler, or any policy that learns from the log | S0 makes the log *able* to support that later. Doing both at once would mean a release where nothing can be attributed, since the exploration and the learning would move together. |
+**F11. A guard that cannot fire in the release that adds it will first be met by the author of the feature it blocks**,
+who is the person most motivated to delete it. A dependency stated in the accrual feature's scope is enforceable where a
+runtime refusal is not.
 
-## The contracts this changes
+**F12. `bound_n`/`bound_attempted` encode one binomial layout rather than a bound's provenance**, and cannot reproduce a
+bound computed with weights, clusters or stratification. They are also reconstructible from the ledger via `family` +
+`evidence_as_of`, so they are convenience rather than rescue.
 
-**`record.Decision` → its readers.** A record gains a version and four fields. `accept` must read a record whose
-version it does not know and say so rather than computing over it — a criterion evaluated across two schema versions is
-a criterion over a mixture nobody described.
+**F13. `schema_version` is cheap insurance, not rescue.** An absent version is readable as v0.1.0, whose shape is fixed.
+What the field prevents is a *second* unversioned shape.
 
-**`serve.route_once` → its caller.** The caller supplies the stratum, the consequence class and the features, or they
-are absent with a reason. Same rule as the collector: absent with a reason, never defaulted. A fabricated stratum is
-worse than none because it aggregates.
+**F14. The purpose's central clause stays deferred.** After v0.2.0 nothing produces a per-request signal about the work.
+One review held that a crude versioned stratum producer was within reach and that not building it is unjustified.
 
-**The compiler → the ledger.** S2 adds a precondition: the cohort a bound was computed over must not have grown. On
-failure the compiler refuses to certify rather than emitting a bound it cannot stand behind.
+**F15. `features` as a mapping is a junk drawer** that will accumulate incompatible meanings and missingness conventions,
+and cannot express provenance, units, extractor identity, observation time or per-value missingness.
 
-## What would prove this scope wrong
+**F16. The stratum needs a versioned classifier, not a caller label.** An unversioned caller-supplied stratum creates
+false comparability, which is worse than absence.
 
-If `schema_version` turns out not to be enough — if a reader needs to distinguish more than "which shape is this" —
-then S1 is under-built and the retrofit problem returns. The check: write a v0.1.0 record and a v0.2.0 record, hand both
-to `accept`, and see whether it can say something true about each without treating them as one population.
+**F17. Exploration without a dependable outcome join does not generate evidence**, so R-ordering that puts exploration
+before the join produces a log of randomised assignments nobody can learn from.
+
+## 4. Refusing to proceed on one point
+
+A6 cannot be worked around by the outcome join. Either the family declaration gains a labeller and a maximum label
+latency — a schema change to the ledger — or the join must refuse to classify and v0.2.0 ships an outcome path that
+cannot say whether a label is late. Phase 2 has to choose, and choosing the second **silently** is the failure mode.
