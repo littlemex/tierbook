@@ -306,8 +306,25 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
     """Read a candidate file, refusing the two things it must not contain."""
     p = Path(path)
     raw = json.loads(p.read_text())
-    if raw.get("config_format") != CONFIG_FORMAT:
-        raise ConfigError(f"{p}: config_format must be {CONFIG_FORMAT}, found {raw.get('config_format')!r}")
+    raw_format = raw.get("config_format")
+    # C8 (amendment 8) measured six `load_config` round trips to upgrade the real v0.1.0 ledger this project
+    # shipped at its own tag, because every refusal below stopped at the first problem it met. Amendment 10
+    # found this check itself was half the reason a two-load fix was impossible: a config_format mismatch
+    # was treated as "the whole shape is unknown, stop here" in BOTH directions, but format 1's shape IS
+    # known -- `families` mapped a name to a string, format 2 maps it to an object, and that difference is
+    # exactly what the family check below reports. So an OLDER format (this project has only ever had one:
+    # 1) is validated all the way through and its problem is collected beside every other one; only a format
+    # this reader has never seen -- newer, or not a plain integer at all -- stops here alone, because there
+    # is no established shape left to check the rest against. Same rule C1 already applies to the decision
+    # log's `schema_version`.
+    config_format_known_older = (
+        isinstance(raw_format, int) and not isinstance(raw_format, bool) and raw_format < CONFIG_FORMAT
+    )
+    if raw_format != CONFIG_FORMAT and not config_format_known_older:
+        raise ConfigError(f"{p}: config_format must be {CONFIG_FORMAT}, found {raw_format!r}")
+    problems: list[str] = []
+    if raw_format != CONFIG_FORMAT:
+        problems.append(f"{p}: config_format must be {CONFIG_FORMAT}, found {raw_format!r}")
     observed = _record_schema_keys(schema)
 
     candidates: dict[str, Candidate] = {}
@@ -369,16 +386,32 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
     families: dict[str, FamilyDeclaration] = {}
     for fam, decl in (raw.get("families") or {}).items():
         if isinstance(decl, str):
-            raise ConfigError(
+            # Amendment 10.2: this used to print only `reference` and `floor` -- two of the six keys a family
+            # object now requires. An operator who did exactly what it said met a SECOND refusal naming the
+            # four keys C4 and C3/amendment 5 append to this same object, and across two families that was
+            # four of the measured six round trips on its own, independent of aggregation. A refusal that
+            # names a shape now names the WHOLE shape, so the object printed below is one that actually loads.
+            problems.append(
                 f"family {fam!r} names its reference candidate as a bare string, {decl!r} -- the config_format 1 "
                 f"shape. As of config_format {CONFIG_FORMAT} a family is an object carrying its own floor beside "
                 "its reference, because the floor is the family's own requirement (SCOPE calls it \"the family's "
                 "floor\" in sections 2, 5 and 12) and a single flag shared by every family in the ledger let two "
-                f"families with different requirements silently share whichever number was typed. Change it to "
-                f'{{"reference": {decl!r}, "floor": <this family\'s success-rate floor>}}.'
+                "families with different requirements silently share whichever number was typed. Since then, C4 "
+                "and C3 have each appended their own required keys to this same object (SEAMS.md S1) without a "
+                "second config_format bump: how a future request's label will be produced (label_source), how "
+                "long to wait for one (max_label_latency_s, null only when label_source is 'none'), whether "
+                "that labeller is independent of any candidate in the family (label_independent_of_candidate), "
+                "and how stale a bound exploration may draw into before it is refused (staleness_limit_days, "
+                f'null meaning no limit). Change it to {{"reference": {decl!r}, "floor": <this family\'s '
+                'success-rate floor>, "label_source": <one of oracle.kind\'s values, or "none">, '
+                '"max_label_latency_s": <seconds to wait for a label, or null only if label_source is "none">, '
+                '"label_independent_of_candidate": <true or false>, "staleness_limit_days": <days, or null '
+                'for no limit>}.'
             )
+            continue
         if not isinstance(decl, dict):
-            raise ConfigError(f"family {fam!r} must be an object with 'reference' and 'floor', not {decl!r}")
+            problems.append(f"family {fam!r} must be an object with 'reference' and 'floor', not {decl!r}")
+            continue
         # config_format 2's shape (S1) plus the three keys amendment 4 appends to it without a second bump:
         # a family cannot be joined to an outcome, and therefore cannot be given an exploration rate, without
         # saying where its label comes from and how long to wait for one.
@@ -386,7 +419,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
                    "staleness_limit_days")
         missing = [k for k in required if k not in decl]
         if missing:
-            raise ConfigError(
+            problems.append(
                 f"family {fam!r} is missing {missing}: a family object needs the candidate it falls back to, "
                 "the floor its certified assignment must clear, how a future request's label will be produced "
                 "(label_source), how long to wait for one (max_label_latency_s, null only when label_source is "
@@ -394,66 +427,75 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
                 "(label_independent_of_candidate) -- since C4 -- and how stale a bound exploration may draw "
                 "into before it is refused (staleness_limit_days, null meaning no limit) -- since C3"
             )
+            continue
         label_source = decl["label_source"]
         if label_source not in label_source_values:
-            raise ConfigError(
+            problems.append(
                 f"family {fam!r}.label_source is {label_source!r}, which is not one of "
                 f"{sorted(label_source_values)}. label_source is oracle.kind's vocabulary, read from the record "
                 "schema so the two cannot drift, plus 'none' for a family with no labeller for online traffic."
             )
+            continue
         max_label_latency_s = decl["max_label_latency_s"]
         if label_source == "none":
             if max_label_latency_s is not None:
-                raise ConfigError(
+                problems.append(
                     f"family {fam!r} declares label_source 'none' and max_label_latency_s {max_label_latency_s!r}; "
                     "a family with no labeller for online traffic has no latency to wait out, so "
                     "max_label_latency_s must be null exactly when label_source is 'none'."
                 )
+                continue
         elif max_label_latency_s is None:
-            raise ConfigError(
+            problems.append(
                 f"family {fam!r} declares label_source {label_source!r} and max_label_latency_s null; a family "
                 "with a labeller must say how long to wait for a label, so max_label_latency_s must be a number "
                 "unless label_source is 'none'."
             )
+            continue
         elif not isinstance(max_label_latency_s, (int, float)) or isinstance(max_label_latency_s, bool):
-            raise ConfigError(
+            problems.append(
                 f"family {fam!r}.max_label_latency_s must be a number, not {max_label_latency_s!r}"
             )
+            continue
         label_independent_of_candidate = decl["label_independent_of_candidate"]
         if not isinstance(label_independent_of_candidate, bool):
-            raise ConfigError(
+            problems.append(
                 f"family {fam!r}.label_independent_of_candidate must be a boolean, not "
                 f"{label_independent_of_candidate!r} -- there is no default, because a judge that is also a "
                 "candidate in its own family is a fact only the operator declaring the family knows."
             )
+            continue
         staleness_limit_days = decl["staleness_limit_days"]
         if staleness_limit_days is not None and (
                 not isinstance(staleness_limit_days, (int, float)) or isinstance(staleness_limit_days, bool)):
-            raise ConfigError(
+            problems.append(
                 f"family {fam!r}.staleness_limit_days must be a number or null, not {staleness_limit_days!r}"
             )
+            continue
         exploration_rate = decl.get("exploration_rate")
         if "exploration_rate" in decl and (label_source == "none" or not label_independent_of_candidate):
             reason = ("label_source is 'none'" if label_source == "none"
                      else "label_independent_of_candidate is false")
-            raise ConfigError(
+            problems.append(
                 f"family {fam!r} declares exploration_rate {exploration_rate!r}, but {reason}: exploration "
                 "exists to generate evidence, and a candidate grading itself -- or traffic with no labeller at "
                 "all -- is not evidence, so this family cannot represent an exploration rate. This is a load "
                 "failure, not a runtime discovery: remove exploration_rate, or fix the reason above."
             )
+            continue
         # Amendment 5: an unbounded staleness limit combined with a rate to explore with is refused. Exploration
         # exists to reach a candidate whose evidence has expired (`explore.clears_floor` overrides
         # `max_evidence_age_days` for exactly that candidate), so `staleness_limit_days: null` there is a bound
         # from any past environment at all, not a declared one -- a family may decline to state a limit, or may
         # explore, but not both.
         if "exploration_rate" in decl and staleness_limit_days is None:
-            raise ConfigError(
+            problems.append(
                 f"family {fam!r} declares exploration_rate {exploration_rate!r} and staleness_limit_days null: "
                 "exploration exists to reach a candidate whose evidence has expired, so an unbounded staleness "
                 "limit there is a bound from any past environment at all. Declare a staleness_limit_days, or "
                 "remove exploration_rate."
             )
+            continue
         families[fam] = FamilyDeclaration(
             reference=decl["reference"], floor=float(decl["floor"]),
             label_source=label_source,
@@ -464,7 +506,19 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
         )
     unknown = {f: d.reference for f, d in families.items() if d.reference not in candidates}
     if unknown:
-        raise ConfigError(f"families name references that are not candidates: {unknown}")
+        problems.append(f"families name references that are not candidates: {unknown}")
+    if problems:
+        # C8: every problem collected above is named once, in the SAME refusal, instead of the operator
+        # meeting them one family (or one config_format bump) at a time. Measured against the real v0.1.0
+        # ledger this project shipped at its own tag: six `load_config` round trips before this entry, two
+        # after -- one load naming everything wrong, a fix, and a second load that either succeeds or names
+        # whatever is still wrong.
+        if len(problems) == 1:
+            raise ConfigError(problems[0])
+        raise ConfigError(
+            f"{p}: {len(problems)} problems must be fixed before this file loads:\n"
+            + "\n".join(f"{i}. {msg}" for i, msg in enumerate(problems, 1))
+        )
     return Config(
         candidates=candidates, families=families, objective=objective,
         throughput_per_family={k: float(v) for k, v in (raw.get("throughput_per_family") or {}).items()},
