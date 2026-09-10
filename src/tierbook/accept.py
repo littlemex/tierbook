@@ -149,15 +149,73 @@ def _unreadable(outcomes: dict) -> int:
     return int((outcomes.get("__bad_lines__") or {}).get("count", 0))
 
 
+def _rate_against_floor(pairs: list, *, total_population: int, floor: float, significance: float) -> tuple[dict, str]:
+    """One population's realised rate against the floor: the FAIL test, the PASS bound, and its own verdict.
+
+    Shared between the two populations `floor_compliance` now reports (CONTRACT C3) so they cannot drift into two
+    slightly different readings of section 12's one test -- the same failure mode C2's audit found for the floor
+    itself, in a smaller shape here.
+
+    Two questions, and they are not each other's negation.
+
+    FAIL asks section 12's question directly: did the rate fall below the floor beyond sampling error. That is the
+    one-sided tail P(X <= k) under the floor.
+
+    PASS asks whether compliance was SHOWN, which needs the lower confidence bound to clear the floor. An earlier
+    version passed when the failure test did not reject, which is accepting a null -- and it gated the middle case on
+    `n < 30`, a constant nobody derived. The bound replaces it: with few labels the bound is far below the floor and
+    the verdict is unsupported for a reason that is computed rather than chosen.
+    """
+    missing = total_population - len(pairs)
+    if not pairs:
+        return ({"labelled": 0, "successes": 0, "rate": None, "unlabelled": missing, "verdict": UNSUPPORTED},
+                f"{total_population} decisions and none of them labelled, so no realised rate exists. This needs "
+                f"the task's own oracle to have run and its verdict attached")
+    n = len(pairs)
+    k = sum(1 for _, o in pairs if o.get("label") is True)
+    rate = k / n
+    p_low = binom_tail_at_most(n, k, floor)
+    lcb = clopper_pearson_lower(n, k, significance)
+    out = {"labelled": n, "successes": k, "rate": round(rate, 4), "p_below_floor": round(p_low, 5),
+          "lower_bound": round(lcb, 4), "unlabelled": missing}
+    if p_low < significance:
+        out["verdict"] = FAIL
+        detail = (f"the realised rate {rate:.1%} over {n} labelled decisions is below the floor {floor:.1%} "
+                  f"beyond sampling error (p={p_low:.4f} < {significance})")
+    elif lcb >= floor:
+        out["verdict"] = PASS
+        detail = (f"the {1 - significance:.0%} lower bound on the realised rate is {lcb:.1%} over {n} labelled "
+                  f"decisions, which clears the floor {floor:.1%}")
+    else:
+        out["verdict"] = UNSUPPORTED
+        detail = (f"the realised rate is {rate:.1%} over {n} labelled decisions, and its {1 - significance:.0%} "
+                  f"lower bound {lcb:.1%} does not clear the floor {floor:.1%}. Not a failure -- the rate is not "
+                  "significantly below either -- so nothing is shown in either direction. Reported so the rate "
+                  "is not mistaken for a pass")
+    return out, detail
+
+
 def floor_compliance(decisions: list, outcomes: dict, *, floor: float, significance: float = 0.05) -> Verdict:
-    """Realised success rate on routed traffic against the family's floor.
+    """Realised success rate against the family's floor -- over **two** populations (CONTRACT C3).
 
-    Over **certified and labelled** decisions only. Certified because the floor is claimed for those and disclaimed
-    for the rest, and labelled because a missing label read as a failure moves the rate in the direction that
-    flatters the floor -- which is why section 9 requires label-missingness to be explicit.
+    `certified`, over certified and labelled decisions, exactly as before this entry: certified because the floor
+    is claimed for those and disclaimed for the rest.
 
-    The test is one-sided: the criterion fails if the rate falls below the floor beyond sampling error. A normal
-    approximation is not used at these counts; the exact binomial tail is.
+    `all_served`, over every served and labelled decision, certified or not. **Not** "explored assignments are
+    uncertified by construction" (a rejected alternative, F8): that would let traffic below the floor be served
+    and then removed from this criterion's own denominator, which preserves the metric rather than the floor.
+    Since `explore.eligible` already requires a candidate's bound to clear the floor before exploration may draw
+    into it, an explored assignment is certified when the rest of admissibility holds -- `serve.route_once`
+    records it that way -- so this second population is not a hole the first one has; it is the check that the
+    first one's denominator was not narrowed to hide a violation.
+
+    Labelled either way, for the reason unchanged from before: a missing label read as a failure moves the rate
+    in the direction that flatters the floor -- section 9 requires label-missingness to be explicit.
+
+    The two verdicts are independent -- `all_served`'s population is a superset of `certified`'s but need not agree
+    with it, since an uncertified decision can be labelled while a certified one is still pending. This function's
+    own `verdict` is FAIL if either population fails, PASS if both pass, and UNSUPPORTED otherwise, so a caller
+    reading only the top-level field never sees a pass that a second, wider population would have contradicted.
     """
     bad = _unreadable(outcomes)
     if bad:
@@ -165,48 +223,48 @@ def floor_compliance(decisions: list, outcomes: dict, *, floor: float, significa
                        f"{bad} log line(s) could not be read, so a rate over the routed traffic is a rate over the "
                        f"lines that survived. Repair or truncate the log before reading a rate from it",
                        {"unreadable_lines": bad})
-    eligible = [r for r in decisions if r["certified"]]
-    labelled = [(r, outcomes.get(r["request_id"], {})) for r in eligible]
-    labelled = [(r, o) for r, o in labelled if o.get("label_state") == "labelled"]
-    missing = len(eligible) - len(labelled)
-    if not labelled:
-        return Verdict("floor_compliance", UNSUPPORTED,
-                       f"{len(eligible)} certified decisions and none of them labelled, so no realised rate exists. "
-                       f"This needs the task's own oracle to have run and its verdict attached",
-                       # The same key names in both branches. A caller reading `numbers` should not have to know
-                       # which branch produced it, and an earlier version used two spellings for one quantity.
-                       {"labelled": 0, "successes": 0, "rate": None, "floor": floor,
-                        "certified": len(eligible), "unlabelled_certified": missing})
-    n = len(labelled)
-    k = sum(1 for _, o in labelled if o.get("label") is True)
-    rate = k / n
-    # Two questions, and they are not each other's negation.
-    #
-    # FAIL asks section 12's question directly: did the rate fall below the floor beyond sampling error. That is the
-    # one-sided tail P(X <= k) under the floor.
-    #
-    # PASS asks whether compliance was SHOWN, which needs the lower confidence bound to clear the floor. An earlier
-    # version passed when the failure test did not reject, which is accepting a null -- and it gated the middle case on
-    # `n < 30`, a constant nobody derived. The bound replaces it: with few labels the bound is far below the floor and
-    # the verdict is unsupported for a reason that is computed rather than chosen.
-    p_low = binom_tail_at_most(n, k, floor)
-    lcb = clopper_pearson_lower(n, k, significance)
-    numbers = {"labelled": n, "successes": k, "rate": round(rate, 4), "floor": floor,
-               "p_below_floor": round(p_low, 5), "lower_bound": round(lcb, 4),
-               "significance": significance, "unlabelled_certified": missing}
-    if p_low < significance:
-        return Verdict("floor_compliance", FAIL,
-                       f"the realised rate {rate:.1%} over {n} labelled certified decisions is below the floor "
-                       f"{floor:.1%} beyond sampling error (p={p_low:.4f} < {significance})", numbers)
-    if lcb >= floor:
-        return Verdict("floor_compliance", PASS,
-                       f"the {1 - significance:.0%} lower bound on the realised rate is {lcb:.1%} over {n} labelled "
-                       f"certified decisions, which clears the floor {floor:.1%}", numbers)
-    return Verdict("floor_compliance", UNSUPPORTED,
-                   f"the realised rate is {rate:.1%} over {n} labelled certified decisions, and its "
-                   f"{1 - significance:.0%} lower bound {lcb:.1%} does not clear the floor {floor:.1%}. Not a "
-                   f"failure -- the rate is not significantly below either -- so nothing is shown in either "
-                   f"direction. Reported so the rate is not mistaken for a pass", numbers)
+
+    def _labelled(rows: list) -> list:
+        pairs = ((r, outcomes.get(r["request_id"], {})) for r in rows)
+        return [(r, o) for r, o in pairs if o.get("label_state") == "labelled"]
+
+    certified_rows = [r for r in decisions if r["certified"]]
+    c_numbers, c_detail = _rate_against_floor(_labelled(certified_rows), total_population=len(certified_rows),
+                                              floor=floor, significance=significance)
+    s_numbers, s_detail = _rate_against_floor(_labelled(decisions), total_population=len(decisions),
+                                              floor=floor, significance=significance)
+
+    # Flat, and every key `floor_compliance` wrote before C3 keeps exactly its old meaning -- the certified
+    # population -- so a caller reading `numbers["rate"]` or `numbers["lower_bound"]` is unaffected by this
+    # entry. The `served_` prefix is the new population; `numbers` gains `served_labelled` and `served_rate` at
+    # minimum, per the interface, plus their own bound and verdict alongside for the same reason `certified`
+    # already carries one -- "each with its own bound and verdict" cannot be satisfied by a name that gains only
+    # a count and a rate.
+    numbers = {
+        "labelled": c_numbers["labelled"], "successes": c_numbers["successes"], "rate": c_numbers["rate"],
+        "floor": floor, "significance": significance,
+        "certified": len(certified_rows), "unlabelled_certified": c_numbers["unlabelled"],
+        "verdict": c_numbers["verdict"],
+        "served": len(decisions), "served_labelled": s_numbers["labelled"],
+        "served_successes": s_numbers["successes"], "served_rate": s_numbers["rate"],
+        "unlabelled_served": s_numbers["unlabelled"], "served_verdict": s_numbers["verdict"],
+    }
+    if "p_below_floor" in c_numbers:
+        numbers["p_below_floor"] = c_numbers["p_below_floor"]
+        numbers["lower_bound"] = c_numbers["lower_bound"]
+    if "p_below_floor" in s_numbers:
+        numbers["served_p_below_floor"] = s_numbers["p_below_floor"]
+        numbers["served_lower_bound"] = s_numbers["lower_bound"]
+
+    cv, sv = c_numbers["verdict"], s_numbers["verdict"]
+    if FAIL in (cv, sv):
+        verdict = FAIL
+    elif cv == PASS and sv == PASS:
+        verdict = PASS
+    else:
+        verdict = UNSUPPORTED
+    detail = f"certified traffic: {c_detail}; all served traffic: {s_detail}"
+    return Verdict("floor_compliance", verdict, detail, numbers)
 
 
 def exploration_cost(decisions: list, *, budgeted_share: float | None = None) -> Verdict:
