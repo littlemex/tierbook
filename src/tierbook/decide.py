@@ -182,9 +182,9 @@ class Policy:
     #: that does not say who declared it invites a reader to take it for a measured choice.
     provenance: dict = field(default_factory=dict)
     #: What this was compiled under -- at least `floor` and `max_evidence_age_days`, plus `staleness_limit_days`
-    #: for the door C3 adds. The compiled table used to carry `certified: true` and never write the floor down,
-    #: so no criterion computed later could be known to have used the same number a shell prompt typed. This is
-    #: the one home for that number; `parameter` is the one reader of it.
+    #: and `exploration_rate` for the door C3 opens. The compiled table used to carry `certified: true` and
+    #: never write the floor down, so no criterion computed later could be known to have used the same number a
+    #: shell prompt typed. This is the one home for that number; `parameter` is the one reader of it.
     parameters: dict = field(default_factory=dict)
 
     @property
@@ -394,7 +394,8 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
                    default: tuple[str, ...], default_declared_by: str,
                    service_curve: list | None = None, latency_p95_slo_s: float | None = None,
                    max_evidence_age_days: float | None = None, floor: float | None = None,
-                   staleness_limit_days: float | None = None) -> Policy:
+                   staleness_limit_days: float | None = None,
+                   exploration_rate: float | None = None) -> Policy:
     """Derive the policy from one compiled family entry. Every threshold is a measurement or a named gap.
 
     The shape falls out of the accounting rather than being chosen. A reserved candidate is free at the margin
@@ -418,11 +419,13 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     chosen = tuple(entry.get("chosen") or ())
     certified = entry.get("status") == "assigned"
     prov = {"default_declared_by": default_declared_by}
-    # Written once and carried into every return below, including the refusals: the number this function was
-    # GIVEN, not one it derives. `staleness_limit_days` has no source yet -- C3's -- and is carried as `None`
-    # so the shape of every artifact this writes is already what a family with a declared limit will produce.
+    # Written once and carried into every return below, including the refusals: the numbers this function was
+    # GIVEN, not ones it derives. `staleness_limit_days` and `exploration_rate` are the family's own declaration
+    # (config.FamilyDeclaration, amendment 5 and S3) -- threaded through by the caller (cli.cmd_compile) the same
+    # way `floor` already is, and never invented here: this function has no ledger to read a family's
+    # declaration from, only what its caller hands it.
     params = {"floor": floor, "max_evidence_age_days": max_evidence_age_days,
-             "staleness_limit_days": staleness_limit_days}
+             "staleness_limit_days": staleness_limit_days, "exploration_rate": exploration_rate}
     if not chosen or not certified:
         why = (entry.get("validation") or {}).get("reason") or "no held-out fold supports this assignment"
         return Policy(family, (), default, domain={}, certified=False, provenance=prov, parameters=params,

@@ -146,6 +146,12 @@ def cmd_compile(args) -> int:
         # requirement (SCOPE sections 2, 5, 12 all say "the family's floor"), and a config file is where an
         # operator states one, not a flag -- see config.FamilyDeclaration.
         floors = {fam: decl.floor for fam, decl in cfg.families.items()}
+        # Same reasoning, same shape, for the two numbers amendment 5 and S3 add to the same declaration: a
+        # staleness limit and an exploration rate are per-family facts an operator states in the ledger, not a
+        # flag -- threading them from anywhere else would be the `compile --floor` mistake amendment 2 found,
+        # repeated for a second and third number.
+        staleness_limits = {fam: decl.staleness_limit_days for fam, decl in cfg.families.items()}
+        exploration_rates = {fam: decl.exploration_rate for fam, decl in cfg.families.items()}
         args.margin = args.margin if args.margin is not None else cfg.objective.margin
         args.alpha = cfg.objective.alpha
         args.max_age_days = cfg.objective.max_age_days
@@ -155,9 +161,12 @@ def cmd_compile(args) -> int:
         if not args.family:
             sys.exit("--family FAMILY=REFERENCE is required unless --config supplies families")
         families = dict(pair.split("=", 1) for pair in args.family)
-        # No config, so no family declaration to read a floor from. `--family` is documented as the one-off
-        # path; a deployment that needs a floor recorded reads one from a committed candidate file instead.
+        # No config, so no family declaration to read a floor, a staleness limit or an exploration rate from.
+        # `--family` is documented as the one-off path; a deployment that needs any of these three recorded
+        # reads them from a committed candidate file instead.
         floors = {}
+        staleness_limits = {}
+        exploration_rates = {}
     tp = dict(cfg.throughput_per_family) if cfg else {}
     tp.update((k, float(v)) for k, v in (p.split("=", 1) for p in args.throughput_per_family or []))
     o = cfg.objective if cfg else None
@@ -222,8 +231,11 @@ def cmd_compile(args) -> int:
                                  # Read from the family's own declaration (config.FamilyDeclaration), not a
                                  # flag: the floor is per family, and a table compiled without --config has no
                                  # declaration to read one from, so `floors.get(fam)` is `None` there -- absent
-                                 # rather than guessed, and not one flag silently shared by every family.
-                                 floor=floors.get(fam))
+                                 # rather than guessed, and not one flag silently shared by every family. Same
+                                 # source, same absence, for the two C3/amendment-5 numbers beside it.
+                                 floor=floors.get(fam),
+                                 staleness_limit_days=staleness_limits.get(fam),
+                                 exploration_rate=exploration_rates.get(fam))
             table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
             bound = ((pol.domain or {}).get(f"inflight:{sorted(self_hosted)[0]}")
                      if self_hosted else None)
@@ -470,6 +482,11 @@ def cmd_assign(args) -> int:
     except ValueError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 4
+    # No CLI flag for either (amendment 2's lesson, applied to the two numbers amendment 5 adds beside the
+    # floor): the artifact is the one source, read with `supplied=None` because there is nothing typed at this
+    # shell prompt to check it against.
+    staleness_limit_days = parameter(policy, "staleness_limit_days", None)
+    exploration_rate = parameter(policy, "exploration_rate", None)
     prev = None
     if args.previous and Path(args.previous).exists():
         prev = json.loads(Path(args.previous).read_text()).get("readings")
@@ -488,10 +505,18 @@ def cmd_assign(args) -> int:
         # nobody computed. With one, the reason comes from the same admissibility function the falsifier uses.
         bound_kind=args.bound_kind, floor=floor, latency_feasible=args.latency_feasible,
         max_age_days=args.max_age_days,
+        exploration_rate=exploration_rate, staleness_limit_days=staleness_limit_days,
         log=Log(args.log) if args.log else None)
-    print(json.dumps({"assign": decision["assign"], "certified": record.certified,
-                      "reason": decision["reason"], "gaps": record.gaps,
-                      "state_ref": record.state_ref, "logged_to": args.log}, indent=2))
+    print(json.dumps({
+        # `decision["assign"]` is decide()'s own proposed cascade, unchanged by exploration -- useful on its own
+        # to see what the deterministic policy would have done. `served` is `record.chosen`, the arm exploration
+        # actually drew (CONTRACT C3): the two can now differ, where before C3 they never could, so both are
+        # printed rather than one silently standing in for the other.
+        "assign": decision["assign"], "served": record.chosen, "certified": record.certified,
+        "reason": decision["reason"], "gaps": record.gaps,
+        "state_ref": record.state_ref, "logged_to": args.log,
+        "exploration": record.exploration, "exploration_reason": record.exploration_reason,
+    }, indent=2))
     return 0
 
 
