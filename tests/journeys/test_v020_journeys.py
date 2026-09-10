@@ -16,19 +16,22 @@ Three personas (see the journey-layer brief for the full description):
     P3  the analyst -- was not there when the log was written, has a `decisions.jsonl` mixing v0.1.0 and
         v0.2.0 lines, wants to know whether a different choice would have been better.
 
-Two genuine findings are recorded here as `xfail(strict=True)`, not fixed:
+This layer found two things no contract entry's tests could reach, and both are now FIXED -- the tests below
+assert the corrected behaviour rather than recording a defect. They were carried for a while as
+`xfail(strict=True)`, which is how each one announced its own fix: a strict xfail that starts passing fails the
+run, so the marker could not be forgotten. Both markers are gone.
 
-    P2's round trip: fixing exactly what `load_config`'s error names, one message at a time, on the
-    v0.1.0-shaped ledger this project itself shipped at the v0.1.0 tag, takes 5 failed attempts (6 total)
-    for a two-family file, not the single aggregated correction a `config_format` migration is capable of
-    giving in one message.
+    P2's round trip took SIX loads: fixing exactly what `load_config`'s error named, one message at a time,
+    on the two-family ledger this project shipped at its own v0.1.0 tag. Contract C8 aggregates the problems
+    into one refusal, and amendment 10.2 made the bare-string refusal print the WHOLE required shape rather
+    than two of its six keys -- which was four of the six loads on its own, and not an aggregation defect at
+    all. It is two loads now, and the test measures that rather than asserting the message's contents.
 
-    P3's silent pooling: `accept.check_all` accepts a `pool_across_versions` keyword and documents, in its
-    own docstring, that refusing a version-mixed log is "the entry that gives it a behaviour" -- and that
-    entry (referred to in the code as C5) was never merged into this integration. The CLI never even
-    threads the keyword. A log mixing v0.1.0 rows (no exploration mechanism existed) with v0.2.0 rows (a
-    real exploration draw) is pooled into one `exploration_cost` number with nothing in the report
-    distinguishing the two mechanisms.
+    P3's silent pooling: a log mixing v0.1.0 rows, written when no exploration mechanism existed, with
+    v0.2.0 rows that explored, was pooled into one `exploration_cost` number -- 20%, which PASSED a 25%
+    budget, while the v0.2.0 mechanism's own rate over the traffic it was eligible for was 100%. Contract C5
+    refuses a version-mixed log unless the caller asks for pooling, and says so in the verdict's detail when
+    they do.
 """
 from __future__ import annotations
 
