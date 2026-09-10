@@ -321,9 +321,33 @@ def as_dict(policy: Policy) -> dict:
         "can_ever_fire": policy.can_ever_fire,
         "rule_overlaps": policy.overlaps,
         "missing_for_a_closed_loop": list(MISSING_FOR_A_CLOSED_LOOP),
-        "rules": [{"when": [g.describe() for g in r.guards], "assign": list(r.assign),
-                   "because": r.because} for r in policy.rules],
+        # Both forms, and both for a reason. `when` is the prose a reader needs; `guards` is the fields a loader
+        # needs. An earlier version wrote only the prose, which made the artifact one-way: a policy written to disk
+        # could not be read back, so the deployable path had to rebuild the object it had just serialised.
+        "rules": [{"when": [g.describe() for g in r.guards],
+                   "guards": [{"var": g.var, "op": g.op, "threshold": g.threshold,
+                               "derived_from": g.derived_from} for g in r.guards],
+                   "assign": list(r.assign), "because": r.because} for r in policy.rules],
     }
+
+
+def from_dict(d: dict) -> Policy:
+    """The inverse of `as_dict`, so a compiled policy on disk is a policy again.
+
+    Reads `guards` rather than `when`: the prose is for a reader and cannot be parsed back without inventing a
+    grammar, which is the sort of thing that works until a threshold contains a space.
+    """
+    rules = []
+    for r in d.get("rules", []):
+        if "guards" not in r:
+            raise ValueError(
+                "this policy was written by a version that recorded guards only as prose, so it cannot be loaded. "
+                "Recompile it: the artifact is not the source, and re-deriving it is cheaper than parsing English")
+        rules.append(Rule(guards=tuple(Guard(**g) for g in r["guards"]),
+                          assign=tuple(r["assign"]), because=r.get("because", "")))
+    return Policy(family=d["family"], rules=tuple(rules), default=tuple(d["default"]),
+                  domain=d.get("domain", {}), certified=bool(d.get("certified", False)),
+                  note=d.get("note", ""), provenance=d.get("provenance", {}))
 
 
 def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_ids: set[str],

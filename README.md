@@ -235,6 +235,54 @@ works. The rule the instrument must follow: **a call that died on the wire produ
 report, never a zero.** One tier here scored 0 of 20 on an endpoint restriction rather than on the task, and a
 harness that had reported that number would have published a false claim about a model.
 
+## The loop, closed: observe, decide, record, check
+
+v0.1.0 is where the four parts meet. Before it, `decide` was handed a state by whoever called it and nothing wrote a
+record, so the mechanism could be described and not run.
+
+```console
+# what a policy would decide from, and what could not be read
+tierbook observe --candidate box --metrics-url http://vllm:8000/metrics \
+    --model-name Qwen/Qwen3.6-35B-A3B --authorised true --measured-on 2026-09-08 --out obs.json
+
+# one turn: observe, decide, append the record
+tierbook assign --policy policy.json --request-id r1 --candidate box \
+    --metrics-url http://vllm:8000/metrics --model-name Qwen/Qwen3.6-35B-A3B \
+    --authorised true --previous obs.json --bounds '{"box":0.90,"api":0.70}' \
+    --costs '{"box":0.004,"api":0.012}' --log decisions.jsonl
+
+# SCOPE section 12's criteria over that log
+tierbook accept --log decisions.jsonl --floor 0.80 --uncertified-tolerance 0.10
+```
+
+**Four properties are worth knowing before using it.**
+
+**Nothing is defaulted.** A state variable that could not be read is *absent*, with a reason, and `decide` reports it
+as `uncollected_variable` and declines to certify. A fabricated zero for `inflight` reads as an idle engine and sends
+the next request to the reserved candidate, so the one value a collector must not guess is the one a naive
+implementation defaults. `observe` exits non-zero when the state is incomplete, so a deploy script cannot proceed on a
+state nobody looked at.
+
+**An arrival rate needs two samples.** It is a derivative of a counter, so the first `observe` refuses it and says how
+to obtain one. Reporting a total as a rate is the kind of error that looks like a working collector.
+
+**Every request is assigned somewhere.** SCOPE section 2 is explicit that there is no "choose nothing": the request is
+served either way, so `assign` returns the declared default with `certified: false` rather than declining, and the
+record says why.
+
+**Most acceptance criteria come back `unsupported`, and that is the honest output.** On a log this project can
+currently produce, three of section 12's nine criteria are evaluable — no false certification, default-is-not-a-hiding-
+place, and exploration cost — and six are not. A checker with only pass and fail would have to choose between
+reporting a pass it did not earn and a failure it cannot substantiate. `unsupported` names the missing measurement
+instead, and each of the six says what it needs in its own words: an off-policy estimate needs logged propensities
+that *vary*, and every decision a deterministic policy makes has propensity 1, under which the counterfactual arm has
+no data and the estimate is unidentified. Randomised exploration is the prerequisite there, not a refinement.
+
+`decide.MISSING_FOR_A_CLOSED_LOOP` still names six gaps and this release closes the first of them. The other five —
+logged selection probabilities, exploration, anytime-valid bounds, change-point detection, and a value for the
+reserved candidate's scarce capacity — are unchanged and are why the criteria above are unsupported rather than
+failing.
+
 ## What is deliberately not here
 
 - **No circuit breaker, no retry infrastructure, no server.** Those are your operator's, and shipping them
@@ -259,7 +307,19 @@ They will go stale; that is what the pin is for.
 
 ## Status
 
-Alpha. Two parameters must come from outside before any of this has a unique answer rather than a Pareto
+**v0.1.0.** The loop runs: a state is observed from a live engine, a compiled policy decides from it, the decision is
+recorded in the shape SCOPE section 9 requires, and the acceptance criteria are computed from that log. Verified
+against a running vLLM engine rather than a fixture, and the three evaluable criteria passed on the resulting log
+while six reported `unsupported`.
+
+What v0.1.0 does **not** do: explore, log a propensity that varies, hold an anytime-valid bound, detect a
+change-point, or price the reserved candidate's scarce capacity. Those five are named in
+`decide.MISSING_FOR_A_CLOSED_LOOP` and are why six of nine acceptance criteria cannot be evaluated from a log yet.
+Two backlog items are written up in `docs/issues/`: reading the box's hidden state to find out whether it breaks an
+abstention limit that measured `AUC 0.5000` for a structural reason, and deriving the tie band from a jackknife
+instead of taking `--margin` from a human.
+
+Still alpha in the sense that matters: two parameters must come from outside before any of this has a unique answer rather than a Pareto
 frontier: **the value of a second** for a family, and **the cost of an escaped defect**. At $1 a defect a
 cheap tier ships; at $100 the required keep-precision is 0.993; at $10,000 it is 0.99993 and no affordable
 sample can certify it. The router cannot decide that for you and does not pretend to.

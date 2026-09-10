@@ -1,0 +1,90 @@
+{
+ "verdicts": [
+  {
+   "criterion": "floor_compliance",
+   "verdict": "unsupported",
+   "detail": "the realised rate is 100.0% over only 1 labelled certified decisions, which cannot separate compliance from sampling error in either direction. Reported so the number is not mistaken for a pass",
+   "numbers": {
+    "labelled": 1,
+    "successes": 1,
+    "rate": 1.0,
+    "floor": 0.8,
+    "p_below_floor": 1.0,
+    "significance": 0.05,
+    "unlabelled_certified": 0
+   }
+  },
+  {
+   "criterion": "bound_calibration",
+   "verdict": "unsupported",
+   "detail": "this is a property of the confidence procedure, not of the log. It needs the pre-registered resampling or simulation where the estimand is known, run against the procedure -- no amount of routed traffic substitutes, because in traffic the estimand is what is unknown",
+   "numbers": {}
+  },
+  {
+   "criterion": "no_false_certification",
+   "verdict": "pass",
+   "detail": "every certified assignment's candidate was admissible under section 2",
+   "numbers": {
+    "decisions": 1,
+    "certified": 1
+   }
+  },
+  {
+   "criterion": "default_is_not_a_hiding_place",
+   "verdict": "pass",
+   "detail": "no assignment hid behind the default and the uncertified share 0.0% is within 10.0%",
+   "numbers": {
+    "decisions": 1,
+    "uncertified_share": 0.0,
+    "tolerance": 0.1
+   }
+  },
+  {
+   "criterion": "slo",
+   "verdict": "unsupported",
+   "detail": "no latency limit or tolerance was declared. SCOPE section 1 says performance is not what is being optimised and its treatment is explicitly unsettled, so this criterion applies only where an operator imposed a constraint",
+   "numbers": {
+    "latencies_recorded": 1
+   }
+  },
+  {
+   "criterion": "spend_regret",
+   "verdict": "unsupported",
+   "detail": "an off-policy estimate with an interval, by the method section 9 declares. It needs logged selection probabilities that vary -- every decision in a deterministic policy has propensity 1, under which the counterfactual arm has no data and the estimate is unidentified. Randomised exploration is the prerequisite, not a refinement",
+   "numbers": {}
+  },
+  {
+   "criterion": "exploration_cost",
+   "verdict": "pass",
+   "detail": "the exploration share 0.0% is within the budgeted 5.0%",
+   "numbers": {
+    "decisions": 1,
+    "exploration_share": 0.0,
+    "budget": 0.05
+   }
+  },
+  {
+   "criterion": "adaptation",
+   "verdict": "unsupported",
+   "detail": "an injected change -- a price change, a model release, an agent swap, a capacity loss -- and then a check that the new candidate enters shadow evaluation within the adaptation window and is admitted once its bound clears, WITHOUT a code change. It is an experiment on the mechanism, so a log of ordinary traffic cannot contain it",
+   "numbers": {}
+  },
+  {
+   "criterion": "genericity_and_usefulness",
+   "verdict": "unsupported",
+   "detail": "a held-out environment and a candidate introduced after implementation freeze, reusing the incumbent policy file except environment-owned rows. Also an experiment rather than a reading, and the criterion's second half -- a certified share above its stated minimum while a feasible admissible candidate exists -- needs the acceptance oracle that names one",
+   "numbers": {}
+  }
+ ],
+ "summary": {
+  "counts": {
+   "pass": 3,
+   "fail": 0,
+   "unsupported": 6
+  },
+  "any_failure": false,
+  "evaluated": 3,
+  "of": 9,
+  "note": "a criterion is accepted only when it was evaluated and held. `unsupported` is neither a pass nor a failure: it names a measurement that has not been made, and most of section 12 needs traffic, a randomised design or an injected change rather than more of the same log"
+ }
+}

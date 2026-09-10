@@ -326,3 +326,46 @@ def test_a_point_meeting_the_target_above_one_that_does_not_is_reported_not_jump
     bound, why = D._capacity_from_curve([holed, holed], 20.0)
     assert bound == 1.0
     assert "[4] also met the target" in why and "not monotone in occupancy" in why
+
+
+# --- the artifact has to be readable back, or the deployable path rebuilds what it just wrote --------
+
+
+def test_a_compiled_policy_round_trips():
+    """An earlier version wrote guards only as prose, which made the artifact one-way."""
+    pol = D.Policy(
+        family="f",
+        rules=(D.Rule(guards=(D.Guard(var="inflight:box", op="<", threshold=8.0, derived_from="a probe"),),
+                       assign=("box",), because="a free seat"),),
+        default=("api",), domain={"inflight:box": (0.0, 128.0)}, certified=True, note="n",
+        provenance={"default_declared_by": "an operator"})
+    back = D.from_dict(D.as_dict(pol))
+    assert back == pol
+
+
+def test_the_prose_form_is_kept_for_a_reader_beside_the_fields():
+    pol = D.Policy(family="f",
+                    rules=(D.Rule(guards=(D.Guard(var="inflight", op=">=", threshold=8.0, derived_from="a probe"),),
+                                   assign=("api",), because="full"),),
+                    default=("api",))
+    d = D.as_dict(pol)
+    assert d["rules"][0]["when"] == ["inflight >= 8.0 (from a probe)"]
+    assert d["rules"][0]["guards"][0]["threshold"] == 8.0
+
+
+def test_an_unmeasured_guard_round_trips_as_unmeasured():
+    pol = D.Policy(family="f",
+                    rules=(D.Rule(guards=(D.Guard(var="inflight", op="<", threshold=None,
+                                                    derived_from="a probe nobody ran"),),
+                                   assign=("box",), because="x"),),
+                    default=("api",))
+    back = D.from_dict(D.as_dict(pol))
+    assert back.rules[0].guards[0].measured is False
+    assert back.gaps == pol.gaps
+
+
+def test_an_old_prose_only_artifact_refuses_rather_than_guessing():
+    """Parsing the prose back would work until a threshold contained a space."""
+    with pytest.raises(ValueError, match="Recompile it"):
+        D.from_dict({"family": "f", "default": ["api"],
+                      "rules": [{"when": ["inflight < 8.0 (from a probe)"], "assign": ["box"]}]})

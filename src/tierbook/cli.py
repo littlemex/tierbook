@@ -402,6 +402,96 @@ def cmd_export_vsr(args) -> int:
     return 0
 
 
+def _tri(v: str):
+    """A three-valued flag. `--authorised` and `--latency-feasible` are absent, true or false, and absent is not
+    false: SCOPE section 2 makes a latency condition ABSENT where the operator set none, and reading an unset flag as
+    false would refuse every candidate for a constraint nobody imposed."""
+    if v is None or v == "" or v.lower() in ("none", "unset", "absent"):
+        return None
+    if v.lower() in ("1", "true", "yes", "y"):
+        return True
+    if v.lower() in ("0", "false", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError(f"{v!r} is not true, false, or absent")
+
+
+def cmd_observe(args) -> int:
+    """Read the state a policy would decide from, and say what could not be read.
+
+    Separate from `assign` so an operator can see the state before trusting a decision made from it. A collector that
+    could only be exercised through the decision would hide its own refusals behind an assignment.
+    """
+    from tierbook.observe import observe
+
+    prev = None
+    if args.previous and Path(args.previous).exists():
+        prev = json.loads(Path(args.previous).read_text()).get("readings")
+    got = observe(candidate=args.candidate, metrics_url=args.metrics_url, model_name=args.model_name,
+                  gateway_authorised=args.authorised, measured_on=args.measured_on, previous=prev)
+    print(json.dumps(got.as_dict(), indent=2))
+    if args.out:
+        Path(args.out).write_text(json.dumps(got.as_dict(), indent=1))
+    # Non-zero when the state is incomplete, so a deploy script cannot proceed on a state nobody looked at.
+    return 0 if got.complete else 3
+
+
+def cmd_assign(args) -> int:
+    """One turn of the loop: observe, decide, record.
+
+    Every request is assigned somewhere -- section 2 of SCOPE is explicit that there is no "choose nothing" -- so this
+    prints an assignment even when nothing could be certified, and the record says which it was.
+    """
+    from tierbook.decide import from_dict
+    from tierbook.observe import observe
+    from tierbook.record import Log
+    from tierbook.serve import route_once
+
+    policy = from_dict(json.loads(Path(args.policy).read_text()))
+    prev = None
+    if args.previous and Path(args.previous).exists():
+        prev = json.loads(Path(args.previous).read_text()).get("readings")
+    got = observe(candidate=args.candidate, metrics_url=args.metrics_url, model_name=args.model_name,
+                  gateway_authorised=args.authorised, measured_on=args.measured_on, previous=prev)
+    decision, record = route_once(
+        policy=policy, observation=got, request_id=args.request_id,
+        feature_vector_version=args.feature_vector_version, policy_version=args.policy_version,
+        mechanism_version=__version__,
+        agent=args.agent, model=args.model_name or "", endpoint=args.endpoint,
+        gateway_quote_usd=args.quote_usd,
+        bounds=json.loads(args.bounds) if args.bounds else None,
+        costs=json.loads(args.costs) if args.costs else None,
+        evidence_as_of=args.measured_on or "",
+        log=Log(args.log) if args.log else None)
+    print(json.dumps({"assign": decision["assign"], "certified": record.certified,
+                      "reason": decision["reason"], "gaps": record.gaps,
+                      "state_ref": record.state_ref, "logged_to": args.log}, indent=2))
+    return 0
+
+
+def cmd_accept(args) -> int:
+    """SCOPE section 12's criteria over a decision log, each with its own verdict.
+
+    Exits non-zero on a failure and zero otherwise, including when most criteria are `unsupported`: an unsupported
+    criterion is a measurement nobody has made, not a defect in the mechanism, and treating it as a failure would make
+    the check impossible to adopt.
+    """
+    from tierbook.accept import FAIL, check_all, summarise
+    from tierbook.record import Log
+
+    decisions, outcomes = Log(args.log).read()
+    verdicts = check_all(decisions, outcomes, floor=args.floor,
+                         latency_feasible=args.latency_feasible,
+                         uncertified_tolerance=args.uncertified_tolerance,
+                         budgeted_exploration=args.budgeted_exploration,
+                         latency_limit_s=args.latency_limit_s, slo_tolerance=args.slo_tolerance,
+                         significance=args.significance)
+    out = {"verdicts": [v.as_dict() for v in verdicts], "summary": summarise(verdicts)}
+    print(json.dumps(out, indent=2))
+    if args.out:
+        Path(args.out).write_text(json.dumps(out, indent=1))
+    return 1 if any(v.verdict == FAIL for v in verdicts) else 0
+
+
 def cmd_logs(args) -> int:
     """What a log file can support, stated before anyone builds a benchmark out of it."""
     from tierbook.logs import coverage, extract_tasks
@@ -550,6 +640,50 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    o = sub.add_parser("observe", parents=[common],
+                       help="read the state a policy would decide from, and say what could not be read")
+    o.add_argument("--candidate", default="", help="whose occupancy this is; the state key is qualified with it")
+    o.add_argument("--metrics-url", help="a vLLM /metrics endpoint")
+    o.add_argument("--model-name", help="the served model name, so another model's series is not counted as this one's")
+    o.add_argument("--authorised", type=_tri, default=None,
+                   help="whether the gateway authorises spend. Not probed: it is a question about a budget")
+    o.add_argument("--measured-on", help="the policy's evidence date, from which its age is computed")
+    o.add_argument("--previous", help="a previous observation's json, which is what makes an arrival rate obtainable")
+    o.add_argument("--out")
+    o.set_defaults(fn=cmd_observe, registry=None)
+
+    a = sub.add_parser("assign", parents=[common], help="one turn of the loop: observe, decide, record")
+    a.add_argument("--policy", required=True, help="a compiled policy, as decide.as_dict wrote it")
+    a.add_argument("--request-id", required=True)
+    a.add_argument("--candidate", default="")
+    a.add_argument("--metrics-url")
+    a.add_argument("--model-name")
+    a.add_argument("--authorised", type=_tri, default=None)
+    a.add_argument("--measured-on")
+    a.add_argument("--previous")
+    a.add_argument("--agent", default="")
+    a.add_argument("--endpoint", default="")
+    a.add_argument("--quote-usd", type=float, default=None)
+    a.add_argument("--bounds", help="json of candidate -> lower bound, for the record's candidate set")
+    a.add_argument("--costs", help="json of candidate -> cost per task")
+    a.add_argument("--feature-vector-version", default="fv1")
+    a.add_argument("--policy-version", default="unversioned")
+    a.add_argument("--log", help="append the decision record here")
+    a.set_defaults(fn=cmd_assign, registry=None)
+
+    k = sub.add_parser("accept", parents=[common],
+                       help="SCOPE section 12's criteria over a decision log, each with its own verdict")
+    k.add_argument("--log", required=True)
+    k.add_argument("--floor", type=float, required=True)
+    k.add_argument("--latency-feasible", type=_tri, default=None)
+    k.add_argument("--uncertified-tolerance", type=float, default=None)
+    k.add_argument("--budgeted-exploration", type=float, default=None)
+    k.add_argument("--latency-limit-s", type=float, default=None)
+    k.add_argument("--slo-tolerance", type=float, default=None)
+    k.add_argument("--significance", type=float, default=0.05)
+    k.add_argument("--out")
+    k.set_defaults(fn=cmd_accept, registry=None)
 
     args = p.parse_args(argv)
     return args.fn(args)

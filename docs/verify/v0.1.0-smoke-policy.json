@@ -1,0 +1,16 @@
+{
+ "family": "agentic-coding",
+ "default": ["api"],
+ "certified": true,
+ "note": "a v0.1.0 smoke policy, not a measured one",
+ "domain": {"inflight:box": [0.0, 128.0]},
+ "provenance": {"default_declared_by": "the operator running this smoke test"},
+ "rules": [
+   {"when": ["inflight:box < 8.0"],
+    "guards": [{"var": "inflight:box", "op": "<", "threshold": 8.0, "derived_from": "a capacity probe"}],
+    "assign": ["box"], "because": "the reserved candidate has a free seat"},
+   {"when": ["inflight:box >= 8.0"],
+    "guards": [{"var": "inflight:box", "op": ">=", "threshold": 8.0, "derived_from": "a capacity probe"}],
+    "assign": ["api"], "because": "the reserved candidate is full"}
+ ]
+}
