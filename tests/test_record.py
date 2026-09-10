@@ -169,10 +169,103 @@ def test_reading_an_absent_log_is_empty_rather_than_an_error(tmp_path):
     assert rec.Log(tmp_path / "nope.jsonl").read() == ([], {})
 
 
-def test_the_last_outcome_for_a_request_wins(tmp_path):
+def test_a_pending_outcome_may_be_superseded_by_a_real_label(tmp_path):
     log = rec.Log(tmp_path / "log.jsonl")
     log.append(decision())
     log.attach_outcome("r1", label_state="pending")
     log.attach_outcome("r1", label_state="labelled", label=False)
     _, outcomes = log.read()
     assert outcomes["r1"]["label_state"] == "labelled" and outcomes["r1"]["label"] is False
+
+
+# --- the fixes a review earned ----------------------------------------------------------------------
+
+
+def test_freshness_is_part_of_admissibility():
+    """`evidence_expired` was in the exclusion vocabulary with nothing able to produce it, so a candidate whose
+    evidence had expired could be certified."""
+    ok, why = rec.admissible(cand(), floor=0.80, authorised=True, latency_feasible=True,
+                             evidence_age_days=120.0, max_age_days=90.0)
+    assert not ok and why == "evidence_expired"
+    ok, _ = rec.admissible(cand(), floor=0.80, authorised=True, latency_feasible=True,
+                           evidence_age_days=30.0, max_age_days=90.0)
+    assert ok
+
+
+def test_an_undeclared_freshness_limit_is_absent_rather_than_passed():
+    """Like the latency condition: no declared limit means the condition does not participate."""
+    ok, _ = rec.admissible(cand(), floor=0.80, authorised=True, latency_feasible=None,
+                           evidence_age_days=9999.0, max_age_days=None)
+    assert ok
+
+
+def test_an_uncertified_decision_whose_own_choice_was_admissible_is_a_hiding_place():
+    """The purest case, and an earlier version skipped the chosen candidate in this scan -- which made exactly it
+    undetectable. The mechanism declined to certify an assignment it could have."""
+    d = decision(certified=False)
+    bad = rec.check_certification(d, floor=0.80, latency_feasible=True)
+    assert bad and "'box' was admissible" in bad[0]
+
+
+def test_every_hiding_place_violation_is_reported_not_just_the_first():
+    """An earlier version broke out of the loop and undercounted."""
+    d = decision(certified=False, chosen="box",
+                 candidates=[cand("box", "chosen", 0.95), cand("api", "not_priced", 0.90)])
+    bad = rec.check_certification(d, floor=0.80, latency_feasible=True)
+    assert len(bad) == 2
+
+
+def test_a_bound_kind_is_never_inferred():
+    """An earlier version wrote 'lcb' for whatever a caller passed, so a log of point estimates claimed to be a log of
+    corrected lower bounds and the falsifier passed against them."""
+    assert rec.Candidate(id="x", excluded_because="chosen", bound=0.9).bound_kind == "unstated"
+
+
+def test_a_label_that_changes_is_refused_rather_than_the_later_line_winning(tmp_path):
+    """An earlier version kept the last outcome per request, which made the log append-only in bytes and mutable in
+    meaning -- and the argument for trusting a criterion computed over it did not hold."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision())
+    log.attach_outcome("r1", label_state="labelled", label=False)
+    log.attach_outcome("r1", label_state="labelled", label=True)
+    with pytest.raises(rec.Incomplete, match="a criterion over the rewrite"):
+        log.read()
+
+
+def test_a_label_arriving_after_pending_is_not_a_change(tmp_path):
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision())
+    log.attach_outcome("r1", label_state="pending")
+    log.attach_outcome("r1", label_state="labelled", label=True)
+    _, outcomes = log.read()
+    assert outcomes["r1"]["label"] is True
+
+
+def test_a_corrupt_line_does_not_destroy_the_records_around_it(tmp_path):
+    """A crash mid-append leaves a truncated line, and raising on it loses every intact record before it."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision(request_id="r1"))
+    with log.path.open("a") as fh:
+        fh.write('{"request_id": "r2", "candi\n')
+    log.append(decision(request_id="r3"))
+    decisions, outcomes = log.read()
+    assert [d["request_id"] for d in decisions] == ["r1", "r3"]
+    assert outcomes["__bad_lines__"]["count"] == 1
+
+
+def test_a_caller_that_wants_the_corrupt_line_to_raise_can_say_so(tmp_path):
+    log = rec.Log(tmp_path / "log.jsonl")
+    with log.path.open("a") as fh:
+        fh.write("{not json\n")
+    with pytest.raises(rec.Incomplete, match="not readable"):
+        log.read(strict=True)
+
+
+def test_the_observation_a_decision_points_at_is_stored(tmp_path):
+    """`state_ref` was a dangling pointer: the record hashed an observation nothing persisted."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append_observation("obs:abc", {"state": {"inflight:box": 2.0}, "not_observed": {}})
+    log.append(decision(state_ref="obs:abc"))
+    decisions, outcomes = log.read()
+    assert outcomes["__observations__"]["obs:abc"]["state"]["inflight:box"] == 2.0
+    assert decisions[0]["state_ref"] in outcomes["__observations__"]

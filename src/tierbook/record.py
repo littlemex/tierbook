@@ -41,6 +41,12 @@ EXCLUSION_REASONS = (
     "no_bound",                 # no comparable bound, so admissibility cannot be evaluated
     "evidence_expired",         # its estimate is past its freshness limit
     "chosen",                   # it is the one that was selected; recorded so the set is complete
+    # For a candidate whose admissibility was never evaluated. Added because the alternative was worse than "other":
+    # `serve.candidate_set` used to assert `below_floor` for anything it could not otherwise classify, WITHOUT a floor
+    # to compare against, and four of the reasons above were unreachable from that path. A closed vocabulary of
+    # invented values aggregates confidently into nonsense, which is the failure the closed vocabulary was meant to
+    # prevent.
+    "not_evaluated",
 )
 
 #: The three states a label can be in. `missing` and `pending` are different facts and collapsing them is how a
@@ -60,7 +66,10 @@ class Candidate:
     id: str
     excluded_because: str
     bound: float | None = None
-    bound_kind: str = ""
+    #: What KIND of number `bound` is -- a corrected lower bound, a point estimate, something else. Never inferred:
+    #: an earlier version wrote "lcb" for whatever a caller passed, so a log of point estimates claimed to be a log of
+    #: lower bounds and the falsifier passed against them.
+    bound_kind: str = "unstated"
     cost_usd: float | None = None
     evidence_as_of: str = ""
 
@@ -129,15 +138,24 @@ class Decision:
 
 
 def admissible(candidate: Candidate, *, floor: float, authorised: bool,
-               latency_feasible: bool | None) -> tuple[bool, str]:
+               latency_feasible: bool | None, evidence_age_days: float | None = None,
+               max_age_days: float | None = None) -> tuple[bool, str]:
     """SCOPE section 2's three-part definition, as code, so `certified` can be checked rather than trusted.
 
-    The third part is deliberately three-valued: where the operator set no latency constraint the condition is
+    The latency part is deliberately three-valued: where the operator set no latency constraint the condition is
     ABSENT rather than satisfied, and an implementation that read a missing constraint as a passed one would report a
     stronger admissibility than the definition grants.
+
+    Freshness is checked too, and it was missing. Section 10 makes estimates stop being usable after a limit, and
+    `evidence_expired` was in the exclusion vocabulary with nothing able to produce it -- so a candidate whose evidence
+    had expired could be certified. Like latency it is three-valued: no declared limit means the condition is absent,
+    not passed.
     """
     if candidate.bound is None:
         return False, "no_bound"
+    if (max_age_days is not None and evidence_age_days is not None
+            and evidence_age_days > max_age_days):
+        return False, "evidence_expired"
     if candidate.bound < floor:
         return False, "below_floor"
     if not authorised:
@@ -147,7 +165,8 @@ def admissible(candidate: Candidate, *, floor: float, authorised: bool,
     return True, "chosen"
 
 
-def check_certification(decision: Decision, *, floor: float, latency_feasible: bool | None) -> list:
+def check_certification(decision: Decision, *, floor: float, latency_feasible: bool | None,
+                        evidence_age_days: float | None = None, max_age_days: float | None = None) -> list:
     """Section 12's falsifier, computed rather than asserted.
 
     Returns the violations found. Two are possible and they are opposite errors: an assignment marked certified whose
@@ -155,20 +174,21 @@ def check_certification(decision: Decision, *, floor: float, latency_feasible: b
     second is section 12's "default is not a hiding place".
     """
     out = []
+    kw = dict(floor=floor, authorised=decision.gateway_authorised, latency_feasible=latency_feasible,
+              evidence_age_days=evidence_age_days, max_age_days=max_age_days)
     chosen = next(c for c in decision.candidates if c.id == decision.chosen)
-    ok, why = admissible(chosen, floor=floor, authorised=decision.gateway_authorised,
-                         latency_feasible=latency_feasible)
+    ok, why = admissible(chosen, **kw)
     if decision.certified and not ok:
         out.append(f"certified but the chosen candidate {chosen.id!r} was not admissible: {why}")
     if not decision.certified:
+        # The chosen candidate is IN this scan. An uncertified decision whose own chosen candidate was admissible is
+        # the purest hiding place -- the mechanism declined to certify an assignment it could have -- and an earlier
+        # version skipped it, which made exactly that case undetectable. Every violation is reported rather than the
+        # first: an earlier version broke out of the loop and undercounted.
         for c in decision.candidates:
-            if c.id == decision.chosen:
-                continue
-            was, _ = admissible(c, floor=floor, authorised=decision.gateway_authorised,
-                                latency_feasible=latency_feasible)
+            was, _ = admissible(c, **kw)
             if was:
                 out.append(f"uncertified while {c.id!r} was admissible, so the default was a hiding place")
-                break
     return out
 
 
@@ -202,18 +222,62 @@ class Log:
             fh.write(json.dumps({"outcome_for": request_id, "label_state": label_state, "label": label,
                                  "at": time.time(), **outcome}, sort_keys=True) + "\n")
 
-    def read(self) -> tuple[list, dict]:
-        """Every decision, and the outcomes keyed by request id. Returns both rather than a merged view, because a
-        decision with no outcome is a fact the caller needs to see."""
-        decisions, outcomes = [], {}
+    def append_observation(self, ref: str, observation: dict) -> None:
+        """The state a decision was made from, so its `state_ref` resolves.
+
+        Its own line rather than a field on the decision, because section 9 forbids embedding the snapshot -- it would
+        be unbounded and would carry tenant content. What is stored here is the collector's own summary: the values it
+        read, their sources and what it could not read, which is bounded and contains no request content.
+        """
+        with self.path.open("a") as fh:
+            fh.write(json.dumps({"observation_ref": ref, "observation": observation}, sort_keys=True) + "\n")
+
+    def read(self, *, strict: bool = False) -> tuple[list, dict]:
+        """Every decision, and the outcomes keyed by request id.
+
+        Both rather than a merged view, because a decision with no outcome is a fact the caller needs to see.
+
+        **A label that changes is a refusal, not a later value winning.** An earlier version kept the last outcome per
+        request, which made the log append-only in bytes and mutable in meaning: appending `labelled/True` after
+        `labelled/False` silently replaced the label, and the argument for trusting a criterion computed over an
+        append-only log did not hold. A `pending` or `missing` outcome may be superseded by a real label, because that
+        is the label arriving rather than changing.
+
+        **A corrupt line does not destroy the log.** A crash mid-append leaves a truncated line, and an earlier version
+        raised on it -- losing every intact record before it. The count is carried in `bad_lines` on the returned
+        outcomes dict rather than swallowed, and `strict=True` raises for a caller that wants that.
+        """
+        decisions, outcomes, observations, bad = [], {}, {}, 0
         if not self.path.exists():
             return decisions, outcomes
-        for line in self.path.read_text().splitlines():
+        for n, line in enumerate(self.path.read_text().splitlines(), 1):
             if not line.strip():
                 continue
-            row = json.loads(line)
-            if "outcome_for" in row:
-                outcomes[row["outcome_for"]] = row
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                if strict:
+                    raise Incomplete(f"line {n} of {self.path} is not readable: {exc}") from exc
+                bad += 1
+                continue
+            if "observation_ref" in row:
+                observations[row["observation_ref"]] = row["observation"]
+            elif "outcome_for" in row:
+                rid = row["outcome_for"]
+                prev = outcomes.get(rid)
+                if prev is not None and prev.get("label_state") == "labelled":
+                    if prev.get("label") != row.get("label") or row.get("label_state") != "labelled":
+                        raise Incomplete(
+                            f"{rid} already carries the label {prev.get('label')!r} and a later line says "
+                            f"{row.get('label')!r} ({row.get('label_state')}). A label that changes makes every "
+                            f"criterion computed over this log a criterion over the rewrite")
+                outcomes[rid] = row
             else:
                 decisions.append(row)
+        # Attached to the outcomes mapping so a caller that only reads decisions cannot lose it.
+        if observations:
+            outcomes["__observations__"] = observations
+        if bad:
+            outcomes["__bad_lines__"] = {"count": bad, "note": "unreadable lines, most likely a crash mid-append; "
+                                                               "the intact records before and after them are kept"}
         return decisions, outcomes

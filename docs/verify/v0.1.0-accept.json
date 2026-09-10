@@ -3,13 +3,14 @@
   {
    "criterion": "floor_compliance",
    "verdict": "unsupported",
-   "detail": "the realised rate is 100.0% over only 1 labelled certified decisions, which cannot separate compliance from sampling error in either direction. Reported so the number is not mistaken for a pass",
+   "detail": "the realised rate is 100.0% over 1 labelled certified decisions, and its 95% lower bound 5.0% does not clear the floor 80.0%. Not a failure -- the rate is not significantly below either -- so nothing is shown in either direction. Reported so the rate is not mistaken for a pass",
    "numbers": {
     "labelled": 1,
     "successes": 1,
     "rate": 1.0,
     "floor": 0.8,
     "p_below_floor": 1.0,
+    "lower_bound": 0.05,
     "significance": 0.05,
     "unlabelled_certified": 0
    }

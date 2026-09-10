@@ -235,10 +235,16 @@ works. The rule the instrument must follow: **a call that died on the wire produ
 report, never a zero.** One tier here scored 0 of 20 on an endpoint restriction rather than on the task, and a
 harness that had reported that number would have published a false claim about a model.
 
-## The loop, closed: observe, decide, record, check
+## One turn of the loop: observe, decide, record, check
 
 v0.1.0 is where the four parts meet. Before it, `decide` was handed a state by whoever called it and nothing wrote a
 record, so the mechanism could be described and not run.
+
+**It is one turn, and the loop does not close.** An earlier draft of this section said "the loop, closed", which a
+review was right to call the over-claim: nothing here feeds anything back. Outcomes are attachable and nothing attaches
+them automatically; exploration is off and the propensity is constant, so the log can never support the off-policy
+estimate a loop would learn from; and no arc runs from `record` or `accept` back to `decide`. A pipeline that cannot
+update anything from its own log is a pipeline.
 
 ```console
 # what a policy would decide from, and what could not be read
@@ -312,8 +318,10 @@ They will go stale; that is what the pin is for.
 
 ## Status
 
-**v0.1.0.** The loop runs: a state is observed from a live engine, a compiled policy decides from it, the decision is
-recorded in the shape SCOPE section 9 requires, and the acceptance criteria are computed from that log. Verified
+**v0.1.0.** One turn runs end to end: a state is observed from a live engine, a compiled policy decides from it, the
+decision is recorded in the shape SCOPE section 9 requires, and the acceptance criteria are computed from that log.
+**The loop does not close** -- nothing feeds an outcome or a verdict back into the policy, and saying otherwise was the
+one over-claim a review found in this release. Verified
 against a running vLLM engine rather than a fixture, and the three evaluable criteria passed on the resulting log
 while six reported `unsupported`.
 

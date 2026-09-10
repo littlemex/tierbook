@@ -57,13 +57,45 @@ def test_a_missing_metric_refuses_rather_than_returning_zero():
         ob.inflight("# nothing here\n", MODEL)
 
 
-def test_a_comment_or_a_nan_does_not_become_a_value():
-    """NaN parses as a float and then poisons every comparison: `inflight >= B` is false for NaN, so a saturated
-    engine with one broken series would read as having room."""
+def test_a_comment_is_not_a_sample():
     assert ob.parse_metrics("# vllm:num_requests_running 5.0", ob.RUNNING) == []
-    assert ob.parse_metrics(f'vllm:num_requests_running{{model_name="{MODEL}"}} NaN', ob.RUNNING) == []
-    with pytest.raises(ob.NotObserved, match="absent"):
-        ob.inflight(f'vllm:num_requests_running{{model_name="{MODEL}"}} NaN', MODEL)
+
+
+def test_a_non_finite_sample_refuses_rather_than_being_dropped():
+    """Dropping it is worse than either alternative: with one series it produces an absence, and with three it sums the
+    other two into a partial total that reaches `decide` as a plausible number. `+Inf` is matched deliberately for the
+    same reason -- a pattern that could not match it would drop the line."""
+    for bad in ("NaN", "+Inf", "-Inf"):
+        with pytest.raises(ob.NotObserved, match="non-finite"):
+            ob.parse_metrics(f'vllm:num_requests_running{{model_name="{MODEL}"}} {bad}', ob.RUNNING)
+
+
+def test_a_partial_sum_is_never_produced_from_a_broken_series():
+    """The failure this exists to preclude: a saturated engine with one broken series reading as having room."""
+    text = (f'vllm:num_requests_running{{engine="0",model_name="{MODEL}"}} 60.0\n'
+            f'vllm:num_requests_running{{engine="1",model_name="{MODEL}"}} NaN\n'
+            f'vllm:num_requests_waiting{{engine="0",model_name="{MODEL}"}} 4.0\n')
+    with pytest.raises(ob.NotObserved, match="non-finite"):
+        ob.inflight(text, MODEL)
+
+
+def test_an_unreadable_value_refuses_too():
+    with pytest.raises(ob.NotObserved, match="cannot read"):
+        ob.parse_metrics(f'vllm:num_requests_running{{model_name="{MODEL}"}} ....', ob.RUNNING)
+
+
+def test_summing_across_models_without_a_filter_refuses():
+    """The largest hole a review found, and one the module's own comment already described: with no `model_name` the
+    total is another candidate's occupancy added to this one's."""
+    two = METRICS + f'vllm:num_requests_running{{engine="0",model_name="other"}} 9.0\n'
+    with pytest.raises(ob.NotObserved, match="model_name"):
+        ob.inflight(two, None)
+    assert ob.inflight(two, MODEL) == 5.0, "with a filter it is unambiguous"
+
+
+def test_one_model_with_no_filter_is_still_readable():
+    """Refusing every unfiltered read would make the common single-model case unusable for no gain."""
+    assert ob.inflight(METRICS, None) == 5.0
 
 
 # --- a rate is a derivative, and one sample is not one ---------------------------------------------
@@ -224,3 +256,37 @@ def test_the_collector_and_the_decider_agree_on_the_key_names():
     fired, why = guard.evaluate(got.state)
     assert why is None, f"the guard could not read the collector's state: {why}"
     assert fired is True
+
+
+def test_each_reading_is_stamped_when_it_was_taken_not_before_the_fetch():
+    """An earlier version computed one timestamp before the fetch and stamped every reading with it. Within one call
+    the readings are milliseconds apart either way, so the observable difference is that the stamps now follow a slow
+    fetch rather than preceding it."""
+    import time as _t
+
+    def slow(url, timeout=5.0):
+        _t.sleep(0.05)
+        return METRICS
+
+    before = _t.time()
+    got = ob.observe(candidate="box", metrics_url="http://x/metrics", model_name=MODEL,
+                     gateway_authorised=True, measured_on="2026-09-01", fetcher=slow)
+    assert min(r.as_of for r in got.readings.values()) >= before + 0.04
+
+
+def test_the_spread_is_for_a_state_merged_from_several_calls():
+    """Near zero within one call by construction, which is why the field is documented as being for the other case: a
+    state whose occupancy is current and whose evidence age was read ten minutes ago is not a state."""
+    old = ob.observe(candidate="box", gateway_authorised=True, measured_on="2026-09-01", now=1000.0)
+    new = ob.observe(candidate="box", metrics_url="http://x/metrics", model_name=MODEL, now=1600.0,
+                     fetcher=lambda url, timeout=5.0: METRICS)
+    merged = ob.Observation(candidate="box")
+    merged.readings.update(old.readings)
+    merged.readings.update(new.readings)
+    assert merged.spread_s == 600.0
+
+
+def test_a_caller_supplied_clock_is_honoured_so_a_test_can_own_the_time():
+    got = ob.observe(candidate="box", gateway_authorised=True, measured_on="2026-09-01", now=1000.0)
+    assert {r.as_of for r in got.readings.values()} == {1000.0}
+    assert got.spread_s == 0.0

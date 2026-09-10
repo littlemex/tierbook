@@ -74,7 +74,11 @@ def test_that_violation_is_not_double_counted_as_a_false_certification():
 
 def test_the_uncertified_share_needs_a_declared_tolerance():
     """Inventing the tolerance would be grading our own work."""
-    rows = [dec(rid="r1"), dec(rid="r2", certified=False, chosen="box")]
+    # The uncertified one's own choice must be inadmissible, or it IS a hiding place -- which the scan now catches,
+    # since an uncertified decision whose chosen candidate was admissible is the purest case of one.
+    rows = [dec(rid="r1"),
+            dec(rid="r2", certified=False, chosen="low",
+                candidates=[cand("low", "chosen", 0.50), cand("api", "below_floor", 0.60)])]
     v = ac.default_is_not_a_hiding_place(rows, floor=0.80, latency_feasible=True)
     assert v.verdict == ac.UNSUPPORTED and "no tolerance was declared" in v.detail
     assert v.numbers["uncertified_share"] == 0.5

@@ -155,6 +155,11 @@ def clopper_pearson_lower(n: int, k: int, alpha: float) -> float:
     return lo
 
 
+def _unreadable(outcomes: dict) -> int:
+    """How many log lines could not be read. A rate over "all" decisions is not that when some are missing."""
+    return int((outcomes.get("__bad_lines__") or {}).get("count", 0))
+
+
 def floor_compliance(decisions: list, outcomes: dict, *, floor: float, significance: float = 0.05) -> Verdict:
     """Realised success rate on routed traffic against the family's floor.
 
@@ -165,6 +170,12 @@ def floor_compliance(decisions: list, outcomes: dict, *, floor: float, significa
     The test is one-sided: the criterion fails if the rate falls below the floor beyond sampling error. A normal
     approximation is not used at these counts; the exact binomial tail is.
     """
+    bad = _unreadable(outcomes)
+    if bad:
+        return Verdict("floor_compliance", UNSUPPORTED,
+                       f"{bad} log line(s) could not be read, so a rate over the routed traffic is a rate over the "
+                       f"lines that survived. Repair or truncate the log before reading a rate from it",
+                       {"unreadable_lines": bad})
     eligible = [r for r in decisions if r["certified"]]
     labelled = [(r, outcomes.get(r["request_id"], {})) for r in eligible]
     labelled = [(r, o) for r, o in labelled if o.get("label_state") == "labelled"]

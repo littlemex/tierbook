@@ -461,6 +461,10 @@ def cmd_assign(args) -> int:
         bounds=json.loads(args.bounds) if args.bounds else None,
         costs=json.loads(args.costs) if args.costs else None,
         evidence_as_of=args.measured_on or "",
+        # Without a floor, every non-chosen candidate is recorded `not_evaluated` rather than being assigned a reason
+        # nobody computed. With one, the reason comes from the same admissibility function the falsifier uses.
+        bound_kind=args.bound_kind, floor=args.floor, latency_feasible=args.latency_feasible,
+        max_age_days=args.max_age_days,
         log=Log(args.log) if args.log else None)
     print(json.dumps({"assign": decision["assign"], "certified": record.certified,
                       "reason": decision["reason"], "gaps": record.gaps,
@@ -669,6 +673,15 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--costs", help="json of candidate -> cost per task")
     a.add_argument("--feature-vector-version", default="fv1")
     a.add_argument("--policy-version", default="unversioned")
+    a.add_argument("--floor", type=float, default=None,
+                   help="the family's floor. Without it every non-chosen candidate is recorded as not_evaluated, "
+                        "because a reason nobody computed is worse than no reason")
+    a.add_argument("--bound-kind", default="unstated",
+                   help="what kind of number --bounds carries. Never inferred: a log of point estimates must not "
+                        "claim to be a log of corrected lower bounds")
+    a.add_argument("--latency-feasible", type=_tri, default=None)
+    a.add_argument("--max-age-days", type=float, default=None,
+                   help="the freshness limit past which evidence stops being usable")
     a.add_argument("--log", help="append the decision record here")
     a.set_defaults(fn=cmd_assign, registry=None)
 

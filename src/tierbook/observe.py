@@ -9,9 +9,12 @@ has been.
 a fabricated zero for `inflight` reads as an idle engine and sends the next request to the reserved candidate, so the
 one value a collector must never guess is the one a naive implementation defaults.
 
-**Every reading carries its own `as_of`.** Section 10 of SCOPE requires estimates to carry freshness limits, and a
-state assembled from readings taken minutes apart is not a state. `freshest`/`stalest` are reported so a caller can see
-the spread rather than trusting the youngest number in it.
+**Every reading carries the time it was taken**, and an earlier version stamped them all with one timestamp computed
+before the fetch -- which made the sentence above false by construction. It is true now, and worth being precise about
+what it buys: within a single call the readings really are milliseconds apart, so `spread_s` is ~0 and says nothing.
+It earns its place for a caller that assembles one state from several calls, which section 10 is the reason to worry
+about: a state whose occupancy is current and whose evidence age was read ten minutes ago is not a state, and nothing
+in the values shows it.
 
 **State keys are qualified by candidate where the quantity is a candidate's.** `decide`'s guards read
 `inflight:<candidate>`, not `inflight`, and `var_name` strips the qualifier only for validation -- the lookup itself
@@ -38,7 +41,11 @@ from .decide import STATE_VARS
 
 #: A Prometheus sample line: `name{label="v",...} 1.0`. Written here rather than pulled in as a dependency because
 #: the three metrics this reads are a fixed, small set and a parser for them is six lines.
-_SAMPLE = re.compile(r"^(?P<name>[A-Za-z_:][\w:]*)(?:\{(?P<labels>[^}]*)\})?\s+(?P<value>[-+0-9.eE]+|NaN)\s*$")
+#: `+Inf`, `-Inf` and `NaN` are matched deliberately: Prometheus emits them and a pattern that could not match them
+#: would DROP the line, which sums the remaining series into a partial total instead of refusing. A partial `inflight`
+#: is exactly the "saturated engine reads as having room" failure this module exists to preclude.
+_SAMPLE = re.compile(r"^(?P<name>[A-Za-z_:][\w:]*)(?:\{(?P<labels>.*)\})?\s+"
+                     r"(?P<value>[-+]?(?:[0-9.eE+-]+|Inf|NaN))\s*$")
 
 #: How many requests a vLLM engine is holding. Both, because a queued request occupies the candidate from the
 #: caller's point of view: `waiting` above zero means the seats are already full, and a collector that reported only
@@ -93,8 +100,12 @@ class Observation:
 
     @property
     def spread_s(self) -> float | None:
-        """How far apart the oldest and youngest readings are. A state assembled over minutes is not a state, and a
-        caller cannot see that from the values."""
+        """How far apart the oldest and youngest readings are.
+
+        Near zero within one `observe` call, by construction. It is for a caller that merges observations taken at
+        different times, where a state whose occupancy is current and whose evidence age is ten minutes old is not a
+        state and nothing in the values shows it.
+        """
         if not self.readings:
             return None
         return round(self.freshest - self.stalest, 3)
@@ -123,9 +134,16 @@ class Observation:
 
 
 def parse_metrics(text: str, name: str, labels: dict | None = None) -> list[tuple[dict, float]]:
-    """Every sample of one metric, with its labels. Returns a list rather than a value because a vLLM engine
-    exports one series per `model_name` and per `engine`, and summing across models would report another
-    candidate's occupancy as this one's."""
+    """Every sample of one metric, with its labels, and **a refusal rather than a partial read**.
+
+    Returns a list rather than a value because a vLLM engine exports one series per `model_name` and per `engine`, and
+    summing across models would report another candidate's occupancy as this one's.
+
+    A sample whose value is not a finite number raises. An earlier version skipped it, which was worse than either
+    alternative: with one series it produced an absence, and with three it summed the other two into a partial total
+    that reached `decide` as a plausible number. A review found that the module's own comment claimed the first
+    behaviour while the code did the second.
+    """
     out = []
     for line in text.splitlines():
         line = line.strip()
@@ -141,24 +159,35 @@ def parse_metrics(text: str, name: str, labels: dict | None = None) -> list[tupl
                 got[k.strip()] = v.strip().strip('"')
         if labels and any(got.get(k) != v for k, v in labels.items()):
             continue
+        raw = m.group("value")
         try:
-            got_value = float(m.group("value"))
-        except ValueError:
-            continue
-        # NaN parses as a float and then poisons every comparison downstream: `inflight >= B` is false for NaN, so a
-        # saturated engine with one broken series would read as having room. Dropped here, which makes the metric
-        # absent, which makes the variable absent, which is the behaviour this module exists to have.
-        if got_value != got_value:
-            continue
+            got_value = float(raw)
+        except ValueError as exc:
+            raise NotObserved(f"{name} has a sample this cannot read ({raw!r}), and a partial sum of the rest would "
+                              f"be worse than no reading") from exc
+        if got_value != got_value or got_value in (float("inf"), float("-inf")):
+            raise NotObserved(f"{name} has a non-finite sample ({raw}), so no total over its series is meaningful")
         out.append((got, got_value))
     return out
 
 
 def _sum_metric(text: str, name: str, labels: dict | None) -> float:
+    """The total for one metric, refusing an ambiguous one.
+
+    With no `model_name` filter on an engine serving several models, the sum is another candidate's occupancy added to
+    this one's -- which `parse_metrics`'s docstring calls out and an earlier version of this function then did anyway.
+    It is the largest hole a review found, and it is closed by refusing rather than by choosing a series.
+    """
     samples = parse_metrics(text, name, labels)
     if not samples:
         raise NotObserved(f"{name} is absent from the metrics this endpoint served"
                           + (f" for {labels}" if labels else ""))
+    if not (labels or {}).get("model_name"):
+        models = {lbl.get("model_name") for lbl, _ in samples if "model_name" in lbl}
+        if len(models) > 1:
+            raise NotObserved(
+                f"{name} has series for {sorted(models)} and no model_name was given, so a total over them would be "
+                f"another candidate's occupancy added to this one's. Pass model_name")
     return sum(v for _, v in samples)
 
 
@@ -220,15 +249,19 @@ def observe(*, candidate: str = "", metrics_url: str | None = None, model_name: 
     `gateway_authorised` is passed in rather than probed. Whether the gateway will authorise spend is a question
     about a budget and a tenant, and guessing it from an endpoint being reachable would answer a different question.
     """
+    fixed_clock = now is not None
     now = time.time() if now is None else now
     obs = Observation(candidate=candidate)
 
     def key(var: str) -> str:
         return f"{var}:{candidate}" if candidate and var in PER_CANDIDATE else var
 
-    def record(var: str, value, source: str) -> None:
+    def record(var: str, value, source: str, at: float | None = None) -> None:
+        # `at` defaults to the moment of recording rather than to the start of the call, so `spread_s` measures
+        # something. A fixed `now` is honoured when the caller supplied one, because the tests need a clock they own.
+        stamp = at if at is not None else (now if fixed_clock else time.time())
         obs.state[key(var)] = value
-        obs.readings[key(var)] = Reading(value=value, as_of=now, source=source)
+        obs.readings[key(var)] = Reading(value=value, as_of=stamp, source=source)
 
     def refuse(var: str, why: str) -> None:
         obs.not_observed[key(var)] = why
@@ -256,7 +289,8 @@ def observe(*, candidate: str = "", metrics_url: str | None = None, model_name: 
             refuse("inflight", str(exc))
         try:
             counter = _sum_metric(text, FINISHED, {"model_name": model_name} if model_name else None)
-            obs.readings["counter"] = Reading(value=counter, as_of=now, source=f"{metrics_url} ({FINISHED})")
+            obs.readings["counter"] = Reading(value=counter, as_of=now if fixed_clock else time.time(),
+                                              source=f"{metrics_url} ({FINISHED})")
             prev = (previous or {}).get("counter")
             if prev is None:
                     refuse("arrival_rate_per_hour",

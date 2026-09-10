@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from . import decide as dc
 from . import observe as ob
-from .record import Candidate, Decision, Log
+from .record import Candidate, Decision, Log, admissible
 
 #: The propensity of a deterministic policy's chosen arm. Named rather than written as a literal at the call site,
 #: because the name is where the consequence is recorded: an off-policy estimate over a log of these is unidentified.
@@ -27,16 +27,29 @@ DETERMINISTIC_PROPENSITY = 1.0
 
 
 def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
-                  costs: dict | None = None, evidence_as_of: str = "") -> list:
+                  costs: dict | None = None, evidence_as_of: str = "", bound_kind: str = "unstated",
+                  floor: float | None = None, authorised: bool = False,
+                  latency_feasible: bool | None = None, available: dict | None = None,
+                  evidence_age_days: float | None = None, max_age_days: float | None = None) -> list:
     """The candidate set for the record, including the chosen one and why each other was not.
 
     Every candidate the policy can name is included, because section 9 asks for the set with the reason each was
-    excluded, and a set containing only the winner cannot support an exclusion analysis. A candidate the policy
-    mentions but for which no bound was supplied is recorded as `no_bound` rather than omitted -- omitting it would
-    make a candidate nobody could evaluate look like a candidate nobody considered.
+    excluded, and a set containing only the winner cannot support an exclusion analysis.
+
+    **The reason is derived, not asserted.** An earlier version wrote `below_floor` for any candidate it could not
+    otherwise classify, without a floor to compare against -- and four of the eight reasons were unreachable from this
+    path, so the log showed a clean distribution over three reasons no matter what happened. A review put it exactly
+    right: a closed vocabulary of invented values aggregates confidently into nonsense, and the membership check that
+    guarantees the enum is what made the fabrication invisible. Where no floor is supplied the reason is
+    `not_evaluated`, which is the true statement.
+
+    `bound_kind` is passed rather than inferred. An earlier version labelled every supplied bound `lcb`, so a caller
+    handing over point estimates produced a log claiming they were corrected lower bounds -- and the falsifier passed
+    against them.
     """
     bounds = bounds or {}
     costs = costs or {}
+    available = available or {}
     named = []
     for rule in policy.rules:
         named.extend(rule.assign)
@@ -46,18 +59,15 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
         if cid in seen:
             continue
         seen.add(cid)
-        if cid == chosen:
-            why = "chosen"
-        elif cid not in bounds:
-            why = "no_bound"
-        elif cid not in costs:
-            why = "not_priced"
-        else:
-            why = "below_floor"
-        out.append(Candidate(id=cid, excluded_because=why, bound=bounds.get(cid),
-                             bound_kind="lcb" if cid in bounds else "", cost_usd=costs.get(cid),
-                             evidence_as_of=evidence_as_of))
-    if chosen not in seen:
+        cand = Candidate(id=cid, excluded_because="chosen" if cid == chosen else "not_evaluated",
+                         bound=bounds.get(cid), bound_kind=bound_kind if cid in bounds else "unstated",
+                         cost_usd=costs.get(cid), evidence_as_of=evidence_as_of)
+        if cid != chosen:
+            cand.excluded_because = _why_not(cand, cid, costs=costs, floor=floor, authorised=authorised,
+                                             latency_feasible=latency_feasible, available=available,
+                                             evidence_age_days=evidence_age_days, max_age_days=max_age_days)
+        out.append(cand)
+    if chosen not in seen:  # noqa: SIM102 - see the comment below
         # The policy chose something it does not name. Recorded rather than raised: the record's own invariant will
         # refuse it, and refusing here would lose the evidence of how it happened.
         out.append(Candidate(id=chosen, excluded_because="chosen", bound=bounds.get(chosen),
@@ -65,10 +75,35 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
     return out
 
 
+def _why_not(cand: Candidate, cid: str, *, costs: dict, floor: float | None, authorised: bool,
+             latency_feasible: bool | None, available: dict, evidence_age_days: float | None,
+             max_age_days: float | None) -> str:
+    """Why one candidate was not chosen, derived from what is known and honest about what is not.
+
+    The order matters: the cheapest facts first, so a candidate that is not serving is reported as `unavailable`
+    rather than as whatever its bound would have said.
+    """
+    if available.get(cid) is False:
+        return "unavailable"
+    if cand.bound is None:
+        return "no_bound"
+    if cid not in costs:
+        return "not_priced"
+    if floor is None:
+        # The true statement. Asserting `below_floor` here is what the earlier version did, and it was a claim about
+        # a comparison nobody made.
+        return "not_evaluated"
+    ok, why = admissible(cand, floor=floor, authorised=authorised, latency_feasible=latency_feasible,
+                         evidence_age_days=evidence_age_days, max_age_days=max_age_days)
+    return "not_evaluated" if ok else why
+
+
 def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: str,
                feature_vector_version: str, policy_version: str, mechanism_version: str,
                agent: str, model: str, endpoint: str, gateway_quote_usd: float | None,
                bounds: dict | None = None, costs: dict | None = None, evidence_as_of: str = "",
+               bound_kind: str = "unstated", floor: float | None = None,
+               latency_feasible: bool | None = None, max_age_days: float | None = None,
                log: Log | None = None) -> tuple[dict, Decision]:
     """Observe -> decide -> record, once.
 
@@ -86,7 +121,11 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
         # A reference, not a snapshot: section 9 forbids the snapshot because it would be unbounded and would carry
         # tenant content. The observation is logged separately by whoever collected it.
         state_ref=state_ref(observation),
-        candidates=candidate_set(policy, chosen, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of),
+        candidates=candidate_set(
+            policy, chosen, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of, bound_kind=bound_kind,
+            floor=floor, authorised=authorised, latency_feasible=latency_feasible,
+            available={c: observation.state.get(f"available:{c}") for c in (bounds or {})},
+            evidence_age_days=observation.state.get("evidence_age_days"), max_age_days=max_age_days),
         chosen=chosen,
         selection_probability=DETERMINISTIC_PROPENSITY,
         exploration=False,
@@ -104,6 +143,10 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
                                   for k, v in sorted(observation.not_observed.items())],
     )
     if log is not None:
+        # The observation is persisted BEFORE the decision, so `state_ref` resolves to something. A review found it was
+        # a dangling pointer: the record hashed an observation that nothing stored, so it looked like it identified the
+        # decision's state and did not.
+        log.append_observation(state_ref(observation), observation.as_dict())
         log.append(decision)
     return got, decision
 

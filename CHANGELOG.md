@@ -2,8 +2,12 @@
 
 ## 0.1.0
 
-The loop closes. Before this release the mechanism could be described and not run: `decide` was handed a state by
-whoever called it, and nothing wrote a record, so SCOPE section 12's acceptance criteria were prose.
+**One turn of the loop runs end to end.** Before this release the mechanism could be described and not run: `decide` was
+handed a state by whoever called it, and nothing wrote a record, so SCOPE section 12's acceptance criteria were prose.
+
+The loop does **not** close, and an earlier draft of this entry said it did. Nothing feeds back: outcomes are
+attachable and nothing attaches them, exploration is off with a constant propensity so the log cannot support an
+off-policy estimate, and no arc runs from the record or the verdicts to the policy.
 
 ### Added
 
@@ -73,6 +77,42 @@ measurement nobody made rather than a defect.
 the artifact one-way and forced the deployable path to rebuild the object it had just serialised; it now writes both
 the prose a reader needs and the fields a loader needs, and an artifact from the older shape refuses to load rather
 than having its English parsed.
+
+### Fixed before release, from one adversarial review round
+
+Seven defects, all real, and the review is in `docs/reviews/`.
+
+- **`candidate_set` fabricated its exclusion reasons.** It wrote `below_floor` for anything it could not otherwise
+  classify, **without a floor to compare against**, and four of the eight reasons were unreachable from that path -- so
+  the log showed a clean, aggregable distribution over three reasons no matter what happened. A closed vocabulary of
+  invented values aggregates confidently into nonsense, and the membership check that guaranteed the enum is what made
+  it invisible. The reason now comes from the same `admissible` function the falsifier uses, and where no floor was
+  supplied it is `not_evaluated` -- the true statement.
+- **`bound_kind` was asserted as `lcb` for any supplied bound**, so a caller passing point estimates produced a log
+  claiming they were corrected lower bounds, and the falsifier passed against them. It is passed, never inferred, and
+  defaults to `unstated`.
+- **`state_ref` was a dangling pointer.** The record hashed an observation that nothing persisted. The observation is
+  now written to the log before the decision that references it.
+- **The hiding-place scan skipped the chosen candidate**, which made the purest case undetectable: an uncertified
+  decision whose own chosen candidate was admissible is a mechanism declining to certify an assignment it could have.
+  It also stopped at the first violation and undercounted.
+- **`admissible` ignored freshness** although `evidence_expired` was in the exclusion vocabulary with nothing able to
+  produce it, so a candidate whose evidence had expired could be certified. Freshness is now three-valued like the
+  latency condition: an undeclared limit is absent, not passed.
+- **The log was append-only in bytes and mutable in meaning.** `read` kept the last outcome per request, so appending
+  `labelled/True` after `labelled/False` silently replaced a label -- and the argument for trusting a criterion computed
+  over an append-only log did not hold. A changed label is now refused; a label arriving after `pending` is not a
+  change. One corrupt line no longer destroys every intact record around it, and the count travels rather than being
+  swallowed.
+- **`observe` summed across models when given no `model_name`**, which its own docstring called out as reporting
+  another candidate's occupancy as this one's. It refuses when several `model_name` series are present and no filter was
+  given. A non-finite or unreadable sample also refuses now instead of being dropped, because dropping one of three
+  series produces a **partial sum** -- exactly the "saturated engine reads as having room" failure the module claims to
+  preclude -- and `+Inf` could not even be matched by the old pattern.
+
+Also corrected: `observe`'s claim that each reading carried its own timestamp was false, since one was computed before
+the fetch and stamped on everything. It is true now, and `spread_s` is documented for what it actually buys -- a state
+merged from several calls -- rather than for a spread that is zero within one call by construction.
 
 ### Known gaps, named rather than implied
 
