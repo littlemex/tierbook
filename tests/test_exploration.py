@@ -44,6 +44,7 @@ than asserted as settled.
 from __future__ import annotations
 
 import json
+import datetime as _dt
 import random
 import sys
 from pathlib import Path
@@ -462,7 +463,7 @@ def _v2_row(**kw):
         "candidates": [_cand_row(), _cand_row("api", "below_floor", 0.70, 0.012)], "chosen": "box",
         "selection_probability": 1.0, "exploration": False, "certified": True,
         "policy_version": "p1", "mechanism_version": "0.2.0", "agent": "opencode", "model": "m",
-        "endpoint": "http://e", "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": 1000.0,
+        "endpoint": "http://e", "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": DECIDED_AT,
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
         "schema_version": 2, "exploration_reason": "no_mechanism", "eligible_set": [],
     }
@@ -664,7 +665,7 @@ def _acc_dec(rid="r1", certified=True, chosen="box", candidates=None):
         "candidates": candidates or [_acc_cand(), _acc_cand("api", "below_floor", 0.70, 0.012)], "chosen": chosen,
         "selection_probability": 1.0, "exploration": False, "certified": certified,
         "policy_version": "p1", "mechanism_version": "0.1.0", "agent": "opencode", "model": "m",
-        "endpoint": "http://e", "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": 1000.0,
+        "endpoint": "http://e", "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": DECIDED_AT,
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
     }
 
@@ -765,10 +766,22 @@ MAX_EVIDENCE_AGE_DAYS = 30.0     # the ordinary expiry ratchet -- record.admissi
 STALENESS_LIMIT_DAYS = 60.0      # C3's per-family override limit
 STALE_AGE_DAYS = 40.0            # past MAX_EVIDENCE_AGE_DAYS, inside STALENESS_LIMIT_DAYS
 
+# C6 derives each candidate's age from its own `evidence_as_of` against the decision's `decided_at`, so these two
+# have to agree. The earlier fixtures paired `decided_at: 1000.0` -- the epoch, 1970 -- with a 2026 evidence date,
+# which is a negative age: readable only because nothing consulted it. Both are now computed from one anchor, so the
+# ages below are what they say regardless of when the suite runs.
+_ANCHOR = _dt.datetime(2026, 9, 10, tzinfo=_dt.timezone.utc)
+DECIDED_AT = _ANCHOR.timestamp()
+
+
+def _as_of(age_days: float) -> str:
+    return (_ANCHOR - _dt.timedelta(days=age_days)).date().isoformat()
+
+
 
 def _stale_candidate():
     return rec.Candidate(id="stale_box", excluded_because="chosen", bound=0.90, cost_usd=0.01,
-                         evidence_as_of="2026-08-01")
+                         evidence_as_of=_as_of(STALE_AGE_DAYS))
 
 
 def _draw_into_stale_arm(rate=0.99, tries=50):
@@ -805,14 +818,14 @@ def _explored_into_stale_arm_row(rid="exp1"):
         "family": "agentic-coding", "request_id": rid, "feature_vector_version": "fv1", "state_ref": "obs:a",
         "candidates": [
             {"id": "stale_box", "excluded_because": "chosen", "bound": 0.90, "bound_kind": "lcb95",
-             "cost_usd": 0.01, "evidence_as_of": "2026-08-01"},
+             "cost_usd": 0.01, "evidence_as_of": _as_of(STALE_AGE_DAYS)},
             {"id": "reference", "excluded_because": "below_floor", "bound": 0.60, "bound_kind": "lcb95",
-             "cost_usd": 0.004, "evidence_as_of": "2026-09-01"},
+             "cost_usd": 0.004, "evidence_as_of": _as_of(5.0)},
         ],
         "chosen": chosen,
         "selection_probability": prob, "exploration": True, "certified": certified,
         "policy_version": "p1", "mechanism_version": "0.2.0", "agent": "opencode", "model": "m",
-        "endpoint": "http://e", "gateway_quote_usd": 0.01, "gateway_authorised": True, "decided_at": 1000.0,
+        "endpoint": "http://e", "gateway_quote_usd": 0.01, "gateway_authorised": True, "decided_at": DECIDED_AT,
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
         "schema_version": 2, "exploration_reason": "explored", "eligible_set": ["stale_box", "reference"],
     }
@@ -825,14 +838,14 @@ def _explored_into_fresh_arm_row(rid="exp2"):
         "family": "agentic-coding", "request_id": rid, "feature_vector_version": "fv1", "state_ref": "obs:a",
         "candidates": [
             {"id": "fresh_alt", "excluded_because": "chosen", "bound": 0.90, "bound_kind": "lcb95",
-             "cost_usd": 0.01, "evidence_as_of": "2026-09-05"},
+             "cost_usd": 0.01, "evidence_as_of": _as_of(5.0)},
             {"id": "reference", "excluded_because": "below_floor", "bound": 0.60, "bound_kind": "lcb95",
-             "cost_usd": 0.004, "evidence_as_of": "2026-09-05"},
+             "cost_usd": 0.004, "evidence_as_of": _as_of(5.0)},
         ],
         "chosen": "fresh_alt",
         "selection_probability": 0.05, "exploration": True, "certified": True,
         "policy_version": "p1", "mechanism_version": "0.2.0", "agent": "opencode", "model": "m",
-        "endpoint": "http://e", "gateway_quote_usd": 0.01, "gateway_authorised": True, "decided_at": 1000.0,
+        "endpoint": "http://e", "gateway_quote_usd": 0.01, "gateway_authorised": True, "decided_at": DECIDED_AT,
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
         "schema_version": 2, "exploration_reason": "explored", "eligible_set": ["fresh_alt", "reference"],
     }
@@ -887,14 +900,6 @@ def test_amendment_6_the_same_explored_assignment_is_still_served_by_the_stale_a
     assert certified is False  # both facts hold about the SAME assignment; neither computation depended on the other
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="amendment 7 / C6 removes evidence_age_days from check_certification's callers entirely: one scalar "
-           "age applied to every candidate is wrong once candidates carry different evidence_as_of dates (a "
-           "617-day-old candidate and a 9-day-old one in the same decision -- no single scalar reports the real "
-           "hiding place correctly). This signature will never exist; strict=True so this xfail forces its own "
-           "removal the moment C6 lands and this test starts passing.",
-)
 def test_amendment_6_check_certification_falls_silent_on_the_explored_uncertified_row():
     """Item 3: the falsifier (`accept.no_false_certification`, section 12's own name for it) must fall silent on
     the corrected behaviour. The code author's integration report quoted the exact violation this used to raise --
@@ -911,17 +916,11 @@ def test_amendment_6_check_certification_falls_silent_on_the_explored_uncertifie
     into `check_certification`, and `evidence_age_days`/`max_age_days` are the names that call already uses."""
     row = _explored_into_stale_arm_row()
     v = ac.no_false_certification([row], floor=FLOOR, latency_feasible=True,
-                                 evidence_age_days=STALE_AGE_DAYS, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+                                  max_age_days=MAX_EVIDENCE_AGE_DAYS)
     assert v.verdict == ac.PASS
     assert v.numbers.get("violations", 0) == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="amendment 7 / C6 removes evidence_age_days from check_certification's callers entirely -- see the "
-           "xfail on test_amendment_6_check_certification_falls_silent_on_the_explored_uncertified_row above for "
-           "the full reason. strict=True so this xfail forces its own removal when C6 lands.",
-)
 def test_amendment_6_default_is_not_a_hiding_place_also_falls_silent_on_the_explored_uncertified_row():
     """Item 4: an interaction nobody had named before the code author's report. `default_is_not_a_hiding_place`
     flags an uncertified decision made while an admissible candidate existed; here the chosen candidate is not
@@ -937,7 +936,7 @@ def test_amendment_6_default_is_not_a_hiding_place_also_falls_silent_on_the_expl
     "hiding place" verdict) rather than silently passing for an unrelated reason."""
     row = _explored_into_stale_arm_row()
     v = ac.default_is_not_a_hiding_place([row], floor=FLOOR, latency_feasible=True,
-                                         evidence_age_days=STALE_AGE_DAYS, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+                                         max_age_days=MAX_EVIDENCE_AGE_DAYS)
     assert v.verdict != ac.FAIL
     assert "hiding place" not in v.detail
 
@@ -964,12 +963,6 @@ def test_amendment_6_explored_uncertified_row_counts_in_all_served_and_not_in_ce
     assert v.numbers["served_rate"] == pytest.approx(10 / 11, abs=5e-5)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="amendment 7 / C6 removes evidence_age_days from check_certification's callers entirely -- see the "
-           "xfail on test_amendment_6_check_certification_falls_silent_on_the_explored_uncertified_row above for "
-           "the full reason. strict=True so this xfail forces its own removal when C6 lands.",
-)
 def test_amendment_6_explored_assignment_into_a_fresh_admissible_arm_is_certified():
     """Item 6, the mirror positive amendment 6 names explicitly. Without this test, an implementation that simply
     never certifies an explored assignment -- the "uncertified by construction" position C3's own interface
@@ -977,14 +970,14 @@ def test_amendment_6_explored_assignment_into_a_fresh_admissible_arm_is_certifie
     authorisation and latency otherwise holding: `certified` must be True, and the falsifier must have nothing to
     say about it."""
     fresh = rec.Candidate(id="fresh_alt", excluded_because="chosen", bound=0.90, cost_usd=0.01,
-                          evidence_as_of="2026-09-05")
+                          evidence_as_of=_as_of(5.0))
     ok, reason = rec.admissible(fresh, floor=FLOOR, authorised=True, latency_feasible=True,
                                 evidence_age_days=5.0, max_age_days=MAX_EVIDENCE_AGE_DAYS)
     assert (ok, reason) == (True, "chosen"), "fixture sanity check: this candidate must be fully admissible"
     row = _explored_into_fresh_arm_row()
     assert row["certified"] is True
     v = ac.no_false_certification([row], floor=FLOOR, latency_feasible=True,
-                                 evidence_age_days=5.0, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+                                  max_age_days=MAX_EVIDENCE_AGE_DAYS)
     assert v.verdict == ac.PASS
 
 
@@ -1047,7 +1040,7 @@ def _rt_route(o, pol=None, **kw):
     base = dict(policy=pol or _rt_policy(), observation=o, request_id="r1", feature_vector_version="fv1",
                policy_version="p1", mechanism_version="0.2.0", agent="opencode", model="m",
                endpoint="http://e", gateway_quote_usd=0.004, bounds={"box": 0.90, "api": 0.70},
-               costs={"box": 0.01, "api": 0.012}, evidence_as_of="2026-08-01", floor=FLOOR,
+               costs={"box": 0.01, "api": 0.012}, evidence_as_of=_as_of(STALE_AGE_DAYS), floor=FLOOR,
                latency_feasible=True, max_age_days=MAX_EVIDENCE_AGE_DAYS)
     base.update(kw)
     return sv.route_once(**base)
