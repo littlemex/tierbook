@@ -181,6 +181,11 @@ class Policy:
     #: Where the parts that were not derived came from. The default in particular is DECLARED, and an artifact
     #: that does not say who declared it invites a reader to take it for a measured choice.
     provenance: dict = field(default_factory=dict)
+    #: What this was compiled under -- at least `floor` and `max_evidence_age_days`, plus `staleness_limit_days`
+    #: for the door C3 adds. The compiled table used to carry `certified: true` and never write the floor down,
+    #: so no criterion computed later could be known to have used the same number a shell prompt typed. This is
+    #: the one home for that number; `parameter` is the one reader of it.
+    parameters: dict = field(default_factory=dict)
 
     @property
     def overlaps(self) -> list[str]:
@@ -317,6 +322,7 @@ def as_dict(policy: Policy) -> dict:
         "note": policy.note,
         "domain": policy.domain,
         "provenance": policy.provenance,
+        "parameters": policy.parameters,
         "unmeasured_guards": policy.gaps,
         "can_ever_fire": policy.can_ever_fire,
         "rule_overlaps": policy.overlaps,
@@ -336,7 +342,18 @@ def from_dict(d: dict) -> Policy:
 
     Reads `guards` rather than `when`: the prose is for a reader and cannot be parsed back without inventing a
     grammar, which is the sort of thing that works until a threshold contains a space.
+
+    A policy carrying rules but no `parameters` key was compiled by a version that never wrote the floor or the
+    evidence-age limit down -- a v0.1.0 artifact is exactly this case, and it is refused for the same reason the
+    guards-as-prose case above is: an artifact that cannot say what it was compiled under is not the source, and
+    guessing what a shell prompt typed at compile time is worse than recompiling.
     """
+    if d.get("rules") and "parameters" not in d:
+        raise ValueError(
+            "this policy was written by a version that recorded rules with no 'parameters' key, so it cannot be "
+            "loaded: nothing here can say what floor or evidence-age limit it was compiled under. Recompile it: "
+            "the artifact is not the source, and re-deriving it is cheaper than trusting a number nobody wrote "
+            "down")
     rules = []
     for r in d.get("rules", []):
         if "guards" not in r:
@@ -347,13 +364,37 @@ def from_dict(d: dict) -> Policy:
                           assign=tuple(r["assign"]), because=r.get("because", "")))
     return Policy(family=d["family"], rules=tuple(rules), default=tuple(d["default"]),
                   domain=d.get("domain", {}), certified=bool(d.get("certified", False)),
-                  note=d.get("note", ""), provenance=d.get("provenance", {}))
+                  note=d.get("note", ""), provenance=d.get("provenance", {}),
+                  parameters=d.get("parameters", {}))
+
+
+def parameter(policy: Policy, name: str, supplied: float | None = None) -> float | None:
+    """The single reader of a value this policy was compiled under. Nothing else may hold a second copy.
+
+    `supplied=None` reads the artifact and returns whatever it has, absent included. A `supplied` value is
+    never substituted for the artifact's: equal, it is handed back; different, both are named and this
+    raises, because a reader that could prefer one number over the other is a second home for it, which is
+    the defect this entry exists to close. A `name` the artifact never recorded cannot confirm a supplied
+    value either, for the same reason -- there is nothing here to confirm it against.
+    """
+    known = policy.parameters or {}
+    if supplied is None:
+        return known.get(name)
+    if name not in known:
+        raise ValueError(f"{supplied!r} was supplied for {name!r}, but this policy's parameters do not carry "
+                         f"{name!r}: an artifact that did not record the parameter cannot confirm one")
+    compiled = known[name]
+    if compiled != supplied:
+        raise ValueError(f"{name!r} supplied as {supplied!r} does not match {compiled!r}, the value this "
+                         f"policy was compiled under. Refusing rather than preferring either")
+    return supplied
 
 
 def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_ids: set[str],
                    default: tuple[str, ...], default_declared_by: str,
                    service_curve: list | None = None, latency_p95_slo_s: float | None = None,
-                   max_evidence_age_days: float | None = None) -> Policy:
+                   max_evidence_age_days: float | None = None, floor: float | None = None,
+                   staleness_limit_days: float | None = None) -> Policy:
     """Derive the policy from one compiled family entry. Every threshold is a measurement or a named gap.
 
     The shape falls out of the accounting rather than being chosen. A reserved candidate is free at the margin
@@ -377,9 +418,14 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     chosen = tuple(entry.get("chosen") or ())
     certified = entry.get("status") == "assigned"
     prov = {"default_declared_by": default_declared_by}
+    # Written once and carried into every return below, including the refusals: the number this function was
+    # GIVEN, not one it derives. `staleness_limit_days` has no source yet -- C3's -- and is carried as `None`
+    # so the shape of every artifact this writes is already what a family with a declared limit will produce.
+    params = {"floor": floor, "max_evidence_age_days": max_evidence_age_days,
+             "staleness_limit_days": staleness_limit_days}
     if not chosen or not certified:
         why = (entry.get("validation") or {}).get("reason") or "no held-out fold supports this assignment"
-        return Policy(family, (), default, domain={}, certified=False, provenance=prov,
+        return Policy(family, (), default, domain={}, certified=False, provenance=prov, parameters=params,
                       note=f"no rule: nothing was certified for this family ({why}), so every request takes "
                            "the declared default")
 
@@ -398,7 +444,7 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
         return Policy(family, (Rule((age, *money), chosen,
                                     "certified, and no candidate in this assignment is reserved, so the choice "
                                     "does not turn on occupancy"),),
-                      default, domain={}, certified=True, provenance=prov,
+                      default, domain={}, certified=True, provenance=prov, parameters=params,
                       note="unconditional in occupancy: nothing here is capacity-bound")
 
     if len(reserved) > 1:
@@ -406,7 +452,7 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
         # recorded the others as "not modelled" -- but the whole assignment still fired and was exported, so the
         # unguarded legs ran with no capacity semantics at all. A degenerate output is a correct output here:
         # refusing to compile is better than emitting an assignment whose occupancy nobody can evaluate.
-        return Policy(family, (), default, domain={}, certified=False, provenance=prov,
+        return Policy(family, (), default, domain={}, certified=False, provenance=prov, parameters=params,
                       note=("no rule: this assignment contains reserved candidates "
                             f"{sorted(reserved)} and only one can be capacity-guarded. One occupancy figure "
                             "cannot describe several of them, and firing the assignment anyway would run the "
@@ -458,6 +504,7 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     if max_evidence_age_days is not None:
         domain["evidence_age_days"] = [0, max_evidence_age_days]
     return Policy(family, tuple(rules), default, domain=domain, certified=True, provenance=prov,
+                  parameters=params,
                   note=("the boundary between the reserved candidate and what follows it is the occupancy at "
                         "which it stops meeting the declared latency constraint. That is the only derived "
                         "threshold here, and it is " + ("measured" if bound is not None else "NOT measured yet")))

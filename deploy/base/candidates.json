@@ -1,5 +1,5 @@
 {
-  "config_format": 1,
+  "config_format": 2,
   "_comment": "Replace every value here. Nothing in this file is measured, and tierbook refuses to load it if you add a key that only a measurement may set.",
   "candidates": {
     "reference-api": {
@@ -35,7 +35,7 @@
     }
   },
   "families": {
-    "your-traffic-family": "reference-api"
+    "your-traffic-family": {"reference": "reference-api", "floor": 0.90}
   },
   "objective": {
     "objective": "cost",

@@ -1,5 +1,5 @@
 {
-  "config_format": 1,
+  "config_format": 2,
   "_comment": "A worked example of the candidate file, matching the example ledger. Every value here is an unverified claim by whoever wrote it, which is exactly what a candidate file holds. What was observed lives in tiers/ and only that can route.",
   "candidates": {
     "api-strong-a": {
@@ -50,9 +50,10 @@
     }
   },
   "families": {
-    "agentic-coding": "api-strong-a",
-    "tool-agent-user-retail": "api-strong-a"
+    "agentic-coding": {"reference": "api-strong-a", "floor": 0.80},
+    "tool-agent-user-retail": {"reference": "api-strong-a", "floor": 0.92}
   },
+  "_families_note": "config_format 2: a family is an object, not a bare reference string, because the floor is declared per family (SCOPE sections 2, 5, 12) beside the reference it falls back to. The two families here carry DIFFERENT floors on purpose -- agentic-coding tolerates more failure than the retail tool-use family does -- so a regression that collapsed them back to one shared number would show up as a wrong floor on one of the two rather than passing silently.",
   "objective": {
     "objective": "cost",
     "constraints": {
