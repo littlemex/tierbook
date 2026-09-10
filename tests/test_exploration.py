@@ -54,8 +54,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from tierbook import accept as ac  # noqa: E402
+from tierbook import decide as dc  # noqa: E402
 from tierbook import explore  # noqa: E402
+from tierbook import observe as ob  # noqa: E402
 from tierbook import record as rec  # noqa: E402
+from tierbook import serve as sv  # noqa: E402
 from tierbook.config import ConfigError, load_config  # noqa: E402
 
 V010_FIXTURE = ROOT / "docs" / "verify" / "v0.1.0-decisions.jsonl"
@@ -884,7 +887,14 @@ def test_amendment_6_the_same_explored_assignment_is_still_served_by_the_stale_a
     assert certified is False  # both facts hold about the SAME assignment; neither computation depended on the other
 
 
-@pytest.mark.xfail(strict=True, reason="written against no_false_certification(evidence_age_days=...), a signature amendment 7 removes: C6 derives each candidate's age from its own evidence_as_of because one scalar cannot be correct for candidates measured at different times. Strict, so this marker cannot be forgotten -- when C6 lands and the test passes, the strict xfail fails and forces its removal.")
+@pytest.mark.xfail(
+    strict=True,
+    reason="amendment 7 / C6 removes evidence_age_days from check_certification's callers entirely: one scalar "
+           "age applied to every candidate is wrong once candidates carry different evidence_as_of dates (a "
+           "617-day-old candidate and a 9-day-old one in the same decision -- no single scalar reports the real "
+           "hiding place correctly). This signature will never exist; strict=True so this xfail forces its own "
+           "removal the moment C6 lands and this test starts passing.",
+)
 def test_amendment_6_check_certification_falls_silent_on_the_explored_uncertified_row():
     """Item 3: the falsifier (`accept.no_false_certification`, section 12's own name for it) must fall silent on
     the corrected behaviour. The code author's integration report quoted the exact violation this used to raise --
@@ -906,7 +916,12 @@ def test_amendment_6_check_certification_falls_silent_on_the_explored_uncertifie
     assert v.numbers.get("violations", 0) == 0
 
 
-@pytest.mark.xfail(strict=True, reason="written against no_false_certification(evidence_age_days=...), a signature amendment 7 removes: C6 derives each candidate's age from its own evidence_as_of because one scalar cannot be correct for candidates measured at different times. Strict, so this marker cannot be forgotten -- when C6 lands and the test passes, the strict xfail fails and forces its removal.")
+@pytest.mark.xfail(
+    strict=True,
+    reason="amendment 7 / C6 removes evidence_age_days from check_certification's callers entirely -- see the "
+           "xfail on test_amendment_6_check_certification_falls_silent_on_the_explored_uncertified_row above for "
+           "the full reason. strict=True so this xfail forces its own removal when C6 lands.",
+)
 def test_amendment_6_default_is_not_a_hiding_place_also_falls_silent_on_the_explored_uncertified_row():
     """Item 4: an interaction nobody had named before the code author's report. `default_is_not_a_hiding_place`
     flags an uncertified decision made while an admissible candidate existed; here the chosen candidate is not
@@ -943,13 +958,18 @@ def test_amendment_6_explored_uncertified_row_counts_in_all_served_and_not_in_ce
     v = ac.floor_compliance(rows, outcomes, floor=FLOOR)
     assert v.numbers["labelled"] == 10 and v.numbers["rate"] == pytest.approx(1.0)
     assert v.numbers["served_labelled"] == 11
-    # abs=5e-5, because accept.py rounds every reported rate to four places and has since v0.1.0 (line 179).
-    # A test demanding more precision than the artifact carries asserts something the report deliberately
-    # does not promise, and would fail against a correct implementation.
+    # abs=5e-5, not a bare pytest.approx: accept.py rounds every reported rate to four places (and has since
+    # v0.1.0), and 10/11 = 0.909090... rounds to 0.9091, a ~9.09e-6 difference that a default relative tolerance
+    # (~9e-7 here) is tighter than the artifact's own precision -- failing against a correct implementation.
     assert v.numbers["served_rate"] == pytest.approx(10 / 11, abs=5e-5)
 
 
-@pytest.mark.xfail(strict=True, reason="written against no_false_certification(evidence_age_days=...), a signature amendment 7 removes: C6 derives each candidate's age from its own evidence_as_of because one scalar cannot be correct for candidates measured at different times. Strict, so this marker cannot be forgotten -- when C6 lands and the test passes, the strict xfail fails and forces its removal.")
+@pytest.mark.xfail(
+    strict=True,
+    reason="amendment 7 / C6 removes evidence_age_days from check_certification's callers entirely -- see the "
+           "xfail on test_amendment_6_check_certification_falls_silent_on_the_explored_uncertified_row above for "
+           "the full reason. strict=True so this xfail forces its own removal when C6 lands.",
+)
 def test_amendment_6_explored_assignment_into_a_fresh_admissible_arm_is_certified():
     """Item 6, the mirror positive amendment 6 names explicitly. Without this test, an implementation that simply
     never certifies an explored assignment -- the "uncertified by construction" position C3's own interface
@@ -966,3 +986,150 @@ def test_amendment_6_explored_assignment_into_a_fresh_admissible_arm_is_certifie
     v = ac.no_false_certification([row], floor=FLOOR, latency_feasible=True,
                                  evidence_age_days=5.0, max_age_days=MAX_EVIDENCE_AGE_DAYS)
     assert v.verdict == ac.PASS
+
+
+# ======================================================================================================
+# Amendment 6, corrected: the fix is in route_once's WIRING, not in either function it calls
+# ======================================================================================================
+#
+# The section above composed `explore.draw` and `record.admissible` independently and asserted on their outputs
+# directly -- a real improvement over asserting on values this file picked itself, but it moved the subject. The
+# defect amendment 6 fixes was never in either function: it was in `serve.route_once` reading the WRONG one of
+# them when deciding `certified` for an explored assignment. Confirmed by reverting the fix -- replacing the
+# full-admissibility call with a hardcoded `certified = True` in `route_once`'s explored branch -- and finding
+# every test in the section above still passed, because a test of both halves separately passes against any
+# wiring between them, including none at all. Every test below goes THROUGH `route_once`.
+#
+# The helper shapes mirror `tests/test_serve.py`'s own `policy()`/`obs()`/`route()` fixtures (see that file) rather
+# than being assembled from `route_once`'s signature from scratch, per the coordinator's own instruction: an
+# observation or policy built by hand tends to be built wrong in a way that hides in a passing test. The three new
+# keywords below -- `exploration_rate`, `staleness_limit_days`, `rng` -- are not independently verified against a
+# published interface section; they are the names the coordinator's own instructions use verbatim to describe this
+# gap ("route_once with exploration_rate=0", "a state where ... inside staleness_limit_days", "drive it with a
+# seeded rng"), so this file treats them as given rather than reconstructed.
+
+
+def _rt_policy(certified=True, domain=None):
+    """Same shape as `tests/test_serve.py`'s `policy()`: box below a capacity bound, api above it, api the
+    declared default."""
+    return dc.Policy(
+        family="agentic-coding",
+        rules=(
+            dc.Rule(guards=(dc.Guard(var="inflight:box", op="<", threshold=8.0,
+                                     derived_from="a measured capacity bound"),),
+                    assign=("box",), because="the reserved candidate has a free seat"),
+            dc.Rule(guards=(dc.Guard(var="inflight:box", op=">=", threshold=8.0,
+                                     derived_from="a measured capacity bound"),),
+                    assign=("api",), because="the reserved candidate is full"),
+        ),
+        default=("api",),
+        domain=domain or {"inflight:box": (0.0, 128.0)},
+        certified=certified,
+        note="a fixture",
+    )
+
+
+def _rt_obs(**state):
+    """Same shape as `tests/test_serve.py`'s `obs()`: a candidate's quantities are qualified with `:box`, the
+    family's (`metered_authorised`, `evidence_age_days`) are not."""
+    o = ob.Observation(candidate="box")
+    for k, v in state.items():
+        key = f"{k}:box" if k in ob.PER_CANDIDATE else k
+        o.state[key] = v
+        o.readings[key] = ob.Reading(value=v, as_of=1000.0, source="a fixture")
+    return o
+
+
+def _rt_route(o, pol=None, **kw):
+    """Same base kwargs as `tests/test_serve.py`'s `route()`, with `floor`/`latency_feasible` filled in (needed
+    for `explore.eligible`'s admissibility check, unused by the pre-C3 tests that helper serves) and whatever
+    exploration keywords a caller supplies via `**kw`."""
+    base = dict(policy=pol or _rt_policy(), observation=o, request_id="r1", feature_vector_version="fv1",
+               policy_version="p1", mechanism_version="0.2.0", agent="opencode", model="m",
+               endpoint="http://e", gateway_quote_usd=0.004, bounds={"box": 0.90, "api": 0.70},
+               costs={"box": 0.01, "api": 0.012}, evidence_as_of="2026-08-01", floor=FLOOR,
+               latency_feasible=True, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    base.update(kw)
+    return sv.route_once(**base)
+
+
+def _rt_route_into_stale_arm(tries=50, rate=0.999):
+    """Loop seeded rngs until `route_once` actually draws the stale arm -- the same robustness pattern as
+    `_draw_into_stale_arm` earlier in this file: deterministic and reproducible across runs (the same seeds are
+    tried in the same fixed order every time, so a given implementation either always finds one within the loop
+    or never does), not a flaky "sometimes explores" test. `box` is full (`inflight=20`) so the policy's own
+    deterministic choice is `api`; `box` itself carries evidence 40 days old -- past `max_age_days=30` but inside
+    `staleness_limit_days=60` -- and clears the floor, so it is the alternative exploration can reach."""
+    o = _rt_obs(inflight=20.0, metered_authorised=True, available=True, evidence_age_days=STALE_AGE_DAYS)
+    for seed in range(tries):
+        got, d = _rt_route(o, exploration_rate=rate, staleness_limit_days=STALENESS_LIMIT_DAYS,
+                           rng=random.Random(seed))
+        if d.chosen == "box":
+            return got, d
+    raise AssertionError(f"no seed among the first {tries} explored into the stale arm at rate={rate} -- a "
+                         f"fixture problem (or route_once not exploring at all), not a defect in the arithmetic")
+
+
+def test_amendment_6_route_once_explored_stale_arm_is_recorded_uncertified():
+    """Item 1, through `route_once`, not composed by hand. `box` is full under the deterministic policy (`api` is
+    the default), so landing on `box` requires the randomiser to actually override the policy's own choice; its
+    evidence is 40 days old, past `max_age_days=30` but inside `staleness_limit_days=60`. The returned
+    `Decision.certified` must be `False` -- this is the test that failed when the coordinator reverted the fix
+    (replacing the explored branch's admissibility call with a hardcoded `certified = True`)."""
+    _got, d = _rt_route_into_stale_arm()
+    assert d.chosen == "box"
+    assert d.certified is False
+
+
+def test_amendment_6_route_once_still_serves_the_stale_arm_not_the_default():
+    """Item 2: the same call's `chosen`, asserted on its own and not conditioned on what `certified` says. The
+    composition version of the earlier (insufficient) test 2: a fix that made the explored assignment uncertified
+    by declining to draw `box` at all -- falling back to `api` -- would still leave `certified` looking correct in
+    some other case, but `chosen` here would read `api`, not `box`, and this assertion is the one that catches
+    that, independent of the test above."""
+    _got, d = _rt_route_into_stale_arm()
+    assert d.chosen == "box"
+    assert d.chosen != "api"
+
+
+def test_amendment_6_route_once_explored_fresh_arm_above_the_floor_is_certified():
+    """Item 3: the mirror positive, through `route_once`. Without this, a `route_once` that hardcodes
+    `certified = False` for every explored assignment -- the "uncertified by construction" position C3's
+    interface section rejects by name (F8) -- would pass items 1 and 2 above unconditionally. `box` is full so
+    `api` is the deterministic default; `box` here is fresh (evidence 5 days old, well inside `max_age_days=30`)
+    and must come back certified when exploration lands on it."""
+    o = _rt_obs(inflight=20.0, metered_authorised=True, available=True, evidence_age_days=5.0)
+    for seed in range(50):
+        _got, d = _rt_route(o, exploration_rate=0.999, staleness_limit_days=STALENESS_LIMIT_DAYS,
+                            rng=random.Random(seed))
+        if d.chosen == "box":
+            assert d.certified is True
+            return
+    raise AssertionError("no seed among the first 50 explored into the fresh arm -- fixture problem")
+
+
+def test_amendment_6_route_once_with_exploration_rate_zero_is_unaffected():
+    """Item 4, first half: the unexplored path must not have changed shape just because the exploration machinery
+    is present. The free-seat scenario from `tests/test_serve.py`'s own
+    `test_a_free_seat_goes_to_the_reserved_candidate_and_is_recorded`, run again with `exploration_rate=0.0` and a
+    real `rng` supplied: the call must still return the deterministic assignment (`box`, via the policy's own
+    rule, not via exploration) with its own correct `certified`, and `exploration` must read `False` -- a rate of
+    zero is a decision NOT to explore, not a silent no-op that happens to look the same by coincidence."""
+    o = _rt_obs(inflight=2.0, metered_authorised=True, available=True, evidence_age_days=5.0)
+    _got, d = _rt_route(o, exploration_rate=0.0, staleness_limit_days=STALENESS_LIMIT_DAYS, rng=random.Random(0))
+    assert d.chosen == "box"
+    assert d.certified is True
+    assert d.exploration is False
+
+
+def test_amendment_6_route_once_with_no_eligible_alternative_is_unaffected():
+    """Item 4, second half: a positive `exploration_rate` with nothing eligible to explore into. `box` is full
+    (`api` is the deterministic default) and this call supplies no bound for `box` at all (`bounds={"api": 0.70}`),
+    so `explore.eligible` can name no alternative -- the assignment must fall through to the ordinary deterministic
+    path exactly as it would with no exploration machinery present, rather than erroring or exploring into
+    something anyway."""
+    o = _rt_obs(inflight=20.0, metered_authorised=True, evidence_age_days=5.0)
+    _got, d = _rt_route(o, bounds={"api": 0.70}, costs={"api": 0.012}, exploration_rate=0.99,
+                        staleness_limit_days=STALENESS_LIMIT_DAYS, rng=random.Random(0))
+    assert d.chosen == "api"
+    assert d.exploration is False
