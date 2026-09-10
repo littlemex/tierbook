@@ -28,8 +28,23 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
+
+#: The shape this module writes and reads by default. Verified: `accept._as_decision` used to splat every row key
+#: into `Decision(**kw)`, so a record carrying a field the reader's Decision does not define raised
+#: `TypeError: __init__() got an unexpected keyword argument` on every line -- outside `Log.read`'s corrupt-line
+#: tolerance, which killed the whole acceptance run rather than being counted. A v0.1.0 log has no `schema_version`
+#: key at all, so its absence is the fact that identifies it: it is read as version 1, not by a convention enforced
+#: by nobody, but because `from_row` below checks for the key's absence in code.
+SCHEMA_VERSION = 2
+
+#: The sentinel a fresh `Decision()` call actually receives for `schema_version`. Distinguishing "the writer's
+#: default kicked in" from "a caller passed 2, which happens to equal the default" needs a value no caller would
+#: plausibly supply; an int like 0 would not do, because a mixed-up caller could pass exactly that. Never seen
+#: outside `Decision.__post_init__`, and `from_row` (the one place permitted to set a version other than the
+#: default) does so by mutating the attribute after construction, not by passing it in.
+_WRITER_STAMPS_SCHEMA_VERSION = object()
 
 #: Why a candidate was not selected. Closed, because "other" in a log is a field nobody can aggregate.
 EXCLUSION_REASONS = (
@@ -108,8 +123,21 @@ class Decision:
     label_state: str = "pending"
     label: bool | None = None
     outcome: dict = field(default_factory=dict)
+    #: Which shape this record was written in. Stamped by the writer, not supplied by a caller -- the component
+    #: that serialises a Decision is the one that knows what shape it wrote, and a caller that could supply its own
+    #: value would be a second, competing source for a fact `from_row` needs to trust unconditionally when it
+    #: decides whether it can read a row at all.
+    schema_version: int = field(default=_WRITER_STAMPS_SCHEMA_VERSION)
 
     def __post_init__(self) -> None:
+        if self.schema_version is _WRITER_STAMPS_SCHEMA_VERSION:
+            self.schema_version = SCHEMA_VERSION
+        else:
+            raise Incomplete(
+                f"schema_version is stamped by the writer, not supplied by a caller. Passing "
+                f"schema_version={self.schema_version!r} to Decision(...) would make the constructor a second place "
+                f"that decides what shape a record is, competing with the one place -- from_row -- that is allowed "
+                f"to say so")
         if not 0.0 < self.selection_probability <= 1.0:
             raise Incomplete(
                 f"selection_probability {self.selection_probability!r} is not in (0, 1]. A zero propensity for an "
@@ -135,6 +163,84 @@ class Decision:
         d = asdict(self)
         d["candidates"] = [asdict(c) if not isinstance(c, dict) else c for c in self.candidates]
         return d
+
+
+def _candidate_from_row(row: dict, index: int) -> tuple[Candidate, list[str]]:
+    """One candidate dict from a logged row, into the dataclass, at `index` in `candidates`.
+
+    Ignored-and-named applies here too, not only at the top level. F12 (phase 1 findings) proposes replacing
+    `bound_n`/`bound_attempted` with an evidence reference resolving to the ledger, and that field belongs on the
+    CANDIDATE, not the decision -- so a candidate is exactly where this record is next expected to grow, and a
+    reader that ignored-and-named at the top level while dropping an unrecognised candidate key silently would be
+    the same unrepresentable-omission defect one level down, at the field the design already names. The name
+    carries the position (`candidates[1].evidence_ref`) because a reader debugging a fifty-candidate row needs to
+    know which one grew the field, not just that one did.
+    """
+    known = {"id", "excluded_because", "bound", "bound_kind", "cost_usd", "evidence_as_of"}
+    ignored = [f"candidates[{index}].{k}" for k in sorted(row) if k not in known]
+    for f in fields(Candidate):
+        if f.default is MISSING and f.default_factory is MISSING and f.name not in row:
+            raise Incomplete(f"candidates[{index}].{f.name} is required and missing from the row")
+    return Candidate(**{k: v for k, v in row.items() if k in known}), ignored
+
+
+def from_row(row: dict) -> tuple[Decision, list[str]]:
+    """The only way a logged row becomes a `Decision`. Returns the decision and the sorted names of row keys it
+    ignored.
+
+    Verified defect this replaces: `accept._as_decision` splatted every key of a logged row straight into
+    `Decision(**kw)`, so a record carrying a field the reader's `Decision` did not define raised
+    `TypeError: __init__() got an unexpected keyword argument`, on every line, outside `Log.read`'s corrupt-line
+    tolerance -- adding any field to the record broke every older reader, in both directions: forward for a
+    v0.1.0 reader meeting a v0.2.0 line, and backward for an operator rolling back. This makes the omission
+    unrepresentable instead of adding a convention nobody enforces:
+
+    - A row with no `schema_version` is missing the key entirely (a v0.1.0 record never had it), and is read as
+      version 1 by this function's own check, not by an assumption a caller happens to share.
+    - A key this Decision does not define is ignored and named in the returned list -- not an error, because a
+      later field being unrecognised is exactly the case this function exists to survive. A candidate carries the
+      same treatment, named by position (`candidates[1].evidence_ref`), because the candidate set is itself a
+      growth site the design already names (F12's proposed evidence reference is a per-candidate field).
+    - A `schema_version` newer than `SCHEMA_VERSION` is refused by name for both versions: reading a future shape
+      as if it were this one is the silent-corruption case, not a compatible one.
+    - A field this version's `Decision` requires (no default) that is absent from the row raises `Incomplete`
+      naming it. Absent is never defaulted -- a default invented here would be a value nothing measured. A
+      candidate missing a field it requires raises the same way, named by position.
+    """
+    # Version first, before any field is validated against this reader's shape: a row written to a shape this
+    # reader does not know cannot be meaningfully checked against the shape it does know -- the fields it thinks
+    # are "missing" might just be renamed or restructured in the version ahead of it, and reporting that as a
+    # missing-field Incomplete would misname the actual problem.
+    version = row.get("schema_version", 1)
+    if version > SCHEMA_VERSION:
+        raise Incomplete(
+            f"row carries schema_version {version}, newer than this reader's {SCHEMA_VERSION}. Reading a future "
+            f"shape as if it were this one is the silent-corruption case this function exists to refuse")
+
+    known = {f.name for f in fields(Decision)}
+    ignored = [k for k in row if k not in known]
+
+    for f in fields(Decision):
+        if f.name == "schema_version":
+            continue
+        if f.default is MISSING and f.default_factory is MISSING and f.name not in row:
+            raise Incomplete(f"row is missing {f.name!r}, which this schema requires and does not default")
+
+    candidates = []
+    for index, c in enumerate(row["candidates"]):
+        candidate, candidate_ignored = _candidate_from_row(c, index)
+        candidates.append(candidate)
+        ignored.extend(candidate_ignored)
+    ignored.sort()
+
+    kw = {k: v for k, v in row.items() if k in known and k not in ("schema_version", "candidates")}
+    kw["candidates"] = candidates
+    decision = Decision(**kw)
+    # Bypasses the constructor guard by construction, not by exception: from_row is the one caller entitled to say
+    # what version a row was written in, and it says so by mutating the attribute after __post_init__ has already
+    # run, never by passing schema_version=... into Decision(...).
+    decision.schema_version = version
+    return decision, ignored
 
 
 def admissible(candidate: Candidate, *, floor: float, authorised: bool,
@@ -246,8 +352,14 @@ class Log:
         **A corrupt line does not destroy the log.** A crash mid-append leaves a truncated line, and an earlier version
         raised on it -- losing every intact record before it. The count is carried in `bad_lines` on the returned
         outcomes dict rather than swallowed, and `strict=True` raises for a caller that wants that.
+
+        **A line that parses but fails `from_row` is a different failure from a corrupt line, and is counted
+        separately.** "The file was truncated" and "the record is from a newer version this reader refuses" are
+        different operator actions -- the first is repaired or truncated, the second means the log needs the newer
+        reader, and folding the two counts together would hide which one applies. Counted as `__unreadable_rows__`,
+        with the reason, and `strict=True` raises for a caller that wants that.
         """
-        decisions, outcomes, observations, bad = [], {}, {}, 0
+        decisions, outcomes, observations, bad, unreadable = [], {}, {}, 0, []
         if not self.path.exists():
             return decisions, outcomes
         for n, line in enumerate(self.path.read_text().splitlines(), 1):
@@ -273,6 +385,17 @@ class Log:
                             f"criterion computed over this log a criterion over the rewrite")
                 outcomes[rid] = row
             else:
+                try:
+                    from_row(row)
+                except Incomplete as exc:
+                    if strict:
+                        raise Incomplete(f"line {n} of {self.path} parsed as JSON but its record could not be "
+                                         f"read: {exc}") from exc
+                    # Excluded from `decisions`, not appended-and-flagged: a row this reader could not turn into a
+                    # Decision has no fields a criterion can trust, so it exists in `__unreadable_rows__` and
+                    # nowhere else -- the same fate a corrupt line gets from `bad`, for the same reason.
+                    unreadable.append(f"line {n}: {exc}")
+                    continue
                 decisions.append(row)
         # Attached to the outcomes mapping so a caller that only reads decisions cannot lose it.
         if observations:
@@ -280,4 +403,6 @@ class Log:
         if bad:
             outcomes["__bad_lines__"] = {"count": bad, "note": "unreadable lines, most likely a crash mid-append; "
                                                                "the intact records before and after them are kept"}
+        if unreadable:
+            outcomes["__unreadable_rows__"] = {"count": len(unreadable), "reasons": unreadable}
         return decisions, outcomes
