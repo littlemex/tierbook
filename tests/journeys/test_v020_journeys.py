@@ -378,18 +378,6 @@ def _v2_row(rid: str, *, exploration: bool, family: str = "agentic-coding") -> d
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "accept.check_all's own docstring names the entry that would refuse a version-mixed log "
-        "('pool_across_versions ... is threaded nowhere yet; C5 owns the refusal this keyword requests') "
-        "and that entry was never integrated -- there is no v020-c5-* branch and the CLI never passes the "
-        "keyword. A log mixing 8 v0.1.0 rows (no exploration mechanism existed) with 2 v0.2.0 rows (both "
-        "genuinely explored) reports one pooled exploration_cost of 20%, which PASSES a 25% budget, while "
-        "the v0.2.0 mechanism's own rate over the traffic it could have applied to is 100% -- four times "
-        "over budget -- and nothing in the report says the log spans two mechanisms."
-    ),
-)
 def test_p3_mixed_version_log_pools_two_mechanisms_instead_of_refusing(tmp_path: Path):
     """P3, the analyst, was not there when this log was written and has a `decisions.jsonl` containing both
     v0.1.0 and v0.2.0 lines -- exactly the log SCOPE section 8 and CONTRACT C3 describe an operator ending
