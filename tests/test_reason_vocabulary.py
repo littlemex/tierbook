@@ -184,3 +184,62 @@ def test_a_reason_outside_the_vocabulary_is_still_refused():
     producers would pass against a constructor that accepted anything."""
     with pytest.raises(rec.Incomplete, match="cannot be aggregated"):
         cand(excluded_because="it seemed expensive")
+
+
+# --- explore.draw's reasons, the vocabulary C10 grew --------------------------------------------------
+
+
+#: Every input shape that steers `draw` down a different branch. `draw` is a producer of `exploration_reason`
+#: exactly as `admissible` is a producer of `excluded_because`, and this file did not cover it -- which is why
+#: C10's defect was possible: `draw` returned `explored` for two different outcomes and nothing compared its
+#: returns against the vocabulary or against each other.
+DRAW_CASES = [
+    ("rate zero", dict(deterministic="box", eligible=["box", "alt"], rate=0.0)),
+    ("no alternative", dict(deterministic="box", eligible=["box"], rate=0.05)),
+    ("the alternative wins", dict(deterministic="box", eligible=["box", "alt"], rate=0.99)),
+    ("the incumbent wins", dict(deterministic="box", eligible=["box", "alt"], rate=0.000001)),
+]
+
+
+@pytest.mark.parametrize("label,kwargs", DRAW_CASES, ids=[c[0] for c in DRAW_CASES])
+def test_every_reason_draw_returns_is_in_the_vocabulary(label, kwargs):
+    """Catches `draw` growing a reason the record would refuse at write time -- in production, on a path no
+    test covers, because the refusal happens in `Decision.__post_init__` and not in the draw."""
+    import random
+    _chosen, _p, why = ex.draw(rng=random.Random(0), **kwargs)
+    assert why in rec.EXPLORATION_REASONS, f"{label}: draw returned {why!r}, outside the vocabulary"
+
+
+def test_draw_reaches_every_reason_it_owns():
+    """Catches the cases above being vacuous, and it is the test that would have caught C10: `draw` returned
+    `explored` for BOTH outcomes of an active draw, so a set built from its returns had four members where the
+    vocabulary has five, and no test compared the two. `no_mechanism` is the one value `draw` never returns --
+    it describes a log written before the randomiser existed, which is `from_row`'s to supply."""
+    import random
+    produced = {ex.draw(rng=random.Random(0), **kw)[2] for _label, kw in DRAW_CASES}
+    assert produced == set(rec.EXPLORATION_REASONS) - {"no_mechanism"}, (
+        f"draw reaches {sorted(produced)}; the vocabulary minus no_mechanism is "
+        f"{sorted(set(rec.EXPLORATION_REASONS) - {'no_mechanism'})}")
+
+
+def test_no_mechanism_is_supplied_by_the_reader_and_never_by_the_draw():
+    """The one value with a producer outside `explore`. A version 1 row has no reason recorded, and `from_row`
+    supplies this one; a draw that returned it would be claiming the randomiser does not exist while running."""
+    import random
+    for _label, kw in DRAW_CASES:
+        assert ex.draw(rng=random.Random(0), **kw)[2] != "no_mechanism"
+    assert "no_mechanism" in rec.EXPLORATION_REASONS
+
+
+def test_an_exploration_reason_outside_the_vocabulary_is_refused():
+    """The guard the producers above are tied to has to still exist, or the file checks producers against
+    nothing."""
+    with pytest.raises(rec.Incomplete):
+        rec.Decision(
+            family="f", request_id="r", feature_vector_version="fv1", state_ref="o",
+            candidates=[cand(id="box", excluded_because="chosen"),
+                        cand(id="api", excluded_because="below_floor", bound=0.70)], chosen="box",
+            selection_probability=1.0, exploration=False, certified=False, policy_version="p",
+            mechanism_version="0.2.0", agent="a", model="m", endpoint="http://e",
+            gateway_quote_usd=0.004, gateway_authorised=True,
+            exploration_reason="probably explored", eligible_set=[])
