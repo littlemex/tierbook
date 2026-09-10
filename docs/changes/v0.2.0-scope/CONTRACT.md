@@ -793,3 +793,42 @@ freshness was considered and found unbounded, the second says freshness was neve
 **Written test-first**, unusually for an integrator-authored change: the statement above is precise enough that writing
 the assertion before the code gives the same test either way, and doing it in that order keeps the property `/split-impl`
 protects — that no assertion was shaped by looking at an implementation.
+
+## Amendment 12 — a test required the artifact to make a claim this release falsified
+
+The sharpest finding of the audit, and the only class-three finding in the release: a test that **encodes the defect**.
+
+`decide.MISSING_FOR_A_CLOSED_LOOP` is a six-item tuple naming the parts of a closed loop the module does not contain,
+"so their absence is not mistaken for presence." `decide.as_dict` writes it into **every compiled policy artifact** as
+`missing_for_a_closed_loop`. Three of the six are false at `HEAD`:
+
+| claim | shipped in | evidence |
+|---|---|---|
+| "a collector for the state variables above; `decide` is given a state, it does not observe one" | v0.1.0 | `src/tierbook/observe.py` |
+| "logged selection probabilities, without which an off-policy estimate ... is unidentified" | v0.2.0, C3 | `Decision.selection_probability` varies; records carry `0.05` |
+| "exploration or shadow allocation, without which a candidate that is routed away from never gets another label" | v0.2.0, C3 | `src/tierbook/explore.py` |
+
+The first has been false for a release. v0.1.0's own release text said the tuple "names six gaps and this closes the
+first," and then did not remove it.
+
+**And `tests/test_decide.py::test_the_artifact_names_what_a_closed_loop_still_needs` asserts that the artifact claims
+`selection probabilities` and `exploration` are missing.** So a test required the shipped artifact to carry a false
+statement, and it passed through all eight entries because no entry's diff touched this tuple. `/split-impl` calls a
+test that has to change the strongest available evidence that a change is real; this is that test, found in phase 4
+rather than phase 3, which is late but not too late.
+
+**Why nothing caught it, and the fix that follows from that.** The set had one guard, and the guard asserted four
+substrings were **present**. Adding a mechanism does not fail it; only deleting a claim does. So it is the C7 shape
+exactly — a guard over a set, checked against itself and against nothing that would make an element false — and it is
+worse than C7's case, because these elements are *claims about the code* rather than a vocabulary the code draws from,
+and they ship in a machine-readable artifact.
+
+**C9.** The three shipped items are removed. The remaining three keep their wording. And each is tied to a **probe**:
+a callable that returns whether the named thing is in fact still absent, with a test asserting every claim's probe
+agrees with it. Shipping a mechanism whose claim is still in the tuple then fails a test at merge time, which is the
+difference between a claim that stays true and a claim nobody re-reads.
+
+The probes are the honest part and the reason this is not just a deletion. "Anytime-valid bounds are absent" is
+checkable — no bound in the repository is anytime-valid — but the check has to be something a future author cannot
+satisfy by accident. So each probe names the symbol or module whose existence would falsify its claim, and a claim
+whose probe cannot be written is a claim too vague to ship in an artifact.
