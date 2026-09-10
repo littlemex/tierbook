@@ -401,14 +401,29 @@ def test_draw_alternative_propensities_and_deterministic_propensity_sum_to_one()
     """A cross-check on the arithmetic above that does not depend on which arm was drawn at all: for any single
     draw, the returned propensity is the CHOSEN arm's -- but the mechanism's own accounting must still be
     internally consistent. Verified indirectly here across many seeds landing on both arms of a 2-arm draw, so a
-    bug that only shows up for one arm's branch cannot hide behind a seed that happens to avoid it."""
+    bug that only shows up for one arm's branch cannot hide behind a seed that happens to avoid it.
+
+    And the realised share is asserted, not just that both arms appeared, because that is what separates the two
+    mechanisms empirically: spreading the rate over ALL arms including the incumbent gives the alternative 0.025 here,
+    not 0.05, and a test that only checks both arms were reached passes against either.
+
+    The seed count is 2,000 and not 30. At 30 the first draw landing on the alternative is seed 31, one past the end,
+    and the probability of that happening at all is 0.95 ** 30 = 21.5% -- so the original fixture failed one run in
+    five while the mechanism underneath was correct, and a test that fails a fifth of the time teaches a reader to
+    re-run rather than to look."""
     seen = set()
-    for seed in range(30):
+    alternatives = 0
+    trials = 2000
+    for seed in range(trials):
         chosen, prob, _ = explore.draw("box", ["box", "alt"], 0.05, random.Random(seed))
         seen.add(chosen)
         expected = 0.95 if chosen == "box" else 0.05
         assert prob == pytest.approx(expected)
-    assert seen == {"box", "alt"}, "30 seeds never landed on both arms of a 5% draw -- fixture is not exercising the draw at all"
+        alternatives += chosen == "alt"
+    assert seen == {"box", "alt"}, f"{trials} seeds never landed on both arms of a 5% draw"
+    # 0.05 +/- 0.02 is about seven standard errors at this sample size, so this is a check on the mechanism rather
+    # than on the seed sequence, and 0.025 -- the all-arms-including-the-incumbent variant -- is outside it.
+    assert alternatives / trials == pytest.approx(0.05, abs=0.02)
 
 
 # ======================================================================================================

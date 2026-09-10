@@ -38,6 +38,7 @@ def row(**kw):
         "selection_probability": 1.0, "exploration": False, "certified": True,
         "policy_version": "p1", "mechanism_version": "0.1.0", "agent": "opencode", "model": "m",
         "endpoint": "http://e", "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": 1000.0,
+        "exploration_reason": "no_mechanism", "eligible_set": [],
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
     }
     base.update(kw)

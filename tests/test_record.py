@@ -28,7 +28,8 @@ def decision(**kw):
         candidates=[cand(), cand("api", "below_floor", 0.70, 0.012)], chosen="box",
         selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
         mechanism_version="0.1.0", agent="opencode", model="Qwen/Qwen3.6-35B-A3B",
-        endpoint="http://vllm:8000", gateway_quote_usd=0.004, gateway_authorised=True, decided_at=1000.0)
+        endpoint="http://vllm:8000", gateway_quote_usd=0.004, gateway_authorised=True, decided_at=1000.0,
+        exploration_reason="no_mechanism", eligible_set=[])
     base.update(kw)
     return rec.Decision(**base)
 
