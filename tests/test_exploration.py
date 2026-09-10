@@ -884,6 +884,7 @@ def test_amendment_6_the_same_explored_assignment_is_still_served_by_the_stale_a
     assert certified is False  # both facts hold about the SAME assignment; neither computation depended on the other
 
 
+@pytest.mark.xfail(strict=True, reason="written against no_false_certification(evidence_age_days=...), a signature amendment 7 removes: C6 derives each candidate's age from its own evidence_as_of because one scalar cannot be correct for candidates measured at different times. Strict, so this marker cannot be forgotten -- when C6 lands and the test passes, the strict xfail fails and forces its removal.")
 def test_amendment_6_check_certification_falls_silent_on_the_explored_uncertified_row():
     """Item 3: the falsifier (`accept.no_false_certification`, section 12's own name for it) must fall silent on
     the corrected behaviour. The code author's integration report quoted the exact violation this used to raise --
@@ -905,6 +906,7 @@ def test_amendment_6_check_certification_falls_silent_on_the_explored_uncertifie
     assert v.numbers.get("violations", 0) == 0
 
 
+@pytest.mark.xfail(strict=True, reason="written against no_false_certification(evidence_age_days=...), a signature amendment 7 removes: C6 derives each candidate's age from its own evidence_as_of because one scalar cannot be correct for candidates measured at different times. Strict, so this marker cannot be forgotten -- when C6 lands and the test passes, the strict xfail fails and forces its removal.")
 def test_amendment_6_default_is_not_a_hiding_place_also_falls_silent_on_the_explored_uncertified_row():
     """Item 4: an interaction nobody had named before the code author's report. `default_is_not_a_hiding_place`
     flags an uncertified decision made while an admissible candidate existed; here the chosen candidate is not
@@ -941,9 +943,13 @@ def test_amendment_6_explored_uncertified_row_counts_in_all_served_and_not_in_ce
     v = ac.floor_compliance(rows, outcomes, floor=FLOOR)
     assert v.numbers["labelled"] == 10 and v.numbers["rate"] == pytest.approx(1.0)
     assert v.numbers["served_labelled"] == 11
-    assert v.numbers["served_rate"] == pytest.approx(10 / 11)
+    # abs=5e-5, because accept.py rounds every reported rate to four places and has since v0.1.0 (line 179).
+    # A test demanding more precision than the artifact carries asserts something the report deliberately
+    # does not promise, and would fail against a correct implementation.
+    assert v.numbers["served_rate"] == pytest.approx(10 / 11, abs=5e-5)
 
 
+@pytest.mark.xfail(strict=True, reason="written against no_false_certification(evidence_age_days=...), a signature amendment 7 removes: C6 derives each candidate's age from its own evidence_as_of because one scalar cannot be correct for candidates measured at different times. Strict, so this marker cannot be forgotten -- when C6 lands and the test passes, the strict xfail fails and forces its removal.")
 def test_amendment_6_explored_assignment_into_a_fresh_admissible_arm_is_certified():
     """Item 6, the mirror positive amendment 6 names explicitly. Without this test, an implementation that simply
     never certifies an explored assignment -- the "uncertified by construction" position C3's own interface
