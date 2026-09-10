@@ -620,3 +620,71 @@ copying the three lines.
 **`record.EXCLUSION_REASONS`** gains `no_evidence_date`. C1's `from_row` reads a version 1 row whose candidate carries
 an exclusion reason from the old, shorter vocabulary, so the tuple only ever grows: removing a value would make a
 v0.1.0 log unreadable, which is the failure C1 exists to prevent.
+
+## Amendment 8 — the journey layer and a set-guard check each found one thing, and neither was reachable from any entry
+
+Two findings from checks that are not any entry's work. The first came from the journey layer, whose author was kept
+blind to every existing test on purpose. The second came from the set-guard rule in `/review-contract`: verify a guard
+over a set by deleting **each** element in turn, because a guard that passes for the whole set can be false for a
+third of its members.
+
+### C7 — the closed vocabulary is not tied to what the code can produce
+
+`EXCLUSION_REASONS` has nine values. Deleting each in turn and running the whole suite:
+
+| deleted | tests that fail |
+|---|---|
+| `chosen` | 105 |
+| `below_floor` | 51 |
+| `not_evaluated` | 30 |
+| `not_priced` | 5 |
+| `evidence_expired` | 1 |
+| `not_authorised` | **0** |
+| `latency_infeasible` | **0** |
+| `unavailable` | **0** |
+| `no_bound` | **0** |
+
+Four of nine can be removed from the vocabulary with the suite green. `record.admissible` returns those strings and
+`serve._why_not` writes them, so a production path can produce a reason `Candidate.__post_init__` would refuse — and
+the refusal would arrive at write time, in production, on a path no test covers. The membership check that makes the
+enum closed is exactly what makes the gap invisible: the values are checked against each other and against nothing
+that generates them.
+
+**A test asserts that every string any producer can return is in the vocabulary**, and it enumerates the producers:
+`record.admissible`, `explore.clears_floor`, `serve._why_not`. Not a list of the nine values typed a second time —
+that is the same defect one level up, and it is the move `/review-contract` warns against. The subject is the
+**producers**, so a new producer is covered by being called, and a value dropped from the tuple fails because
+something still returns it.
+
+The redundant four are kept. A guard over a set protects the elements something else already depends on and silently
+permits removing the rest, which are exactly the elements that exist for the case that has not happened yet.
+
+### C8 — upgrading a real v0.1.0 ledger takes six loads
+
+Measured, not estimated: the journey author took the candidate file this project shipped at its own `v0.1.0` tag and
+fixed exactly what each error named, nothing more. Six loads — `config_format`, then the first family's shape, then
+that family's four missing keys, then the second family, one problem at a time.
+
+Every one of those problems is knowable on the first read. `load_config` raises on the first it meets and stops. Five
+sequential failures is a correct implementation of five contracts and a hostile journey, and **no entry's tests could
+have seen it**, because each refusal is correct in isolation. It took a reader walking the whole sequence.
+
+**`load_config` collects every problem across every family and raises once**, with all of them named. The `ConfigError`
+message lists them; a caller sees one refusal rather than the first of five. Each individual message keeps the wording
+it has now — those were reviewed and they explain what changed and why, which is the part an operator needs.
+
+**The round-trip count is asserted, not just the aggregation.** The journey test measures loads-until-success against
+the real v0.1.0 file; it currently records six and must record two: the operator reads one message, fixes everything
+it names, and loads again. Asserting the aggregation without the count would pass against a message that lists two
+problems out of five.
+
+### C5's number, from the same journey pass
+
+C5 was specified from the argument that six numbers change silently at the upgrade boundary. One of them is now
+measured, and it does not merely shift — it **reverses a verdict**. Eight v0.1.0 rows written when no exploration
+mechanism existed, plus two v0.2.0 rows that both explored: `exploration_cost` reports one pooled number, 20%, which
+**passes** a 25% budget, while the v0.2.0 mechanism's own rate over the decisions it was eligible to explore is 100%,
+four times over. Nothing in the report distinguishes the two mechanisms.
+
+C5's interface is unchanged. The number is recorded because the entry was argued from a principle and is now also
+supported by an observation, and because it is the test C5 must make fail.
