@@ -68,6 +68,13 @@ EXCLUSION_REASONS = (
 #: never-labelled task becomes a failure in a success rate.
 LABEL_STATES = ("labelled", "missing", "pending")
 
+#: Why `exploration: false` on a decision, or why it is true. Closed for the same reason EXCLUSION_REASONS is:
+#: three causes shared one bit before this existed -- no mechanism installed at all, an eligible set with no
+#: alternative to the deterministic arm, and a rate of zero -- and a silent False could not be attributed to any
+#: of them. `no_mechanism` is also the value a version 1 row reads as (SEAMS.md S4): it never had this field, so
+#: "no mechanism" is the true statement about it, not a guess.
+EXPLORATION_REASONS = ("explored", "no_eligible_arm", "rate_zero", "no_mechanism")
+
 
 class Incomplete(Exception):
     """A record was missing a field a later claim needs. Raised at write time, because the alternative is finding out
@@ -118,6 +125,17 @@ class Decision:
     endpoint: str
     gateway_quote_usd: float | None
     gateway_authorised: bool
+    #: Why exploration did or did not happen, one of EXPLORATION_REASONS. No dataclass default (SEAMS.md S4):
+    #: `no_mechanism` reads correctly for a version 1 row, which never had this field, and wrongly for a version
+    #: 2 row that omits it -- a writer that forgot to stamp the reason would be indistinguishable from a
+    #: mechanism that was never installed, and that count is a number this release reports. `from_row` supplies
+    #: the version 1 value; it is the only caller entitled to.
+    exploration_reason: str
+    #: The candidate ids the draw in `explore.draw` was performed over, so the returned propensity can be
+    #: CHECKED against the set it was drawn from rather than reconstructed from the policy afterwards. Same
+    #: no-default treatment as `exploration_reason`, for the same reason: version 1 rows read this as `[]`
+    #: because no draw was ever performed for them.
+    eligible_set: list
     decided_at: float = field(default_factory=time.time)
     gaps: list = field(default_factory=list)
     label_state: str = "pending"
@@ -143,6 +161,9 @@ class Decision:
                 f"selection_probability {self.selection_probability!r} is not in (0, 1]. A zero propensity for an "
                 f"arm that was chosen is a contradiction, and a missing one leaves every off-policy estimate from "
                 f"this log unidentified")
+        if self.exploration_reason not in EXPLORATION_REASONS:
+            raise Incomplete(f"exploration_reason {self.exploration_reason!r} is not one of "
+                             f"{EXPLORATION_REASONS}; an open-ended reason cannot be aggregated over a log")
         if self.label_state not in LABEL_STATES:
             raise Incomplete(f"label_state {self.label_state!r} is not one of {LABEL_STATES}")
         if self.label_state == "labelled" and self.label is None:
@@ -206,6 +227,11 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
     - A field this version's `Decision` requires (no default) that is absent from the row raises `Incomplete`
       naming it. Absent is never defaulted -- a default invented here would be a value nothing measured. A
       candidate missing a field it requires raises the same way, named by position.
+    - `exploration_reason` and `eligible_set` (C3) are the one exception to "absent is never defaulted", and the
+      exception is by version rather than by field (SEAMS.md S4): a version 1 row supplies `no_mechanism` and
+      `[]` because C3's mechanism did not exist when it was written, and a version 2-or-later row missing either
+      raises `Incomplete` naming it, because for that row the omission means a writer forgot to stamp a fact
+      the mechanism did produce.
     """
     # Version first, before any field is validated against this reader's shape: a row written to a shape this
     # reader does not know cannot be meaningfully checked against the shape it does know -- the fields it thinks
@@ -220,8 +246,28 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
     known = {f.name for f in fields(Decision)}
     ignored = [k for k in row if k not in known]
 
+    # SEAMS.md S4: `exploration_reason` and `eligible_set` have no dataclass default -- a default of
+    # `no_mechanism` would read correctly for a version 1 row and WRONGLY for a version 2 row that omits the
+    # field, making a writer that forgot to stamp it indistinguishable from a mechanism never installed. So the
+    # version decides here, in the one place entitled to say what version a row was written in, rather than the
+    # dataclass deciding for every version at once.
+    S4_VERSION_1_VALUES = {"exploration_reason": "no_mechanism", "eligible_set": []}
+    s4_kw = {}
+    for name in S4_VERSION_1_VALUES:
+        if name in row:
+            continue
+        if version == 1:
+            # A v1 row never had this field, and the C3 mechanism did not exist for it: `no_mechanism` and `[]`
+            # are the true statements about it, not a guess. Fresh literal per call -- `eligible_set` is a list
+            # and every Decision must own its own, never a reference shared across rows.
+            s4_kw[name] = "no_mechanism" if name == "exploration_reason" else []
+        else:
+            raise Incomplete(f"row is missing {name!r}, which schema_version {version} requires and does not "
+                             f"default: only a version 1 row (written before C3's mechanism existed) reads its "
+                             f"absence as no_mechanism/[]")
+
     for f in fields(Decision):
-        if f.name == "schema_version":
+        if f.name == "schema_version" or f.name in S4_VERSION_1_VALUES:
             continue
         if f.default is MISSING and f.default_factory is MISSING and f.name not in row:
             raise Incomplete(f"row is missing {f.name!r}, which this schema requires and does not default")
@@ -235,6 +281,7 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
 
     kw = {k: v for k, v in row.items() if k in known and k not in ("schema_version", "candidates")}
     kw["candidates"] = candidates
+    kw.update(s4_kw)
     decision = Decision(**kw)
     # Bypasses the constructor guard by construction, not by exception: from_row is the one caller entitled to say
     # what version a row was written in, and it says so by mutating the attribute after __post_init__ has already
