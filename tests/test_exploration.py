@@ -14,9 +14,20 @@ entries either side of it:
     exists to reach a candidate whose evidence expired, so an unbounded staleness there is a bound from any past
     environment at all.
   * C3's own closing clause -- `accept.floor_compliance` reports two rates, certified and all-served, so exploring
-    below the floor cannot be laundered by shrinking the denominator that would otherwise show it.
+    below the floor cannot be laundered by shrinking the denominator that would otherwise show it. Amendment 6
+    settles that `floor_compliance` stays ONE verdict (SCOPE section 12 names nine criteria, and splitting one
+    would silently make it ten): the two rates, their two bounds and their two sub-verdicts live in `numbers`, and
+    the criterion's own verdict is the WORSE of the two.
+  * Amendment 6's substantive addition -- an arm reached only through `clears_floor`'s expiry override is SERVED
+    but UNCERTIFIED. SCOPE section 2 had listed admissibility as three conditions while `record.admissible` has
+    enforced four (freshness) since v0.1.0; SCOPE now carries the fourth clause, and `certified` is decided from
+    full admissibility -- freshness included -- never from `explore.eligible`'s verdict, which answers a different
+    question (is this arm reachable by exploration at all) than the one `certified` answers (does this specific
+    assignment, right now, meet every condition needed to trust it). The two decisions can and do disagree on the
+    same candidate, and that disagreement -- served by the stale arm, uncertified for it, still visible in
+    `floor_compliance`'s `all_served` population -- is what closes F8 rather than reopening it.
 
-Only C3 (plus these two seams) is in scope here. C1's reader, C2's parameter plumbing, C4's labeller declaration and
+Only C3 (plus these seams) is in scope here. C1's reader, C2's parameter plumbing, C4's labeller declaration and
 C5's pooling refusal each have their own test files and are not re-tested.
 
 **A reconstruction this file depends on, stated so it is not mistaken for something the contract settled:**
@@ -329,15 +340,13 @@ def test_draw_no_alternative_arm_returns_deterministic_with_propensity_one_and_r
     assert result == ("box", 1.0, "no_eligible_arm")
 
 
-def test_draw_rate_zero_and_no_alternative_both_hold_the_result_is_still_deterministic_with_propensity_one():
-    """AMBIGUITY, not a gap: the contract states two conditions and two reasons ("rate is 0, or eligible has no
-    member other than deterministic... distinguishable") but does not say which reason wins when BOTH hold at
-    once. This test pins only what both branches agree on -- the chosen id and its propensity -- and accepts
-    either reason string, rather than asserting a precedence the contract never settled. See the report: a test
-    author guessing one order here would be pinning an implementer's coin flip, not the contract."""
-    chosen, prob, reason = explore.draw("box", ["box"], 0.0, random.Random(1))
-    assert (chosen, prob) == ("box", 1.0)
-    assert reason in ("rate_zero", "no_eligible_arm")
+def test_draw_rate_zero_and_no_alternative_both_hold_returns_rate_zero():
+    """Amendment 6 settles the precedence this test used to leave open: `rate_zero` wins when both conditions
+    hold, because with a rate of zero the eligible set is never consulted -- reporting `no_eligible_arm` would be
+    reporting on a code path that did not run. Catches an implementation that checks the eligible set first and
+    only falls through to `rate` afterwards, which would report the wrong one of the two whenever both are true."""
+    result = explore.draw("box", ["box"], 0.0, random.Random(1))
+    assert result == ("box", 1.0, "rate_zero")
 
 
 def test_draw_rate_outside_zero_one_raises_value_error_at_one():
@@ -400,30 +409,35 @@ def test_draw_three_arms_at_rate_0_05_gives_propensities_0_95_and_0_025_each():
 def test_draw_alternative_propensities_and_deterministic_propensity_sum_to_one():
     """A cross-check on the arithmetic above that does not depend on which arm was drawn at all: for any single
     draw, the returned propensity is the CHOSEN arm's -- but the mechanism's own accounting must still be
-    internally consistent. Verified indirectly here across many seeds landing on both arms of a 2-arm draw, so a
-    bug that only shows up for one arm's branch cannot hide behind a seed that happens to avoid it.
+    internally consistent. Verified across many seeds landing on both arms of a 2-arm draw, so a bug that only
+    shows up for one arm's branch cannot hide behind a seed that happens to avoid it.
 
-    And the realised share is asserted, not just that both arms appeared, because that is what separates the two
-    mechanisms empirically: spreading the rate over ALL arms including the incumbent gives the alternative 0.025 here,
-    not 0.05, and a test that only checks both arms were reached passes against either.
-
-    The seed count is 2,000 and not 30. At 30 the first draw landing on the alternative is seed 31, one past the end,
-    and the probability of that happening at all is 0.95 ** 30 = 21.5% -- so the original fixture failed one run in
-    five while the mechanism underneath was correct, and a test that fails a fifth of the time teaches a reader to
-    re-run rather than to look."""
+    2,000 seeds, not 30: at rate 0.05 the probability of a correct mechanism never landing on the alternative in 30
+    draws is 0.95**30 = 21.5%, and the first seed (starting from 0) that does land on it is 31 -- one past a
+    30-seed loop's end. An earlier version of this test used 30 and failed one run in five against a CORRECT
+    mechanism, for a reason that had nothing to do with a defect. 2,000 seeds also makes the realised alternative
+    share a meaningful check on its own: asserted within 0.02 of 0.05 below, which is what actually separates the
+    two mechanisms empirically -- spreading the rate over all arms including the incumbent gives the alternative a
+    realised share near 0.025, and a test that only checks both arms were reached at all (never mind how often)
+    passes against either mechanism."""
     seen = set()
-    alternatives = 0
-    trials = 2000
-    for seed in range(trials):
+    alt_count = 0
+    n = 2000
+    for seed in range(n):
         chosen, prob, _ = explore.draw("box", ["box", "alt"], 0.05, random.Random(seed))
         seen.add(chosen)
+        if chosen == "alt":
+            alt_count += 1
         expected = 0.95 if chosen == "box" else 0.05
         assert prob == pytest.approx(expected)
-        alternatives += chosen == "alt"
-    assert seen == {"box", "alt"}, f"{trials} seeds never landed on both arms of a 5% draw"
-    # 0.05 +/- 0.02 is about seven standard errors at this sample size, so this is a check on the mechanism rather
-    # than on the seed sequence, and 0.025 -- the all-arms-including-the-incumbent variant -- is outside it.
-    assert alternatives / trials == pytest.approx(0.05, abs=0.02)
+    assert seen == {"box", "alt"}, f"{n} seeds never landed on both arms of a 5% draw -- fixture is not exercising the draw at all"
+    share = alt_count / n
+    assert abs(share - 0.05) < 0.02, (
+        f"realised alternative share {share:.4f} over {n} draws is not within 0.02 of the declared rate 0.05 -- "
+        "this is the number that would read ~0.025 under a mechanism that spreads the rate over all arms "
+        "including the incumbent, which the per-draw exact-value assertions above catch too, but this is the "
+        "empirical signature named in amendment 6's integration note"
+    )
 
 
 # ======================================================================================================
@@ -689,3 +703,260 @@ def test_floor_compliance_certified_and_all_served_rates_differ_when_uncertified
         "is a copy of the certified one, or it is not counting the uncertified traffic at all"
     )
     assert v.numbers["served_labelled"] == 15
+
+
+def test_floor_compliance_overall_verdict_is_the_worse_of_the_two_sub_verdicts(tmp_path):
+    """Amendment 6: `floor_compliance` stays ONE verdict rather than splitting into two -- SCOPE section 12 names
+    nine criteria, and a split would silently move `accept.CRITERIA` to ten, diverging from the governing document
+    over a presentation choice. The two rates, their two bounds and their two sub-verdicts live in `numbers`; the
+    criterion's OWN `.verdict` is the WORSE of the two.
+
+    Built so the two halves disagree hard, not just numerically: 30 certified successes clear the floor with room
+    to spare (a 95% lower bound around 90%), and 30 further SERVED-but-uncertified decisions, all unsuccessful,
+    drag the all-served rate to 50% against an 80% floor -- far enough below that no confidence bound rescues it.
+    A criterion that reported PASS here, because the certified half alone would pass, is exactly the defeat F8
+    describes, reintroduced through the *report* instead of the *definition*: uncertified traffic quietly
+    excluded from the number a reader actually looks at."""
+    certified_rows = [_acc_dec(rid=f"c{i}", certified=True) for i in range(30)]
+    uncertified_rows = [
+        _acc_dec(rid=f"u{i}", certified=False, chosen="fallback",
+                candidates=[_acc_cand("fallback", "chosen", 0.50), _acc_cand("box", "not_priced", 0.95)])
+        for i in range(30)
+    ]
+    rows = certified_rows + uncertified_rows
+    outcomes = {f"c{i}": {"label_state": "labelled", "label": True} for i in range(30)}
+    outcomes.update({f"u{i}": {"label_state": "labelled", "label": False} for i in range(30)})
+    v = ac.floor_compliance(rows, outcomes, floor=0.80)
+    assert v.numbers["rate"] == pytest.approx(1.0)          # the certified half, alone, clearly clears the floor
+    assert v.numbers["served_rate"] == pytest.approx(0.5)   # the all-served half does not, by a wide margin
+    assert v.verdict == ac.FAIL, (
+        f"certified alone would PASS (rate 100%, well clear of an 80% floor) and all-served alone FAILs (rate "
+        f"50%); the combining rule says the criterion's own verdict is the worse of the two, which is FAIL -- "
+        f"got {v.verdict!r}, which is what a criterion that reports the certified half's verdict alone would give"
+    )
+
+
+# ======================================================================================================
+# Amendment 6 -- an arm reached through the expiry override is served but uncertified
+# ======================================================================================================
+#
+# The code author's integration report, quoted in the coordinator's message: `explore.clears_floor` said
+# `(True, "eligible")` for an arm `record.admissible` refused as `(False, "evidence_expired")`, and
+# `check_certification` correctly flagged the resulting `certified=True` row as a false certification. Root cause
+# was in SCOPE, not the contract: section 2 had listed admissibility as three conditions while `record.admissible`
+# has enforced four (freshness) since v0.1.0; SCOPE now carries the fourth clause. The resolution the tests below
+# pin: `certified` is decided from FULL admissibility, freshness included, never from `explore.eligible`'s
+# verdict -- the two answer different questions (is this arm reachable by exploration at all, versus does this
+# specific assignment meet every condition needed to trust it right now) and can disagree on the same candidate.
+#
+# These tests work at the record/accept layer -- constructing the row a correct writer produces and checking it
+# against `record.admissible`, `accept.no_false_certification`, `accept.default_is_not_a_hiding_place` and
+# `accept.floor_compliance` -- rather than through whatever function in `serve.py` now wires `explore.draw`'s
+# output into a `Decision`. That wiring is not named in C3's interface section, and reaching it would mean reading
+# the code author's own integration work, which the split keeps this file blind to. Every one of amendment 6's
+# six requirements is, however, fully checkable at this layer: "the recorded decision", "check_certification",
+# "default_is_not_a_hiding_place" and "floor_compliance" are all record/accept-level objects and functions.
+
+FLOOR = 0.80
+MAX_EVIDENCE_AGE_DAYS = 30.0     # the ordinary expiry ratchet -- record.admissible's fourth condition
+STALENESS_LIMIT_DAYS = 60.0      # C3's per-family override limit
+STALE_AGE_DAYS = 40.0            # past MAX_EVIDENCE_AGE_DAYS, inside STALENESS_LIMIT_DAYS
+
+
+def _stale_candidate():
+    return rec.Candidate(id="stale_box", excluded_because="chosen", bound=0.90, cost_usd=0.01,
+                         evidence_as_of="2026-08-01")
+
+
+def _draw_into_stale_arm(rate=0.99, tries=50):
+    """Run the REAL `explore.draw`, at a rate high enough that the alternative is drawn nearly every time, until it
+    actually lands on `stale_box` -- so items 1 and 2 below exercise the genuine composition (`draw` decides
+    `chosen`; `record.admissible`, given full freshness data, decides `certified`; neither function is given the
+    other's output) instead of a hand-picked dict, which would assert on values this file chose and would pass
+    unconditionally regardless of what any implementation does. At `rate=0.99` the alternative's propensity is
+    0.99, so the loop is a robustness margin against the rare seed that lands on the deterministic arm, not the
+    mechanism the test is checking."""
+    for seed in range(tries):
+        chosen, prob, reason = explore.draw("reference", ["reference", "stale_box"], rate, random.Random(seed))
+        if chosen == "stale_box":
+            return chosen, prob, reason
+    raise AssertionError(f"no seed among the first {tries} landed on the alternative at rate={rate} -- fixture "
+                         f"problem, not a defect in the mechanism under test")
+
+
+def _explored_into_stale_arm_row(rid="exp1"):
+    """The row amendment 6 is about, with `chosen` and `certified` computed the same way items 1 and 2 compute
+    them -- `explore.draw` decides `chosen`, `record.admissible` (with full freshness data) decides `certified` --
+    so the fixture used by items 3-5 is built by the same rule those two tests verify, not by a second, independent
+    hand-typed guess at what the row should look like.
+
+    The reference/default candidate is its own, separately non-admissible candidate (below the floor, for a
+    reason that has nothing to do with freshness) so that `check_certification`'s scan over every candidate does
+    not stumble on an incidental hiding place -- nothing in this candidate set is admissible, which is the
+    realistic shape of the case the expiry override exists for: A3's ratchet describes a family with NO fresh
+    admissible option, which is exactly why reaching the stale one mattered enough to specify."""
+    chosen, prob, _reason = _draw_into_stale_arm()
+    certified, _why = rec.admissible(_stale_candidate(), floor=FLOOR, authorised=True, latency_feasible=True,
+                                     evidence_age_days=STALE_AGE_DAYS, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    return {
+        "family": "agentic-coding", "request_id": rid, "feature_vector_version": "fv1", "state_ref": "obs:a",
+        "candidates": [
+            {"id": "stale_box", "excluded_because": "chosen", "bound": 0.90, "bound_kind": "lcb95",
+             "cost_usd": 0.01, "evidence_as_of": "2026-08-01"},
+            {"id": "reference", "excluded_because": "below_floor", "bound": 0.60, "bound_kind": "lcb95",
+             "cost_usd": 0.004, "evidence_as_of": "2026-09-01"},
+        ],
+        "chosen": chosen,
+        "selection_probability": prob, "exploration": True, "certified": certified,
+        "policy_version": "p1", "mechanism_version": "0.2.0", "agent": "opencode", "model": "m",
+        "endpoint": "http://e", "gateway_quote_usd": 0.01, "gateway_authorised": True, "decided_at": 1000.0,
+        "gaps": [], "label_state": "pending", "label": None, "outcome": {},
+        "schema_version": 2, "exploration_reason": "explored", "eligible_set": ["stale_box", "reference"],
+    }
+
+
+def _explored_into_fresh_arm_row(rid="exp2"):
+    """Amendment 6's mirror positive (item 6): an explored arm that happens to be fresh and fully admissible --
+    not past `max_evidence_age_days` at all, authorised, latency feasible, priced, above the floor."""
+    return {
+        "family": "agentic-coding", "request_id": rid, "feature_vector_version": "fv1", "state_ref": "obs:a",
+        "candidates": [
+            {"id": "fresh_alt", "excluded_because": "chosen", "bound": 0.90, "bound_kind": "lcb95",
+             "cost_usd": 0.01, "evidence_as_of": "2026-09-05"},
+            {"id": "reference", "excluded_because": "below_floor", "bound": 0.60, "bound_kind": "lcb95",
+             "cost_usd": 0.004, "evidence_as_of": "2026-09-05"},
+        ],
+        "chosen": "fresh_alt",
+        "selection_probability": 0.05, "exploration": True, "certified": True,
+        "policy_version": "p1", "mechanism_version": "0.2.0", "agent": "opencode", "model": "m",
+        "endpoint": "http://e", "gateway_quote_usd": 0.01, "gateway_authorised": True, "decided_at": 1000.0,
+        "gaps": [], "label_state": "pending", "label": None, "outcome": {},
+        "schema_version": 2, "exploration_reason": "explored", "eligible_set": ["fresh_alt", "reference"],
+    }
+
+
+def test_amendment_6_clears_floor_and_admissible_genuinely_disagree_on_the_stale_candidate():
+    """Fixture precondition for items 1 and 2, run as its own test rather than a silent helper: without this, a
+    future edit to `FLOOR`/`MAX_EVIDENCE_AGE_DAYS`/`STALENESS_LIMIT_DAYS`/`STALE_AGE_DAYS` that accidentally closed
+    the divergence between `explore.clears_floor` and `record.admissible` would make items 1 and 2 pass vacuously
+    -- correct output for a scenario that no longer exercises the override at all -- rather than failing loudly at
+    the fixture that stopped meaning what it claims to."""
+    stale = _stale_candidate()
+    clears, why = explore.clears_floor(stale, FLOOR, staleness_limit_days=STALENESS_LIMIT_DAYS,
+                                       evidence_age_days=STALE_AGE_DAYS)
+    assert (clears, why) == (True, "eligible")
+    ok, reason = rec.admissible(stale, floor=FLOOR, authorised=True, latency_feasible=True,
+                                evidence_age_days=STALE_AGE_DAYS, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    assert (ok, reason) == (False, "evidence_expired")
+
+
+def test_amendment_6_explored_assignment_past_max_evidence_age_but_inside_staleness_limit_is_uncertified():
+    """Item 1: assert on the RECORDED decision, not on a predicate. `certified` is computed here by
+    `record.admissible`, called with the REAL freshness data (`evidence_age_days=40`, `max_age_days=30`) on the
+    candidate the REAL `explore.draw` actually chose (see `_draw_into_stale_arm`) -- not by this file asserting a
+    value it picked for itself. The composition -- draw decides which arm, admissible (freshness included) decides
+    whether it is trusted -- is what the row that ought to be written carries: `certified: False`, not because the
+    exploration override says so (it does not; it only says the arm was reachable), but because the arm's evidence
+    is genuinely past the family's ordinary limit."""
+    chosen, _prob, _reason = _draw_into_stale_arm()
+    certified, why = rec.admissible(_stale_candidate(), floor=FLOOR, authorised=True, latency_feasible=True,
+                                    evidence_age_days=STALE_AGE_DAYS, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    assert chosen == "stale_box"
+    assert (certified, why) == (False, "evidence_expired")
+
+
+def test_amendment_6_the_same_explored_assignment_is_still_served_by_the_stale_arm_not_the_default():
+    """Item 2, the sharpest test in the group. `chosen` is decided by `explore.draw` alone, run for real above;
+    `certified` is decided by `record.admissible` alone, on the same candidate, with neither function given the
+    other's output as an input. If a real implementation "solved" the false-certification bug by making
+    eligibility (or certification) gate SERVING itself -- declining to draw an arm whose full admissibility later
+    fails -- `draw` would refuse to land on `stale_box` at all, and this test, which asserts on `draw`'s own
+    output independent of what `admissible` says about the same candidate, is the one that would catch it: the
+    expiry override would be re-closed and A3's ratchet would be back -- an arm nobody routes to is never
+    labelled, so it can never re-earn a fresh bound and is locked out forever, which is the exact failure C3
+    exists to open a door out of. The test above, which only checks `certified is False`, passes against that
+    broken mechanism too if `chosen` silently fell back to `reference` -- this is the one that would not."""
+    chosen, _prob, _reason = _draw_into_stale_arm()
+    assert chosen == "stale_box"
+    assert chosen != "reference"
+    certified, _why = rec.admissible(_stale_candidate(), floor=FLOOR, authorised=True, latency_feasible=True,
+                                     evidence_age_days=STALE_AGE_DAYS, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    assert certified is False  # both facts hold about the SAME assignment; neither computation depended on the other
+
+
+def test_amendment_6_check_certification_falls_silent_on_the_explored_uncertified_row():
+    """Item 3: the falsifier (`accept.no_false_certification`, section 12's own name for it) must fall silent on
+    the corrected behaviour. The code author's integration report quoted the exact violation this used to raise --
+    "certified but the chosen candidate 'box' was not admissible: evidence_expired" -- which could only fire while
+    `certified` was wrongly True. Here it is correctly False, so that specific violation cannot occur regardless of
+    freshness data; this test is what proves NOTHING else does either, which is the evidence the fix landed at the
+    source rather than in the falsifier itself.
+
+    `evidence_age_days`/`max_age_days` are passed through explicitly, matching `record.check_certification`'s own
+    keyword names -- a reconstruction, since amendment 6's message does not state whether
+    `no_false_certification`/`default_is_not_a_hiding_place`/`check_all` gained these keywords or compute
+    per-candidate freshness some other way. It is not a free-standing guess: the code author's own bug report
+    could only have observed `evidence_expired` as a violation reason if SOME call path already threads this data
+    into `check_certification`, and `evidence_age_days`/`max_age_days` are the names that call already uses."""
+    row = _explored_into_stale_arm_row()
+    v = ac.no_false_certification([row], floor=FLOOR, latency_feasible=True,
+                                 evidence_age_days=STALE_AGE_DAYS, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    assert v.verdict == ac.PASS
+    assert v.numbers.get("violations", 0) == 0
+
+
+def test_amendment_6_default_is_not_a_hiding_place_also_falls_silent_on_the_explored_uncertified_row():
+    """Item 4: an interaction nobody had named before the code author's report. `default_is_not_a_hiding_place`
+    flags an uncertified decision made while an admissible candidate existed; here the chosen candidate is not
+    admissible (evidence_expired, once freshness is actually consulted -- see the reconstruction note on the test
+    above) and the fixture's reference candidate is not admissible either -- so nothing in the candidate set is
+    admissible, and the rule must stay silent rather than accuse the mechanism of hiding behind the default when
+    there was no admissible option to hide from.
+
+    Without `evidence_age_days`/`max_age_days` passed through, `admissible` cannot see the freshness condition at
+    all (it is a no-op when either is `None`) and would misjudge the stale chosen candidate as admissible on bound
+    and authorisation alone -- which is precisely the wrong answer this test exists to rule out, and exactly what
+    happens if this keyword-threading reconstruction turns out to be wrong: this test fails loudly (a spurious
+    "hiding place" verdict) rather than silently passing for an unrelated reason."""
+    row = _explored_into_stale_arm_row()
+    v = ac.default_is_not_a_hiding_place([row], floor=FLOOR, latency_feasible=True,
+                                         evidence_age_days=STALE_AGE_DAYS, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    assert v.verdict != ac.FAIL
+    assert "hiding place" not in v.detail
+
+
+def test_amendment_6_explored_uncertified_row_counts_in_all_served_and_not_in_certified():
+    """Item 5: the test that keeps F8 closed. F8's objection to "uncertified by construction" was that it removes
+    traffic from `floor_compliance`'s denominator; the two-rate report is the answer, and this is the test that
+    verifies the traffic actually lands where the answer says it does. Ten ordinary certified successes, plus this
+    one explored-and-uncertified row labelled a failure: the certified rate must stay exactly what it was without
+    it (10 labelled, rate 100%), while `served_labelled` must read 11 and the all-served rate must reflect the
+    failure -- if this row were silently dropped instead of counted in `all_served`, `served_labelled` would still
+    read 10 and the two rates would coincide, which is precisely the gap this test is built to catch."""
+    certified_rows = [_acc_dec(rid=f"c{i}", certified=True) for i in range(10)]
+    explored_row = _explored_into_stale_arm_row(rid="exp1")
+    rows = certified_rows + [explored_row]
+    outcomes = {f"c{i}": {"label_state": "labelled", "label": True} for i in range(10)}
+    outcomes["exp1"] = {"label_state": "labelled", "label": False}
+    v = ac.floor_compliance(rows, outcomes, floor=FLOOR)
+    assert v.numbers["labelled"] == 10 and v.numbers["rate"] == pytest.approx(1.0)
+    assert v.numbers["served_labelled"] == 11
+    assert v.numbers["served_rate"] == pytest.approx(10 / 11)
+
+
+def test_amendment_6_explored_assignment_into_a_fresh_admissible_arm_is_certified():
+    """Item 6, the mirror positive amendment 6 names explicitly. Without this test, an implementation that simply
+    never certifies an explored assignment -- the "uncertified by construction" position C3's own interface
+    section rejects by name (F8) -- would pass every negative test above. A fresh arm, above the floor, with
+    authorisation and latency otherwise holding: `certified` must be True, and the falsifier must have nothing to
+    say about it."""
+    fresh = rec.Candidate(id="fresh_alt", excluded_because="chosen", bound=0.90, cost_usd=0.01,
+                          evidence_as_of="2026-09-05")
+    ok, reason = rec.admissible(fresh, floor=FLOOR, authorised=True, latency_feasible=True,
+                                evidence_age_days=5.0, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    assert (ok, reason) == (True, "chosen"), "fixture sanity check: this candidate must be fully admissible"
+    row = _explored_into_fresh_arm_row()
+    assert row["certified"] is True
+    v = ac.no_false_certification([row], floor=FLOOR, latency_feasible=True,
+                                 evidence_age_days=5.0, max_age_days=MAX_EVIDENCE_AGE_DAYS)
+    assert v.verdict == ac.PASS
