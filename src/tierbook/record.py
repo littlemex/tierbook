@@ -165,12 +165,23 @@ class Decision:
         return d
 
 
-def _candidate_from_row(row: dict) -> Candidate:
-    """One candidate dict from a logged row, into the dataclass. Unknown keys inside a candidate are dropped
-    silently rather than reported: `from_row`'s ignored-keys contract is about the top-level row, and the
-    candidate set has never grown a field since this record existed."""
-    return Candidate(**{k: v for k, v in row.items()
-                        if k in {"id", "excluded_because", "bound", "bound_kind", "cost_usd", "evidence_as_of"}})
+def _candidate_from_row(row: dict, index: int) -> tuple[Candidate, list[str]]:
+    """One candidate dict from a logged row, into the dataclass, at `index` in `candidates`.
+
+    Ignored-and-named applies here too, not only at the top level. F12 (phase 1 findings) proposes replacing
+    `bound_n`/`bound_attempted` with an evidence reference resolving to the ledger, and that field belongs on the
+    CANDIDATE, not the decision -- so a candidate is exactly where this record is next expected to grow, and a
+    reader that ignored-and-named at the top level while dropping an unrecognised candidate key silently would be
+    the same unrepresentable-omission defect one level down, at the field the design already names. The name
+    carries the position (`candidates[1].evidence_ref`) because a reader debugging a fifty-candidate row needs to
+    know which one grew the field, not just that one did.
+    """
+    known = {"id", "excluded_because", "bound", "bound_kind", "cost_usd", "evidence_as_of"}
+    ignored = [f"candidates[{index}].{k}" for k in sorted(row) if k not in known]
+    for f in fields(Candidate):
+        if f.default is MISSING and f.default_factory is MISSING and f.name not in row:
+            raise Incomplete(f"candidates[{index}].{f.name} is required and missing from the row")
+    return Candidate(**{k: v for k, v in row.items() if k in known}), ignored
 
 
 def from_row(row: dict) -> tuple[Decision, list[str]]:
@@ -187,12 +198,19 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
     - A row with no `schema_version` is missing the key entirely (a v0.1.0 record never had it), and is read as
       version 1 by this function's own check, not by an assumption a caller happens to share.
     - A key this Decision does not define is ignored and named in the returned list -- not an error, because a
-      later field being unrecognised is exactly the case this function exists to survive.
+      later field being unrecognised is exactly the case this function exists to survive. A candidate carries the
+      same treatment, named by position (`candidates[1].evidence_ref`), because the candidate set is itself a
+      growth site the design already names (F12's proposed evidence reference is a per-candidate field).
     - A `schema_version` newer than `SCHEMA_VERSION` is refused by name for both versions: reading a future shape
       as if it were this one is the silent-corruption case, not a compatible one.
     - A field this version's `Decision` requires (no default) that is absent from the row raises `Incomplete`
-      naming it. Absent is never defaulted -- a default invented here would be a value nothing measured.
+      naming it. Absent is never defaulted -- a default invented here would be a value nothing measured. A
+      candidate missing a field it requires raises the same way, named by position.
     """
+    # Version first, before any field is validated against this reader's shape: a row written to a shape this
+    # reader does not know cannot be meaningfully checked against the shape it does know -- the fields it thinks
+    # are "missing" might just be renamed or restructured in the version ahead of it, and reporting that as a
+    # missing-field Incomplete would misname the actual problem.
     version = row.get("schema_version", 1)
     if version > SCHEMA_VERSION:
         raise Incomplete(
@@ -200,7 +218,7 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
             f"shape as if it were this one is the silent-corruption case this function exists to refuse")
 
     known = {f.name for f in fields(Decision)}
-    ignored = sorted(k for k in row if k not in known)
+    ignored = [k for k in row if k not in known]
 
     for f in fields(Decision):
         if f.name == "schema_version":
@@ -208,8 +226,15 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
         if f.default is MISSING and f.default_factory is MISSING and f.name not in row:
             raise Incomplete(f"row is missing {f.name!r}, which this schema requires and does not default")
 
+    candidates = []
+    for index, c in enumerate(row["candidates"]):
+        candidate, candidate_ignored = _candidate_from_row(c, index)
+        candidates.append(candidate)
+        ignored.extend(candidate_ignored)
+    ignored.sort()
+
     kw = {k: v for k, v in row.items() if k in known and k not in ("schema_version", "candidates")}
-    kw["candidates"] = [_candidate_from_row(c) for c in row["candidates"]]
+    kw["candidates"] = candidates
     decision = Decision(**kw)
     # Bypasses the constructor guard by construction, not by exception: from_row is the one caller entitled to say
     # what version a row was written in, and it says so by mutating the attribute after __post_init__ has already
@@ -366,6 +391,9 @@ class Log:
                     if strict:
                         raise Incomplete(f"line {n} of {self.path} parsed as JSON but its record could not be "
                                          f"read: {exc}") from exc
+                    # Excluded from `decisions`, not appended-and-flagged: a row this reader could not turn into a
+                    # Decision has no fields a criterion can trust, so it exists in `__unreadable_rows__` and
+                    # nowhere else -- the same fate a corrupt line gets from `bad`, for the same reason.
                     unreadable.append(f"line {n}: {exc}")
                     continue
                 decisions.append(row)
