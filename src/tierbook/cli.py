@@ -141,7 +141,11 @@ def cmd_compile(args) -> int:
     # can review afterwards.
     cfg = _config(args) if args.config else None
     if cfg:
-        families = dict(cfg.families)
+        families = {fam: decl.reference for fam, decl in cfg.families.items()}
+        # The floor lives beside the reference in the SAME declaration, keyed the same way: it is a per-family
+        # requirement (SCOPE sections 2, 5, 12 all say "the family's floor"), and a config file is where an
+        # operator states one, not a flag -- see config.FamilyDeclaration.
+        floors = {fam: decl.floor for fam, decl in cfg.families.items()}
         args.margin = args.margin if args.margin is not None else cfg.objective.margin
         args.alpha = cfg.objective.alpha
         args.max_age_days = cfg.objective.max_age_days
@@ -151,6 +155,9 @@ def cmd_compile(args) -> int:
         if not args.family:
             sys.exit("--family FAMILY=REFERENCE is required unless --config supplies families")
         families = dict(pair.split("=", 1) for pair in args.family)
+        # No config, so no family declaration to read a floor from. `--family` is documented as the one-off
+        # path; a deployment that needs a floor recorded reads one from a committed candidate file instead.
+        floors = {}
     tp = dict(cfg.throughput_per_family) if cfg else {}
     tp.update((k, float(v)) for k, v in (p.split("=", 1) for p in args.throughput_per_family or []))
     o = cfg.objective if cfg else None
@@ -212,10 +219,11 @@ def cmd_compile(args) -> int:
                                                     or ((o.latency_slo_p95_ms / 1000.0)
                                                         if o and o.latency_slo_p95_ms else None)),
                                  max_evidence_age_days=args.max_age_days,
-                                 # Written into the artifact rather than left to be typed again at `assign` or
-                                 # `accept` time -- see decide.Policy.parameters. `None` when the operator did
-                                 # not state one at compile time, which is the true statement, not a guess.
-                                 floor=args.floor)
+                                 # Read from the family's own declaration (config.FamilyDeclaration), not a
+                                 # flag: the floor is per family, and a table compiled without --config has no
+                                 # declaration to read one from, so `floors.get(fam)` is `None` there -- absent
+                                 # rather than guessed, and not one flag silently shared by every family.
+                                 floor=floors.get(fam))
             table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
             bound = ((pol.domain or {}).get(f"inflight:{sorted(self_hosted)[0]}")
                      if self_hosted else None)
@@ -589,11 +597,6 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--alpha", type=float, default=0.05)
     c.add_argument("--throughput-per-family", action="append", metavar="FAMILY=TASKS_PER_HOUR")
     c.add_argument("--max-age-days", type=int, default=90)
-    c.add_argument("--floor", type=float, default=None,
-                   help="the family's success-rate floor this table is compiled under. Written into the "
-                        "compiled policy's parameters (decide.Policy.parameters) so `assign` and `accept` can "
-                        "confirm what they are given against it instead of trusting a number typed again at a "
-                        "shell prompt. Absent by default, which is recorded as absent rather than guessed")
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
     c.add_argument("--service-curve", action="append", default=None,

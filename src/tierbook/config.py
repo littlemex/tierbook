@@ -31,7 +31,11 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_FORMAT = 1
+#: Bumped to 2 when `families` stopped mapping a family to a bare reference-candidate string and started
+#: mapping it to an object -- see `FamilyDeclaration`. The floor moved here because SCOPE sections 2, 5 and 12
+#: all call it "the family's floor": a single `--floor` flag shared by every family in the ledger was a wrong
+#: answer with nothing to compare it against, which is worse than the defect it was meant to fix.
+CONFIG_FORMAT = 2
 
 # Keys that describe how to bring a model into existence rather than how to reach one. Rejected with the
 # name of the boundary they cross, because the person who wrote them is usually doing something reasonable
@@ -135,16 +139,36 @@ class Objective:
 
 
 @dataclass(frozen=True)
+class FamilyDeclaration:
+    """One family's row in the candidate file -- what an operator declares rather than what a measurement
+    produces, keyed by the family it is about.
+
+    `floor` lives here, not in a flag, because it is stated in exactly those words as a per-family fact by
+    SCOPE sections 2, 5 and 12 ("the family's floor"), and it is what the compiled policy's thresholds are
+    derived against (A2.1) -- supplying it is right, deriving it would not be. A single command-line flag
+    shared by every family in a ledger let two families with different requirements silently share whichever
+    number was typed, which is worse than the config_format 1 defect this replaced: that defect at least left
+    a second typed number to compare against, and one flag for two families leaves nothing to compare at all.
+
+    C4 (SEAMS.md S1) adds a labeller and a maximum label latency to this same object once it exists; this entry
+    creates the shape and does not anticipate those keys.
+    """
+
+    reference: str
+    floor: float
+
+
+@dataclass(frozen=True)
 class Config:
     candidates: dict[str, Candidate]
-    families: dict[str, str]              # family -> reference candidate id
+    families: dict[str, FamilyDeclaration]      # family -> its declaration
     objective: Objective
     throughput_per_family: dict[str, float] = field(default_factory=dict)
     source: str = ""
 
     def reference_for(self, family: str) -> str:
         try:
-            return self.families[family]
+            return self.families[family].reference
         except KeyError:
             raise ConfigError(
                 f"no reference candidate configured for family {family!r}; the configured families are "
@@ -261,8 +285,27 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
         min_completion_probability=(cons.get("reliability") or {}).get("min_completion_probability"),
         max_age_days=int(obj_raw.get("max_age_days", 90)),
     )
-    families = dict(raw.get("families") or {})
-    unknown = {f: r for f, r in families.items() if r not in candidates}
+    families: dict[str, FamilyDeclaration] = {}
+    for fam, decl in (raw.get("families") or {}).items():
+        if isinstance(decl, str):
+            raise ConfigError(
+                f"family {fam!r} names its reference candidate as a bare string, {decl!r} -- the config_format 1 "
+                f"shape. As of config_format {CONFIG_FORMAT} a family is an object carrying its own floor beside "
+                "its reference, because the floor is the family's own requirement (SCOPE calls it \"the family's "
+                "floor\" in sections 2, 5 and 12) and a single flag shared by every family in the ledger let two "
+                f"families with different requirements silently share whichever number was typed. Change it to "
+                f'{{"reference": {decl!r}, "floor": <this family\'s success-rate floor>}}.'
+            )
+        if not isinstance(decl, dict):
+            raise ConfigError(f"family {fam!r} must be an object with 'reference' and 'floor', not {decl!r}")
+        missing = [k for k in ("reference", "floor") if k not in decl]
+        if missing:
+            raise ConfigError(
+                f"family {fam!r} is missing {missing}: a family object needs both the candidate it falls back "
+                "to and the floor its certified assignment must clear"
+            )
+        families[fam] = FamilyDeclaration(reference=decl["reference"], floor=float(decl["floor"]))
+    unknown = {f: d.reference for f, d in families.items() if d.reference not in candidates}
     if unknown:
         raise ConfigError(f"families name references that are not candidates: {unknown}")
     return Config(
