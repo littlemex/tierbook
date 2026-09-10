@@ -480,10 +480,16 @@ spec:
       containers:
         - name: shim
           image: python:3.12-slim
-          command: ["python3", "-u", "/code/oai_to_anthropic.py", "--listen", "8000",
-                    "--upstream", "https://d8b03j8erit4k.cloudfront.net",
-                    "--log", "/data/gw-shim/requests.jsonl"]
+          # The upstream comes from the environment. It was a literal here, pointing at one particular gateway, which
+          # is both an environment-specific value in a public manifest and a footgun: applying this unedited sends
+          # traffic somewhere the applier did not choose.
+          command: ["sh", "-c",
+                    'test -n "$SHIM_UPSTREAM" || { echo "set SHIM_UPSTREAM to your gateway base URL" >&2; exit 2; }; '
+                    'exec python3 -u /code/oai_to_anthropic.py --listen 8000 --upstream "$SHIM_UPSTREAM" '
+                    '--log /data/gw-shim/requests.jsonl']
           env:
+            - name: SHIM_UPSTREAM
+              value: ""    # set this, or the container refuses to start
             - name: SHIM_API_KEY
               valueFrom: { secretKeyRef: { name: gw-shim-key, key: key } }
           ports: [{ name: http, containerPort: 8000 }]

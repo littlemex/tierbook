@@ -5,7 +5,7 @@
     "api-strong-a": {
       "deployment": "api",
       "endpoint": {
-        "base_url": "https://d8b03j8erit4k.cloudfront.net/v1",
+        "base_url": "https://gateway.example.invalid/v1",
         "model": "strong-model-a",
         "wire": "chat",
         "api_key_env": "TIERBOOK_API_KEY",
@@ -22,7 +22,7 @@
     "api-cheap-a": {
       "deployment": "api",
       "endpoint": {
-        "base_url": "https://d8b03j8erit4k.cloudfront.net/v1",
+        "base_url": "https://gateway.example.invalid/v1",
         "model": "cheap-model-a",
         "wire": "responses",
         "api_key_env": "TIERBOOK_API_KEY",
