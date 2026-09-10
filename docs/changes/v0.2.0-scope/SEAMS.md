@@ -76,3 +76,24 @@ copy is the defect this release opened with; reproducing that shape inside the f
 **Rejected: C4 refuses without parsing, by checking key presence only.** It works, and it leaves the rate readable only
 as an unparsed dict key, so C3 would have to re-derive the type and the absent-versus-zero distinction that C4 already
 decided. Two readers of one value again.
+
+## S4 — a field added by C3 is read by C1, and the two rules contradict unless the version decides
+
+**Raised by** amendment 5, by listing `Decision`'s fields that have no default rather than reading C3's prose.
+
+C1's `from_row` raises `Incomplete` naming any field the row lacks that the dataclass declares without a default —
+sixteen fields today. C3 adds `exploration_reason` and `eligible_set` to the same dataclass, and the contract says
+"version 1 rows read as `no_mechanism`". Those two statements cannot both hold for a field with no default.
+
+**Resolved:** `from_row` supplies the version 1 value — `no_mechanism` and `[]` — for `schema_version == 1`, and raises
+`Incomplete` naming the field for `schema_version >= 2`. The dataclass declares no default, so nothing else can supply
+one. C3 owns the fields; C1's reader owns the version rule; the rule is stated here because it belongs to the boundary.
+
+**Rejected: a dataclass default of `no_mechanism`.** It reads correctly for a version 1 row and wrongly for a version 2
+row that omits the field — a writer that forgot to stamp the reason would be indistinguishable from a mechanism that was
+never installed, and "how many decisions had no exploration mechanism" is a number this release reports. The cheaper
+option makes the omission silent in exactly the direction that corrupts a reported count.
+
+**Rejected: C3 backfills existing rows.** Rewriting the log to carry a field its writer never wrote makes the log
+append-only in bytes and mutable in meaning, which `record.Log` already refuses for labels and would have no reason to
+permit for this.

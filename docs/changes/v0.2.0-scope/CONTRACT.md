@@ -454,3 +454,41 @@ artifact cannot represent the combination, so the omission is a load failure and
 **`record.classify_label(decided_at, now, max_label_latency_s, label) -> str`** — unchanged from the section above,
 including the `ValueError` on `max_label_latency_s is None` and `Log.read` not reclassifying a row below
 `schema_version` 2.
+
+## Amendment 5 — the staleness limit repeats the floor's mistake, and C3's two new record fields collide with C1's reader
+
+Both found before C3's workers were launched, by re-deriving the numbers the entry carries rather than trusting the
+entry's prose. The first is amendment 2's defect in a second value; the second is a seam between two entries that are
+each individually correct.
+
+**A5.1 — `staleness_limit_days` has no declared source, exactly as the floor had none.** C2 carries it in
+`Policy.parameters` and `compile_policy` takes it as an argument, and `decide.py`'s own comment says it "has no source
+yet -- C3's". So a C3 worker told the limit is "declared per family and recorded in the artifact under C2" would go
+looking for the declaration, not find one, and invent a supply point — which is precisely what C2's worker did with
+`compile --floor`, and why amendment 2 exists. Saying it once here is cheaper than the same amendment twice.
+
+The limit is per family for the same reason the floor is: it is how stale a bound an operator will accept for *this*
+family's traffic, which no measurement settles. So it is a fourth append to the object C2 created and C4 extended —
+`SEAMS.md` S1 — and `compile` threads it into `parameters` the way it already threads the floor.
+
+**`config.FamilyDeclaration`** gains `staleness_limit_days: float | None`. Refused when absent, like C4's three;
+`null` is a legitimate declaration meaning no limit, and it is refused **in combination with an `exploration_rate`**,
+because the door C3 opens exists to reach a candidate whose evidence expired, so an unbounded staleness there is a
+bound from any past environment at all. A family may decline to state a limit or may explore, not both.
+
+**A5.2 — `exploration_reason` cannot be a required field, and must not be an optional one either.** C1's `from_row`
+raises `Incomplete` naming any field the row lacks that the dataclass declares without a default. `Decision` has
+sixteen such fields today. So `exploration_reason` added without a default refuses **every v0.1.0 row**, which is the
+exact failure C1 was built to remove — reintroduced by the next entry, one release later, in the same object.
+
+Given a default of `no_mechanism` it reads correctly for a version 1 row and **wrongly** for a version 2 row that
+omits it: a v0.2.0 writer that forgot to stamp the reason would be read as a mechanism that was never installed, and
+the count of decisions with no exploration mechanism is a number this release reports.
+
+**Resolved by making the version decide, not the default:** `from_row` supplies `no_mechanism` for
+`schema_version == 1` and raises `Incomplete` naming the field for `schema_version >= 2`. Recorded as `SEAMS.md` S4,
+because it is a rule about the boundary between C1's reader and C3's writer and belongs to neither alone. The same
+treatment applies to `eligible_set`, whose version 1 value is the empty list.
+
+This is the shape `/review-contract` calls making the omission unrepresentable rather than watched: a v2 writer that
+forgets the field fails at read time, loudly, instead of the forgotten value being indistinguishable from a real one.
