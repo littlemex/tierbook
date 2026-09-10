@@ -296,7 +296,7 @@ def _minimal_candidates(*, config_format=2, families=None) -> dict:
                     "endpoint": {"base_url": "https://x/v1", "model": "m"},
                     "price_per_mtok": {"fresh_in": 1.0, "cached_in": 0.1, "out": 5.0}},
         },
-        "families": families if families is not None else {"f": {"reference": "ref", "floor": 0.5}},
+        "families": families if families is not None else {"f": {"reference": "ref", "floor": 0.5, "label_source": "executable_acceptance", "max_label_latency_s": 3600.0, "label_independent_of_candidate": True}},
         "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
     }
 
@@ -374,7 +374,7 @@ def test_config_format_1_is_refused_rather_than_read_as_the_new_shape(tmp_path):
     migration text -- so accepting format 1 outright still produced a `ConfigError` matching `config_format` and
     the test passed against a loader that read the old format happily. A file that is otherwise entirely
     well-formed leaves the version check as the only thing that can refuse it."""
-    body = _minimal_candidates(config_format=1, families={"f": {"reference": "ref", "floor": 0.80}})
+    body = _minimal_candidates(config_format=1, families={"f": {"reference": "ref", "floor": 0.80, "label_source": "executable_acceptance", "max_label_latency_s": 3600.0, "label_independent_of_candidate": True}})
     with pytest.raises(ConfigError, match="config_format"):
         load_config(_write_candidates(tmp_path, body))
 
@@ -391,9 +391,14 @@ def test_two_families_with_different_floors_each_carry_their_own_in_the_compiled
     exists to close: two families with different accuracy requirements silently sharing one number."""
     raw = json.loads(EXAMPLE_CANDIDATES.read_text())
     raw["config_format"] = 2
+    # The label fields are C4's and carry no floor, so they are held constant across both families: this test's
+    # subject is that two floors stay two numbers, and varying anything else alongside them would leave a failure
+    # with two candidate causes.
+    labels = {"label_source": "executable_acceptance", "max_label_latency_s": 3600.0,
+              "label_independent_of_candidate": True}
     raw["families"] = {
-        "agentic-coding": {"reference": "api-strong-a", "floor": 0.65},
-        "tool-agent-user-retail": {"reference": "api-strong-a", "floor": 0.85},
+        "agentic-coding": {"reference": "api-strong-a", "floor": 0.65, **labels},
+        "tool-agent-user-retail": {"reference": "api-strong-a", "floor": 0.85, **labels},
     }
     config_path = _write_candidates(tmp_path, raw)
     out_path = tmp_path / "table.json"
