@@ -85,6 +85,11 @@ _FAMILY_KEY_DEFAULTS = {
 _RE_CONFIG_FORMAT = re.compile(r"config_format must be (\d+)")
 _RE_BARE_STRING = re.compile(r"family '([^']+)' names its reference candidate as a bare string, '([^']+)'")
 _RE_MISSING_KEYS = re.compile(r"family '([^']+)' is missing \[([^\]]*)\]")
+#: The shape a refusal prints for a reader to copy, and the keys inside it. Parsed rather than
+#: assumed, so that a message naming a partial shape produces a partial fix and shows up as an
+#: extra load rather than being silently completed by this fixer.
+_RE_REPLACEMENT_SHAPE = re.compile(r"Change it to \{(.*?)\}\.", re.S)
+_RE_SHAPE_KEY = re.compile(r'"([a-z_]+)":')
 
 
 def _apply_fixes_named_in_message(raw: dict, message: str) -> int:
@@ -109,7 +114,16 @@ def _apply_fixes_named_in_message(raw: dict, message: str) -> int:
         applied += 1
 
     for fam, ref in _RE_BARE_STRING.findall(message):
-        raw["families"][fam] = {"reference": ref, "floor": _FAMILY_KEY_DEFAULTS["floor"]}
+        # The keys are read out of the shape the message PRINTS, not from a list typed here. Amendment 10.2 is
+        # the reason: this fixer used to write `{"reference": ..., "floor": ...}` because that is what the
+        # message printed at the time -- two keys of the six a family requires -- so a reader following it
+        # landed in a state the loader already knew was invalid, and the round trip cost four extra loads. A
+        # fixer with the shape hardcoded cannot tell whether the message names the whole shape or part of it,
+        # which is the one thing this file has to be able to measure.
+        shape = _RE_REPLACEMENT_SHAPE.search(message[message.index(f"family '{fam}'"):])
+        keys = _RE_SHAPE_KEY.findall(shape.group(1)) if shape else ["reference", "floor"]
+        assert "reference" in keys, f"the replacement shape for {fam!r} does not name 'reference': {shape}"
+        raw["families"][fam] = {k: (ref if k == "reference" else _FAMILY_KEY_DEFAULTS[k]) for k in keys}
         applied += 1
 
     for fam, keys_blob in _RE_MISSING_KEYS.findall(message):
@@ -168,13 +182,22 @@ def test_round_trip_against_real_v0_1_0_file_is_two_loads():
 # --- every one of the five problems is named, individually, in the one raised message ----------------
 
 
-def test_all_five_v010_problems_are_named_in_the_single_message():
-    """Catches an aggregation that drops one of the five known problems -- each assertion is a distinct
-    substring lifted verbatim from today's individual refusal messages (not a count), so a message that
-    aggregates four of the five problems fails this test and says which one is missing. This also pins that
-    each refusal keeps its current wording: an aggregation that summarised these into a terse list would lose
-    the explanation of what changed and why, which is exactly the amendment 8 text this entry answers.
-    """
+def test_every_v010_problem_is_named_in_the_single_message():
+    """Catches an aggregation that drops one of the problems the real v0.1.0 file has -- each assertion is a
+    distinct substring lifted verbatim from today's individual refusal messages, not a count, so a message
+    that aggregates some of them fails and says which is missing. This also pins that each refusal keeps its
+    current wording: an aggregation that summarised these into a terse list would lose the explanation of what
+    changed and why, which is the amendment 8 text this entry answers.
+
+    Written first for FIVE problems, and that was the pre-amendment-10.2 shape. There are three. A family
+    declared as a bare string is not yet an object, so `is missing [...]` cannot apply to it -- and under
+    amendment 10.2 it does not need to, because the bare-string refusal now prints the WHOLE shape rather than
+    `{"reference": ..., "floor": ...}`. So the two missing-keys messages are not dropped, they are subsumed,
+    and asserting on them here would demand a message that reports the same defect twice.
+
+    What replaces them is the last assertion: the printed shape names every required key. That is the property
+    amendment 10.2 actually added, and it is stronger than the two substrings it retired, because a message
+    naming four of six keys would pass a `is missing` check and still cost the reader a second load."""
     raw = _v010_candidates_raw()
     with tempfile.TemporaryDirectory() as d:
         p = _write(Path(d), raw)
@@ -184,9 +207,18 @@ def test_all_five_v010_problems_are_named_in_the_single_message():
 
     assert f"config_format must be {CONFIG_FORMAT}, found 1" in message
     assert "family 'agentic-coding' names its reference candidate as a bare string" in message
-    assert "family 'agentic-coding' is missing" in message
     assert "family 'tool-agent-user-retail' names its reference candidate as a bare string" in message
-    assert "family 'tool-agent-user-retail' is missing" in message
+    # Amendment 10.2: a refusal that names a shape names the WHOLE shape. Six keys, from the message itself.
+    for family in ("agentic-coding", "tool-agent-user-retail"):
+        shape = _RE_REPLACEMENT_SHAPE.search(message[message.index(f"family '{family}'"):])
+        assert shape, f"no replacement shape printed for {family!r}"
+        named = set(_RE_SHAPE_KEY.findall(shape.group(1)))
+        required = {"reference", "floor", "label_source", "max_label_latency_s",
+                    "label_independent_of_candidate", "staleness_limit_days"}
+        assert required <= named, (
+            f"{family}'s replacement shape names {sorted(named)} and omits {sorted(required - named)}; a reader "
+            f"copying it lands in a state the loader already knows is invalid, which is four of the six loads "
+            f"amendment 10.2 measured")
 
 
 # --- two independent problems in two different families, aggregated -- the case that is not ambiguous ---

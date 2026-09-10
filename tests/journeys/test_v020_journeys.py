@@ -211,20 +211,27 @@ def _fix_exactly_what_the_message_said(cfg: dict, message: str) -> dict:
     import re
 
     cfg = json.loads(json.dumps(cfg))  # deep copy
+    # EVERY problem the message names, not the first one. The original version returned after each `if`, which
+    # modelled a reader acting on a message that reports one problem at a time -- correct when it was written
+    # and wrong once C8 aggregated. A first-hit-wins fixer cannot credit an aggregation, so it would keep
+    # measuring the old count against a loader that had been fixed. This is the persona acting on the whole
+    # message, which is what a person does with a numbered list.
+    acted = False
     if "config_format must be 2" in message:
         cfg["config_format"] = 2
-        return cfg
-    m = re.search(r"family '([^']+)' names its reference candidate as a bare string, '([^']+)'", message)
-    if m:
-        fam, ref = m.group(1), m.group(2)
-        # The message's own suggested replacement names `floor` with a placeholder
-        # ("<this family's success-rate floor>"): a real operator fills it with their own number, which is
-        # exactly what SCOPE section 5 says only an operator can supply.
-        cfg["families"][fam] = {"reference": ref, "floor": _OPERATOR_SUPPLIED_FLOORS[fam]}
-        return cfg
-    m = re.search(r"family '([^']+)' is missing (\[[^\]]*\])", message)
-    if m:
-        fam, missing = m.group(1), eval(m.group(2))  # noqa: S307 -- a literal list from our own error text
+        acted = True
+    for fam, ref in re.findall(r"family '([^']+)' names its reference candidate as a bare string, '([^']+)'",
+                               message):
+        # The keys come out of the shape the message PRINTS, so a message naming a partial shape produces a
+        # partial fix and shows up as an extra round trip rather than being silently completed here. The values
+        # do not: `floor` is a placeholder a real operator fills with their own number, which SCOPE section 5
+        # says only an operator can supply.
+        shape = re.search(r"Change it to \{(.*?)\}\.", message[message.index(f"family '{fam}'"):], re.S)
+        keys = re.findall(r'"([a-z_]+)":', shape.group(1)) if shape else ["reference", "floor"]
+        cfg["families"][fam] = {k: (ref if k == "reference" else _key_value(fam, k)) for k in keys}
+        acted = True
+    for fam, missing in re.findall(r"family '([^']+)' is missing \[([^\]]*)\]", message):
+        fam, missing = fam, [k.strip().strip("'\"") for k in missing.split(",")]
         for key in missing:
             if key == "floor":
                 cfg["families"][fam][key] = _OPERATOR_SUPPLIED_FLOORS[fam]
@@ -236,8 +243,18 @@ def _fix_exactly_what_the_message_said(cfg: dict, message: str) -> dict:
                 cfg["families"][fam][key] = True
             elif key == "staleness_limit_days":
                 cfg["families"][fam][key] = None
-        return cfg
-    raise AssertionError(f"the round-trip helper does not know how to act on this message: {message!r}")
+        acted = True
+    if not acted:
+        raise AssertionError(f"the round-trip helper does not know how to act on this message: {message!r}")
+    return cfg
+
+
+def _key_value(fam: str, key: str):
+    """One family key's value, for a reader filling in the shape a refusal printed."""
+    if key == "floor":
+        return _OPERATOR_SUPPLIED_FLOORS[fam]
+    return {"label_source": "executable_acceptance", "max_label_latency_s": 3600.0,
+            "label_independent_of_candidate": True, "staleness_limit_days": None}[key]
 
 
 def _load_config_round_trips(cfg: dict, tmp_path: Path) -> tuple[int, dict]:
@@ -259,16 +276,6 @@ def _load_config_round_trips(cfg: dict, tmp_path: Path) -> tuple[int, dict]:
     raise AssertionError("did not converge in 20 round trips")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "P2's upgrade path surfaces one problem per family per pass instead of one aggregated correction: a "
-        "real two-family v0.1.0 candidates.json (the exact file this project shipped at the v0.1.0 tag) "
-        "takes 5 failed load_config attempts -- config_format, then per family: the bare-string-to-object "
-        "migration, then that family's four missing keys -- before it loads, when the loader already knows "
-        "about every family and every missing key on the first read and could have said so once."
-    ),
-)
 def test_p2_upgrade_round_trip_count_from_a_real_v010_ledger(tmp_path: Path):
     """P2 already ran v0.1.0 and has a `candidates.json` at `config_format: 1` -- this is not a synthetic
     minimal example, it is the exact two-family shape this project itself shipped in its own v0.1.0 tag
