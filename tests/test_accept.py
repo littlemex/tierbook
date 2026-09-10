@@ -112,11 +112,36 @@ def test_a_rate_far_below_the_floor_fails():
     assert v.verdict == ac.FAIL and v.numbers["rate"] == 0.25
 
 
-def test_a_compliant_rate_over_enough_labels_passes():
+def test_compliance_passes_only_when_the_lower_bound_clears_the_floor():
+    """PASS asks whether compliance was SHOWN, which is not the negation of the failure test. An earlier version
+    passed when the failure test did not reject, which is accepting a null."""
+    rows = [dec(rid=f"r{i}") for i in range(60)]
+    outcomes = {f"r{i}": {"label_state": "labelled", "label": i < 57} for i in range(60)}
+    v = ac.floor_compliance(rows, outcomes, floor=0.80)
+    assert v.verdict == ac.PASS and v.numbers["rate"] == 0.95
+    assert v.numbers["lower_bound"] >= 0.80
+
+
+def test_a_rate_above_the_floor_whose_bound_does_not_clear_it_is_unsupported():
+    """36 of 40 is 90% against a floor of 80%, and its 95% lower bound is 78.6%. Not a failure and not a pass."""
     rows = [dec(rid=f"r{i}") for i in range(40)]
     outcomes = {f"r{i}": {"label_state": "labelled", "label": i < 36} for i in range(40)}
     v = ac.floor_compliance(rows, outcomes, floor=0.80)
-    assert v.verdict == ac.PASS and v.numbers["rate"] == 0.9
+    assert v.verdict == ac.UNSUPPORTED
+    assert v.numbers["rate"] == 0.9 and v.numbers["lower_bound"] < 0.80
+
+
+def test_a_small_sample_can_still_pass_when_its_bound_clears_the_floor():
+    """An earlier version gated the middle case on `n < 30`, a constant nobody derived, and would have called this
+    unsupported. 29 of 29 has a 95% lower bound of 90.2%, which clears a floor of 80% on its own evidence.
+
+    Asserted on behaviour rather than by grepping the source: a first version of this test searched
+    `floor_compliance` for the string `n < 30` and matched the comment that explains its removal."""
+    rows = [dec(rid=f"r{i}") for i in range(29)]
+    outcomes = {f"r{i}": {"label_state": "labelled", "label": True} for i in range(29)}
+    v = ac.floor_compliance(rows, outcomes, floor=0.80)
+    assert v.verdict == ac.PASS, v.detail
+    assert v.numbers["labelled"] == 29 and v.numbers["lower_bound"] >= 0.80
 
 
 def test_a_small_sample_is_unsupported_even_when_the_rate_looks_fine():
@@ -125,7 +150,8 @@ def test_a_small_sample_is_unsupported_even_when_the_rate_looks_fine():
     outcomes = {f"r{i}": {"label_state": "labelled", "label": True} for i in range(5)}
     v = ac.floor_compliance(rows, outcomes, floor=0.80)
     assert v.verdict == ac.UNSUPPORTED and v.numbers["rate"] == 1.0
-    assert "cannot separate compliance from sampling error" in v.detail
+    assert v.numbers["lower_bound"] < 0.80
+    assert "not mistaken for a pass" in v.detail
 
 
 # --- exploration and the SLO ------------------------------------------------------------------------
@@ -207,3 +233,35 @@ def test_the_checker_reads_what_the_log_writes(tmp_path):
     got = {v.criterion: v for v in ac.check_all(decisions, outcomes, floor=0.80)}
     assert got["no_false_certification"].verdict == ac.PASS
     assert got["floor_compliance"].numbers["labelled"] == 1
+
+
+# --- the bound itself, since a criterion now turns on it --------------------------------------------
+
+
+def test_the_lower_bound_is_monotone_and_bracketed():
+    for n in (5, 40, 200):
+        prev = -1.0
+        for k in range(0, n + 1):
+            b = ac.clopper_pearson_lower(n, k, 0.05)
+            assert 0.0 <= b <= 1.0
+            assert b >= prev, (n, k)
+            prev = b
+
+
+def test_zero_successes_has_no_positive_lower_bound():
+    assert ac.clopper_pearson_lower(20, 0, 0.05) == 0.0
+
+
+def test_all_successes_gives_the_textbook_bound():
+    """1 - (1-alpha)^(1/n) is the classic one-sided bound for k == n, written as alpha^(1/n) for the lower side."""
+    assert ac.clopper_pearson_lower(10, 10, 0.05) == pytest.approx(0.05 ** 0.1, abs=1e-9)
+
+
+def test_a_wider_interval_gives_a_lower_bound():
+    assert ac.clopper_pearson_lower(40, 36, 0.01) < ac.clopper_pearson_lower(40, 36, 0.05)
+
+
+def test_the_binomial_tail_is_exact():
+    assert ac.binom_tail_at_most(10, 10, 0.5) == pytest.approx(1.0)
+    assert ac.binom_tail_at_most(10, 0, 0.5) == pytest.approx(0.5 ** 10)
+    assert ac.binom_tail_at_most(2, 1, 0.5) == pytest.approx(0.75)

@@ -128,6 +128,33 @@ def default_is_not_a_hiding_place(decisions: list, *, floor: float, latency_feas
                    f"{uncertified_tolerance:.1%}", numbers)
 
 
+def binom_tail_at_most(n: int, k: int, p: float) -> float:
+    """P(X <= k) for X ~ Bin(n, p). Exact, because at these counts a normal approximation is the error."""
+    return sum(math.comb(n, i) * p ** i * (1.0 - p) ** (n - i) for i in range(0, k + 1))
+
+
+def clopper_pearson_lower(n: int, k: int, alpha: float) -> float:
+    """A one-sided exact lower confidence bound on a success rate.
+
+    Bisection on the binomial tail rather than a beta quantile, because this package has no dependencies and the
+    inverse is monotone. `p` such that P(X >= k | p) = alpha, which is the standard construction; k == 0 has no
+    positive lower bound.
+    """
+    if k <= 0:
+        return 0.0
+    if k >= n:
+        return alpha ** (1.0 / n)
+    lo, hi = 0.0, 1.0
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        # P(X >= k | mid) = 1 - P(X <= k-1 | mid)
+        if 1.0 - binom_tail_at_most(n, k - 1, mid) < alpha:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
 def floor_compliance(decisions: list, outcomes: dict, *, floor: float, significance: float = 0.05) -> Verdict:
     """Realised success rate on routed traffic against the family's floor.
 
@@ -153,22 +180,33 @@ def floor_compliance(decisions: list, outcomes: dict, *, floor: float, significa
     n = len(labelled)
     k = sum(1 for _, o in labelled if o.get("label") is True)
     rate = k / n
-    # P(X <= k) under the floor. If even the observed count is not improbably low, nothing is shown.
-    p_low = sum(math.comb(n, i) * floor ** i * (1 - floor) ** (n - i) for i in range(0, k + 1))
+    # Two questions, and they are not each other's negation.
+    #
+    # FAIL asks section 12's question directly: did the rate fall below the floor beyond sampling error. That is the
+    # one-sided tail P(X <= k) under the floor.
+    #
+    # PASS asks whether compliance was SHOWN, which needs the lower confidence bound to clear the floor. An earlier
+    # version passed when the failure test did not reject, which is accepting a null -- and it gated the middle case on
+    # `n < 30`, a constant nobody derived. The bound replaces it: with few labels the bound is far below the floor and
+    # the verdict is unsupported for a reason that is computed rather than chosen.
+    p_low = binom_tail_at_most(n, k, floor)
+    lcb = clopper_pearson_lower(n, k, significance)
     numbers = {"labelled": n, "successes": k, "rate": round(rate, 4), "floor": floor,
-               "p_below_floor": round(p_low, 5), "significance": significance, "unlabelled_certified": missing}
+               "p_below_floor": round(p_low, 5), "lower_bound": round(lcb, 4),
+               "significance": significance, "unlabelled_certified": missing}
     if p_low < significance:
         return Verdict("floor_compliance", FAIL,
                        f"the realised rate {rate:.1%} over {n} labelled certified decisions is below the floor "
                        f"{floor:.1%} beyond sampling error (p={p_low:.4f} < {significance})", numbers)
-    if n < 30:
-        return Verdict("floor_compliance", UNSUPPORTED,
-                       f"the realised rate is {rate:.1%} over only {n} labelled certified decisions, which cannot "
-                       f"separate compliance from sampling error in either direction. Reported so the number is not "
-                       f"mistaken for a pass", numbers)
-    return Verdict("floor_compliance", PASS,
-                   f"the realised rate {rate:.1%} over {n} labelled certified decisions is not below the floor "
-                   f"{floor:.1%} beyond sampling error (p={p_low:.4f})", numbers)
+    if lcb >= floor:
+        return Verdict("floor_compliance", PASS,
+                       f"the {1 - significance:.0%} lower bound on the realised rate is {lcb:.1%} over {n} labelled "
+                       f"certified decisions, which clears the floor {floor:.1%}", numbers)
+    return Verdict("floor_compliance", UNSUPPORTED,
+                   f"the realised rate is {rate:.1%} over {n} labelled certified decisions, and its "
+                   f"{1 - significance:.0%} lower bound {lcb:.1%} does not clear the floor {floor:.1%}. Not a "
+                   f"failure -- the rate is not significantly below either -- so nothing is shown in either "
+                   f"direction. Reported so the rate is not mistaken for a pass", numbers)
 
 
 def exploration_cost(decisions: list, *, budgeted_share: float | None = None) -> Verdict:

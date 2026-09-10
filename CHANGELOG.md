@@ -50,8 +50,12 @@ time.
 - Three criteria are evaluable from a small log — no false certification (section 12's falsifier), default-is-not-a-
   hiding-place, and exploration cost. Six are not, and each says what it needs in its own words rather than sharing a
   message.
-- Floor compliance is over **certified and labelled** decisions only, tested against the exact binomial tail, and
-  reports `unsupported` below 30 labels with the rate printed so it is not mistaken for a pass.
+- Floor compliance is over **certified and labelled** decisions only and asks two questions that are not each other's
+  negation: it FAILS on the exact one-sided binomial tail, and PASSES only when an exact lower confidence bound clears
+  the floor. An earlier version passed when the failure test did not reject, which is accepting a null, and gated the
+  middle case on `n < 30` -- a constant nobody derived. The bound replaced it, so a sample of 29 with every label a
+  success now passes on its own evidence while 36 of 40 against a floor of 80% is `unsupported`, its 95% lower bound
+  being 78.6%.
 - A tolerance that was not declared is `unsupported` rather than compared against a number chosen here. Inventing it
   would be grading our own work.
 - `summarise` deliberately does not reduce to `accepted`: over a set where most criteria were never evaluated, that

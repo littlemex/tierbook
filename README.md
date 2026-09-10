@@ -270,6 +270,11 @@ to obtain one. Reporting a total as a rate is the kind of error that looks like 
 served either way, so `assign` returns the declared default with `certified: false` rather than declining, and the
 record says why.
 
+**A criterion passes only when it was shown, not when it failed to be refuted.** Floor compliance fails on a one-sided
+binomial tail and passes only when an exact lower confidence bound clears the floor; between the two it is
+`unsupported`, with the rate and the bound printed. There is no chosen sample size in it -- an earlier version had one
+and it was the wrong shape of answer.
+
 **Most acceptance criteria come back `unsupported`, and that is the honest output.** On a log this project can
 currently produce, three of section 12's nine criteria are evaluable — no false certification, default-is-not-a-hiding-
 place, and exploration cost — and six are not. A checker with only pass and fail would have to choose between
