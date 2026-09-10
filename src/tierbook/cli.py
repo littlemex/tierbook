@@ -538,6 +538,7 @@ def cmd_accept(args) -> int:
     from tierbook.record import Log
 
     max_age_days = None
+    max_age_provenance = "not checked: no --policy was given to read a limit from"
     if args.policy:
         policy = from_dict(json.loads(Path(args.policy).read_text()))
         try:
@@ -551,6 +552,14 @@ def cmd_accept(args) -> int:
         # 7, C6, following amendment 2's rule for the floor): a second typed number here would reopen the very
         # defect amendment 2 closed, in a second value.
         max_age_days = parameter(policy, "max_evidence_age_days", None)
+        # Recorded, not just used. The floor got `floor_provenance` because a number that reached the
+        # computation with no copy in the record is exactly what C2 audited and found -- zero recorded
+        # copies. This value arrived the same way, and `null` alone is ambiguous between "the operator
+        # declared no limit, so the condition is absent" and "there was no artifact to read it from".
+        max_age_provenance = (f"read from {args.policy}'s compiled parameters"
+                              if max_age_days is not None else
+                              f"{args.policy} declares no limit, so freshness is absent as a condition "
+                              f"rather than unchecked")
     else:
         if args.floor is None:
             # 2, argparse's own code for an argument that had to be supplied and was not, because that is the
@@ -571,7 +580,8 @@ def cmd_accept(args) -> int:
                          latency_limit_s=args.latency_limit_s, slo_tolerance=args.slo_tolerance,
                          significance=args.significance, max_age_days=max_age_days)
     out = {"verdicts": [v.as_dict() for v in verdicts], "summary": summarise(verdicts),
-          "floor": floor, "floor_provenance": floor_provenance}
+          "floor": floor, "floor_provenance": floor_provenance,
+          "max_age_days": max_age_days, "max_age_days_provenance": max_age_provenance}
     print(json.dumps(out, indent=2))
     if args.out:
         Path(args.out).write_text(json.dumps(out, indent=1))

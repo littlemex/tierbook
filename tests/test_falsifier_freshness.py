@@ -358,3 +358,52 @@ def test_cmd_accept_reads_max_age_days_from_the_policy_artifact_through_paramete
     lenient_policy.write_text(json.dumps(minimal_policy_dict(floor=0.80, max_evidence_age_days=None)))
     rc_lenient = run_cli(["accept", "--log", str(log_path), "--policy", str(lenient_policy)])
     assert rc_lenient == 0, "with no limit declared in the artifact, the same candidate must not fail on freshness"
+
+
+# --- amendment 11: the report records which limit it used, and whether it used one ----------------------
+
+
+def test_the_report_records_the_freshness_limit_it_read_from_the_artifact(tmp_path):
+    """Catches the value reaching the computation with no copy reaching the record -- which is the defect C2 closed
+    for the floor, in the value C6 added. Before this, two runs differing in whether freshness was checked at all
+    produced reports that were identical about freshness."""
+    log_path = tmp_path / "decisions.jsonl"
+    rec.Log(log_path).append(decision(decided_at=decided_at_ts(0.0)))
+    policy = tmp_path / "p.json"
+    policy.write_text(json.dumps(minimal_policy_dict(floor=0.80, max_evidence_age_days=90.0)))
+    out = tmp_path / "report.json"
+    run_cli(["accept", "--log", str(log_path), "--policy", str(policy), "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert report["max_age_days"] == 90.0
+    assert str(policy) in report["max_age_days_provenance"]
+
+
+def test_a_report_with_no_policy_says_freshness_was_not_checked(tmp_path):
+    """The distinction this exists for: `null` already means "the operator declared no limit, so the condition is
+    absent", a legitimate declaration. Without the provenance line the same `null` also means "there was no artifact
+    to read", and those are different facts -- freshness considered and found unbounded, versus never considered."""
+    log_path = tmp_path / "decisions.jsonl"
+    rec.Log(log_path).append(decision(decided_at=decided_at_ts(0.0)))
+    out = tmp_path / "report.json"
+    run_cli(["accept", "--log", str(log_path), "--floor", "0.80", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert report["max_age_days"] is None
+    assert "not checked" in report["max_age_days_provenance"]
+
+
+def test_a_declared_absence_of_a_limit_is_distinguishable_from_no_artifact(tmp_path):
+    """The two `null`s must not read the same. An artifact declaring `max_evidence_age_days: null` says freshness was
+    considered and left unbounded; no artifact at all says nobody looked. A single `null` with no provenance collapses
+    them, and the collapse is invisible in a committed report."""
+    log_path = tmp_path / "decisions.jsonl"
+    rec.Log(log_path).append(decision(decided_at=decided_at_ts(0.0)))
+    policy = tmp_path / "p.json"
+    policy.write_text(json.dumps(minimal_policy_dict(floor=0.80, max_evidence_age_days=None)))
+    out_declared = tmp_path / "declared.json"
+    run_cli(["accept", "--log", str(log_path), "--policy", str(policy), "--out", str(out_declared)])
+    out_absent = tmp_path / "absent.json"
+    run_cli(["accept", "--log", str(log_path), "--floor", "0.80", "--out", str(out_absent)])
+    declared = json.loads(out_declared.read_text())
+    absent = json.loads(out_absent.read_text())
+    assert declared["max_age_days"] is None and absent["max_age_days"] is None
+    assert declared["max_age_days_provenance"] != absent["max_age_days_provenance"]

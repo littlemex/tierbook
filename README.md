@@ -258,8 +258,14 @@ tierbook assign --policy policy.json --request-id r1 --candidate box \
     --costs '{"box":0.004,"api":0.012}' --log decisions.jsonl
 
 # SCOPE section 12's criteria over that log
-tierbook accept --log decisions.jsonl --floor 0.80 --uncertified-tolerance 0.10
+tierbook accept --policy policy.json --log decisions.jsonl --uncertified-tolerance 0.10
 ```
+
+`accept` takes the same policy the assignment was made under, and reads the accuracy floor and the evidence-age limit
+out of it. Both are available as flags, and using them is weaker: a number typed at a shell prompt is one the artifact
+never wrote down, so the criteria would be computed against a value nothing can confirm. The report says which it used
+in `floor_provenance` and `max_age_days_provenance`, so a committed report is readable later without knowing how it was
+invoked.
 
 **Four properties are worth knowing before using it.**
 
