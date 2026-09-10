@@ -164,15 +164,27 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
     if chosen != deterministic:
         # ONE DRAW chose an arm decide() did not. `candidate_set` is rebuilt around the arm actually served, so
         # `excluded_because == "chosen"` names the one that was, not the one decide() proposed -- the invariant
-        # `Decision.__post_init__` already enforces. And CONTRACT C3 ("not uncertified by construction"): the
-        # drawn arm came from `eligible_ids`, which already required its bound to clear the floor and the rest
-        # of admissibility except the expiry `clears_floor` deliberately overrides -- so it is certified here,
-        # not left to inherit whatever `decide` said about a rule it did not fire.
+        # `Decision.__post_init__` already enforces.
         candidates = candidate_set(
             policy, chosen, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of, bound_kind=bound_kind,
             floor=floor, authorised=authorised, latency_feasible=latency_feasible, available=available,
             evidence_age_days=evidence_age_days, max_age_days=max_age_days)
-        certified = True
+        # DEFECT this line prevents (amendment 6): `explore.eligible`'s verdict answers "who may be drawn INTO",
+        # and it deliberately does not consult `max_evidence_age_days` -- that override is the whole reason the
+        # door exists, so it can reach an arm the freshness ratchet locked out. But "may be drawn into" is not
+        # "the floor may be claimed for it". An earlier version of this line set `certified = True` whenever
+        # exploration picked an alternative, reasoning that eligibility already covered "the rest of
+        # admissibility" -- which was wrong, because SCOPE section 2's admissibility has always had a fourth,
+        # freshness clause (`record.admissible` has enforced it since v0.1.0), and eligibility is the one place
+        # that clause is deliberately absent. Certifying on the eligible verdict would claim the floor for a
+        # bound whose evidence is past the family's freshness limit -- a bound describing an environment that no
+        # longer exists. `admissible` is called here rather than re-derived, so this decision and
+        # `check_certification` (the falsifier that caught the earlier version) use the SAME predicate and
+        # cannot disagree by construction.
+        drawn = next(c for c in candidates if c.id == chosen)
+        certified, _not_admissible_because = admissible(
+            drawn, floor=floor, authorised=authorised, latency_feasible=latency_feasible,
+            evidence_age_days=evidence_age_days, max_age_days=max_age_days)
     else:
         certified = bool(got["certified"])
 
