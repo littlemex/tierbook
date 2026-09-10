@@ -202,7 +202,13 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
         # set could derive a different number than the one the draw used, which is a second home for a value
         # section 9 needs identified to exactly one.
         selection_probability=propensity,
-        exploration=(exploration_reason == "explored"),
+        # CONTRACT amendment 13 / C10: `exploration` must mean "traffic was diverted", not "the randomiser ran".
+        # `exploration_reason == "explored"` used to conflate the two -- returned for both an alternative winning
+        # AND the incumbent winning anyway -- which made this field read true for ~100% of active draws at a rate
+        # where only ~5% actually diverted. `chosen != deterministic` is the correct signal, and it is already
+        # computed three lines above to decide whether to re-derive `certified`; reusing it here rather than
+        # deriving a second time from the reason string is what keeps the two derivations from disagreeing.
+        exploration=(chosen != deterministic),
         exploration_reason=exploration_reason,
         eligible_set=eligible_ids,
         certified=certified,

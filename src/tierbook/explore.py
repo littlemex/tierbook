@@ -101,7 +101,13 @@ def draw(deterministic: str, eligible: list, rate: float, rng: random.Random) ->
     k = len(alternatives)
     r = rng.random()
     if r >= rate:
-        return deterministic, 1.0 - rate, "explored"
+        # CONTRACT amendment 13 / C10: the randomiser ran (this is not "no_eligible_arm" or "rate_zero", which
+        # return before `rng` is ever touched) and the incumbent won anyway. This is a DIFFERENT outcome from the
+        # alternative winning below, even though both happen under an active draw, and it used to share the same
+        # "explored" reason with it -- which is what made "reason == explored" read ~100% of draws at rate 0.05
+        # when only ~5% of traffic was actually diverted. The propensity is unchanged: `1 - rate` is exactly the
+        # probability of the arm actually chosen under the draw actually performed.
+        return deterministic, 1.0 - rate, "not_diverted"
     idx = int(r / rate * k)
     if idx >= k:  # a float boundary landing exactly on r == rate's edge; the last bin owns it
         idx = k - 1

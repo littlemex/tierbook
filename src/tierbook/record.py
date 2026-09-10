@@ -80,11 +80,19 @@ EXCLUSION_REASONS = (
 LABEL_STATES = ("labelled", "missing", "pending")
 
 #: Why `exploration: false` on a decision, or why it is true. Closed for the same reason EXCLUSION_REASONS is:
-#: three causes shared one bit before this existed -- no mechanism installed at all, an eligible set with no
-#: alternative to the deterministic arm, and a rate of zero -- and a silent False could not be attributed to any
-#: of them. `no_mechanism` is also the value a version 1 row reads as (SEAMS.md S4): it never had this field, so
-#: "no mechanism" is the true statement about it, not a guess.
-EXPLORATION_REASONS = ("explored", "no_eligible_arm", "rate_zero", "no_mechanism")
+#: four causes shared one bit before this existed -- no mechanism installed at all, an eligible set with no
+#: alternative to the deterministic arm, a rate of zero, and (C10 / amendment 13) the randomiser running and the
+#: incumbent winning anyway -- and a silent False could not be attributed to any of them. `no_mechanism` is also
+#: the value a version 1 row reads as (SEAMS.md S4): it never had this field, so "no mechanism" is the true
+#: statement about it, not a guess.
+#:
+#: `not_diverted` (C10) is NOT the same fact as `no_eligible_arm` or `rate_zero`: those two mean the draw was
+#: never performed at all (`explore.draw` returns before touching `rng`), while `not_diverted` means the draw WAS
+#: performed -- `rng.random()` was called, a real alternative existed -- and it landed on the deterministic arm.
+#: Before this value existed, `explore.draw` had nowhere to put that outcome except `explored`, which is why
+#: `exploration_reason == "explored"` was true for BOTH outcomes of an active draw and could not be used to
+#: measure diverted traffic (CONTRACT amendment 13, C10).
+EXPLORATION_REASONS = ("explored", "no_eligible_arm", "rate_zero", "no_mechanism", "not_diverted")
 
 
 class Incomplete(Exception):

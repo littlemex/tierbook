@@ -1126,3 +1126,153 @@ def test_amendment_6_route_once_with_no_eligible_alternative_is_unaffected():
                         staleness_limit_days=STALENESS_LIMIT_DAYS, rng=random.Random(0))
     assert d.chosen == "api"
     assert d.exploration is False
+
+
+# ======================================================================================================
+# C10 (amendment 13) -- "explored" meant "the randomiser ran", not "traffic was diverted"
+#
+# `explore.draw` returned `"explored"` for BOTH outcomes of an active draw: the alternative winning, and the
+# deterministic arm winning anyway. `serve.route_once` set `exploration=(exploration_reason == "explored")`, so a
+# decision where nothing was diverted was recorded as if it had been. Measured over 5,000 seeds at rate 0.05,
+# before this fix:
+#
+#     reason == 'explored' : 100.0% of draws
+#     actually diverted    : 5.5%
+#     seed 0                : ('box', 0.95, 'explored')   <- the incumbent won and the reason still said explored
+#
+# `accept.exploration_cost` computed its share straight off that field, reporting ~100% against a budget the
+# mechanism was 5.5% inside -- a FAIL for a mechanism well within budget. The fix: a fifth `exploration_reason`,
+# `not_diverted`, for the randomiser-ran-but-incumbent-won case; `explore.draw` returns it in place of `explored`
+# for that outcome; `serve.route_once` derives `exploration` from `chosen != deterministic` (the signal it already
+# computes three lines away to decide whether to re-derive `certified`) rather than from the reason string. The
+# propensity is UNCHANGED: `1 - rate` for the incumbent under an active draw remains correct and is the common case.
+# ======================================================================================================
+
+
+def test_draw_incumbent_wins_returns_not_diverted_with_propensity_one_minus_rate():
+    """Amendment 13 / C10's own reproduction, seed for seed: `random.Random(0).random()` is 0.8442..., past the
+    0.05 boundary, so the deterministic arm wins under an active draw -- exactly the `seed 0` line in the
+    contract's measured reproduction above. The propensity is still `1 - rate = 0.95` (that does not change), but
+    the reason must now be `not_diverted`, not `explored`: the randomiser ran and nothing was diverted."""
+    chosen, prob, reason = explore.draw("box", ["box", "alt"], 0.05, random.Random(0))
+    assert (chosen, reason) == ("box", "not_diverted")
+    assert prob == pytest.approx(0.95)
+
+
+def test_draw_alternative_wins_still_returns_explored_with_propensity_rate_over_k():
+    """The other outcome of the same active draw, deliberately seeded to land on the alternative -- seed 31 is
+    the first, starting from 0, whose `rng.random()` falls under the 0.05 boundary (the existing cross-check test
+    above, `test_draw_alternative_propensities_and_deterministic_propensity_sum_to_one`, names 31 for the same
+    reason). This branch's reason stays `explored`: traffic actually diverted to the alternative, which is what
+    the field must mean after C10 as much as before it."""
+    chosen, prob, reason = explore.draw("box", ["box", "alt"], 0.05, random.Random(31))
+    assert (chosen, reason) == ("alt", "explored")
+    assert prob == pytest.approx(0.05)
+
+
+def test_draw_explored_share_over_many_seeds_tracks_the_diverted_rate_not_1_0():
+    """THE test that would have caught the defect, made deliberately the sharpest one in this file. Before C10,
+    every draw's reason read `explored` regardless of which arm won, so this fraction read 1.0 (100%) no matter
+    what `rate` was declared -- amendment 13 measured exactly that over 5,000 seeds at rate=0.05:
+
+        reason == 'explored' : 100.0% of draws
+        actually diverted    : 5.5%
+
+    After C10 the reason for an incumbent win is `not_diverted`, so the fraction of draws whose reason reads
+    `explored` must track the actual rate of diversion (~0.05 here), not saturate at 1.0 independent of it."""
+    n = 5000
+    rate = 0.05
+    explored = sum(1 for seed in range(n)
+                   if explore.draw("box", ["box", "alt"], rate, random.Random(seed))[2] == "explored")
+    share = explored / n
+    assert abs(share - rate) < 0.02, (
+        f"{share:.4f} of {n} draws read 'explored' at rate={rate} -- under the pre-C10 defect this reads ~1.0 "
+        f"(100%) regardless of rate, because 'explored' covered both outcomes of the draw instead of only the "
+        f"one where traffic was actually diverted"
+    )
+
+
+def _rt_route_incumbent_wins_under_active_draw(tries=10, rate=0.05):
+    """Loop seeded rngs until `route_once`'s randomiser ran (a real eligible alternative existed) and still left
+    the incumbent in place -- the common case C10's own contract text names by that word, complementary to
+    `_rt_route_into_stale_arm` above which loops for the opposite outcome. `box` is full (`inflight=20`) so the
+    policy's deterministic default is `api`; `box` itself is fresh (5 days, well inside `max_age_days=30`) and
+    clears the floor, so it is a real eligible alternative the draw ran over. At `rate=0.05` most seeds leave the
+    incumbent (`api`) in place, so this is expected to succeed on the first or second try, not by exhausting the
+    loop."""
+    o = _rt_obs(inflight=20.0, metered_authorised=True, available=True, evidence_age_days=5.0)
+    for seed in range(tries):
+        got, d = _rt_route(o, exploration_rate=rate, staleness_limit_days=STALENESS_LIMIT_DAYS,
+                           rng=random.Random(seed))
+        if d.chosen == "api":
+            return got, d
+    raise AssertionError(f"no seed among the first {tries} left the incumbent ('api') in place at rate={rate} -- "
+                         f"a fixture problem, not a defect in the arithmetic")
+
+
+def test_route_once_incumbent_wins_under_active_randomiser_records_not_diverted():
+    """Through `route_once`, with a seeded rng -- nothing in the pre-C10 suite exercised this exact branch (an
+    active randomiser whose draw still left the incumbent in place), which is why the defect shipped unnoticed.
+    The recorded decision must read `exploration is False`, `exploration_reason == 'not_diverted'`, and the
+    UNCHANGED propensity `1 - rate` -- not `1.0`, because that is the probability of the arm actually chosen
+    under the draw actually performed, and not `True`/`'explored'`, which is exactly what C10 corrects."""
+    _got, d = _rt_route_incumbent_wins_under_active_draw(rate=0.05)
+    assert d.chosen == "api"
+    assert d.exploration is False
+    assert d.exploration_reason == "not_diverted"
+    assert d.selection_probability == pytest.approx(1.0 - 0.05)
+
+
+def test_accept_exploration_cost_reports_the_diverted_share_not_the_share_of_draws():
+    """SCOPE section 8 defines the exploration budget as a share of TRAFFIC AND SPEND -- diverted traffic, not
+    every decision an active randomiser merely touched. 100 decisions, all under an active randomiser: 5 diverted
+    (`exploration: True`), 95 where the incumbent won and stayed (`exploration: False`). The diverted share is
+    5%, not the ~100% the pre-C10 defect would have produced by counting every draw whose reason read
+    'explored' regardless of outcome. Against a 25% budget this must PASS."""
+    rows = [{"exploration": True} for _ in range(5)] + [{"exploration": False} for _ in range(95)]
+    v = ac.exploration_cost(rows, budgeted_share=0.25)
+    assert v.numbers["exploration_share"] == pytest.approx(0.05)
+    assert v.verdict == ac.PASS
+
+
+def test_from_row_v1_row_still_reads_no_mechanism_after_c10():
+    """C10 adds a fifth value to `EXPLORATION_REASONS`; `from_row`'s version-1 default is untouched by it -- a
+    real v0.1.0 line (not a hand-typed stand-in, per amendment 5's own rule) still reads `no_mechanism`, never
+    the new `not_diverted`, because no draw was ever performed for a row written before C3's mechanism existed."""
+    d, _ignored = rec.from_row(_real_v010_row())
+    assert d.exploration_reason == "no_mechanism"
+
+
+def test_exploration_reasons_vocabulary_gains_not_diverted_as_a_fifth_member():
+    """C10's own statement of the fix: the vocabulary was one value short, which is why the field could not carry
+    the distinction between 'nothing to explore' and 'explored and the incumbent won anyway'. `not_diverted` is
+    the fourth cause of `exploration: false` -- the randomiser ran and the incumbent won -- alongside the three
+    C3 already named (no mechanism, an empty eligible set, a zero rate)."""
+    assert set(rec.EXPLORATION_REASONS) == {"explored", "no_eligible_arm", "rate_zero", "no_mechanism",
+                                            "not_diverted"}
+    assert len(rec.EXPLORATION_REASONS) == 5
+
+
+@pytest.mark.parametrize("reason", ["explored", "no_eligible_arm", "rate_zero", "no_mechanism", "not_diverted"])
+def test_c10_every_one_of_the_five_exploration_reasons_is_a_legal_value_on_a_written_decision(reason):
+    """All five values, including the four the pre-C10 suite already covered plus C10's new `not_diverted`, must
+    be constructible on a `Decision` -- catching an implementation that adds the value to `EXPLORATION_REASONS`
+    without actually letting `__post_init__` accept it, or that narrows the set some other way."""
+    base = _v2_row(exploration_reason=reason, eligible_set=[])
+    candidates = [rec.Candidate(**c) for c in base["candidates"]]
+    kw = {k: v for k, v in base.items() if k not in ("candidates", "schema_version")}
+    kw["candidates"] = candidates
+    d = rec.Decision(**kw)
+    assert d.exploration_reason == reason
+
+
+def test_a_sixth_exploration_reason_outside_the_five_is_refused():
+    """The vocabulary is closed at write time, the same way `EXCLUSION_REASONS` is (CONTRACT C10: 'refused at
+    write time like the others'): a value outside the five legal reasons raises `Incomplete` naming it, rather
+    than writing an open-ended reason a log could not aggregate."""
+    base = _v2_row(exploration_reason="sort_of_explored", eligible_set=[])
+    candidates = [rec.Candidate(**c) for c in base["candidates"]]
+    kw = {k: v for k, v in base.items() if k not in ("candidates", "schema_version")}
+    kw["candidates"] = candidates
+    with pytest.raises(rec.Incomplete, match="not one of"):
+        rec.Decision(**kw)
