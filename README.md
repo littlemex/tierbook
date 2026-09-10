@@ -240,11 +240,14 @@ harness that had reported that number would have published a false claim about a
 v0.1.0 is where the four parts meet. Before it, `decide` was handed a state by whoever called it and nothing wrote a
 record, so the mechanism could be described and not run.
 
-**It is one turn, and the loop does not close.** An earlier draft of this section said "the loop, closed", which a
-review was right to call the over-claim: nothing here feeds anything back. Outcomes are attachable and nothing attaches
-them automatically; exploration is off and the propensity is constant, so the log can never support the off-policy
-estimate a loop would learn from; and no arc runs from `record` or `accept` back to `decide`. A pipeline that cannot
-update anything from its own log is a pipeline.
+**It is one turn, and the loop still does not close.** Nothing here feeds anything back: no arc runs from `record` or
+`accept` to `decide`, and a pipeline that cannot update anything from its own log is a pipeline.
+
+What changed is which part is missing. A family that declares an `exploration_rate` now draws randomly among the
+candidates whose bound clears its floor, and the log records the realised propensity of the arm actually chosen
+alongside the set it was drawn from — so the log can support an off-policy estimate, and what is absent is the
+estimator rather than the data. Labels are still not attached automatically: a family declares what produces one and
+how long to wait, and nothing calls the labeller.
 
 ```console
 # what a policy would decide from, and what could not be read
@@ -287,18 +290,25 @@ binomial tail and passes only when an exact lower confidence bound clears the fl
 `unsupported`, with the rate and the bound printed. There is no chosen sample size in it -- an earlier version had one
 and it was the wrong shape of answer.
 
-**Most acceptance criteria come back `unsupported`, and that is the honest output.** On a log this project can
-currently produce, three of section 12's nine criteria are evaluable — no false certification, default-is-not-a-hiding-
-place, and exploration cost — and six are not. A checker with only pass and fail would have to choose between
-reporting a pass it did not earn and a failure it cannot substantiate. `unsupported` names the missing measurement
-instead, and each of the six says what it needs in its own words: an off-policy estimate needs logged propensities
-that *vary*, and every decision a deterministic policy makes has propensity 1, under which the counterfactual arm has
-no data and the estimate is unidentified. Randomised exploration is the prerequisite there, not a refinement.
+**Most acceptance criteria come back `unsupported`, and that is the honest output.** How many of section 12's nine are
+evaluable is a property of the log rather than of the release, so the report says which and why instead of the README
+naming a number that goes stale. Each criterion states its own requirement: certification checks need only decisions,
+the realised-rate checks need attached labels, the latency check needs recorded latencies, and spend regret needs an
+off-policy estimator that does not exist yet. A checker with only pass and fail would have to choose between reporting
+a pass it did not earn and a failure it cannot substantiate; `unsupported` names the missing measurement instead.
 
-`decide.MISSING_FOR_A_CLOSED_LOOP` still names six gaps and this release closes the first of them. The other five —
-logged selection probabilities, exploration, anytime-valid bounds, change-point detection, and a value for the
-reserved candidate's scarce capacity — are unchanged and are why the criteria above are unsupported rather than
-failing.
+Two of those requirements moved in this release. Exploration now produces logged propensities that vary, so spend
+regret's blocker is the estimator rather than the data — for a family that declares a rate. A family that declares none
+still has propensity 1 for every decision, under which the counterfactual arm has no data at all, which is the older
+problem and not a lesser one.
+
+`decide.MISSING_FOR_A_CLOSED_LOOP` names **three** gaps — anytime-valid bounds, change-point detection, and a value
+for the reserved candidate's scarce capacity — and it is shipped inside every compiled policy artifact, so an item
+that stopped being true would be a false statement in a machine-readable file. Three items were removed: a state
+collector, in v0.1.0, and logged selection probabilities and exploration, in this one. The first stayed in the list for
+a whole release after it shipped, and a test asserted the artifact still claimed it, so the guard over the list
+required the artifact to be wrong. Each remaining claim now names the symbol whose existence would falsify it, and a
+test fails if any claim and its probe disagree.
 
 ## What is deliberately not here
 

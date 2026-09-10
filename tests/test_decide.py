@@ -275,10 +275,44 @@ def test_nothing_certified_means_no_rules_and_the_default_carries_everything():
 
 
 def test_the_artifact_names_what_a_closed_loop_still_needs():
+    """Catches the artifact claiming a gap that has been filled.
+
+    This test previously asserted that `selection probabilities` and `exploration` were named as MISSING, and
+    C3 shipped both -- so it required every compiled artifact to carry a false statement, and it stayed green
+    through eight contract entries because none of their diffs touched the tuple. An assertion that four
+    substrings are PRESENT cannot fail when a mechanism is added; only when a claim is deleted. So the subject
+    here is now the agreement between each claim and a probe for the thing it says is absent.
+    """
     d = D.as_dict(policy(["box"]))
-    joined = " ".join(d["missing_for_a_closed_loop"])
-    assert "selection probabilities" in joined and "exploration" in joined
+    claims = d["missing_for_a_closed_loop"]
+    joined = " ".join(claims)
     assert "anytime-valid" in joined and "change-point" in joined
+    # The two C3 shipped. Naming them explicitly rather than only checking the probes, because a future author
+    # re-adding either claim would otherwise have to also forget the probe for the test to notice.
+    assert "selection probabilities" not in joined
+    assert "exploration or shadow allocation" not in joined
+
+
+def test_every_claim_of_absence_agrees_with_a_probe_for_the_thing_it_names():
+    """Catches a mechanism shipping while the claim that it is missing stays in the artifact -- the defect
+    above, in the general form. Each probe names the symbol whose existence would falsify its claim, so
+    implementing anytime-valid bounds and forgetting to retire the claim fails here at merge time rather than
+    being published inside every policy file."""
+    for key, probe in D.CLOSED_LOOP_PROBES.items():
+        assert probe(), (
+            f"the artifact still claims {key!r} is missing, but its probe says the named thing now exists. "
+            f"Retire the claim from MISSING_FOR_A_CLOSED_LOOP and its probe together")
+
+
+def test_every_claim_has_a_probe_and_every_probe_has_a_claim():
+    """Catches the two lists drifting apart, which is how the original guard became useless: a claim with no
+    probe is unwatched, and a probe with no claim watches nothing. A closed correspondence rather than an
+    appendable pair of lists, because an appendable list can still be forgotten."""
+    claims = D.MISSING_FOR_A_CLOSED_LOOP
+    unprobed = [c for c in claims if not any(k in c for k in D.CLOSED_LOOP_PROBES)]
+    assert unprobed == [], f"claims with no probe: {unprobed}"
+    unclaimed = [k for k in D.CLOSED_LOOP_PROBES if not any(k in c for c in claims)]
+    assert unclaimed == [], f"probes with no claim: {unclaimed}"
 
 
 def test_the_artifact_is_readable_without_importing_this_module():

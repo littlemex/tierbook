@@ -59,14 +59,15 @@ def var_name(spec: str) -> str:
     return spec.split(":", 1)[0]
 
 #: The parts of a closed loop this module does not contain, named so their absence is not mistaken for
-#: presence. Every one of them was raised by review and none is disguised as done.
+#: presence. `as_dict` ships this list inside every compiled policy, so an item that stops being true is a
+#: false statement in a machine-readable artifact rather than a stale comment.
+#:
+#: Three items were removed in v0.2.0 because they had shipped: a state collector (`observe`, in v0.1.0), and
+#: logged selection probabilities and exploration (both C3, this release). The first had been false for a
+#: whole release, and a test asserted the artifact still claimed it -- so the guard over this set required the
+#: artifact to lie. `CLOSED_LOOP_PROBES` below is why that cannot happen again: every claim here has to name
+#: the symbol whose existence would falsify it.
 MISSING_FOR_A_CLOSED_LOOP = (
-    "a collector for the state variables above; `decide` is given a state, it does not observe one",
-    "logged selection probabilities, without which an off-policy estimate of a policy nobody ran is "
-    "unidentified -- and data collected without them cannot support that estimate later, however much of it "
-    "there is",
-    "exploration or shadow allocation, without which a candidate that is routed away from never gets another "
-    "label and the incumbent is entrenched by construction",
     "anytime-valid bounds; the margins here are fixed-sample, which is anti-conservative once bounds are "
     "recomputed as evidence accrues and admission happens at a data-dependent stopping time",
     "change-point detection, so a policy stays valid until its evidence expires by age rather than because "
@@ -77,6 +78,39 @@ MISSING_FOR_A_CLOSED_LOOP = (
     "That is scheduling utility rather than a gateway charge, which is why it is not in the cost objective, "
     "but it is also not nowhere: greedy use is locally right and globally unproven",
 )
+
+
+#: One probe per claim above, keyed by a substring unique to it. Each probe returns True while the claim is
+#: still true -- that is, while the named thing is still absent -- and the test beside it fails if any claim
+#: and its probe disagree.
+#:
+#: This exists because the previous guard asserted four substrings were PRESENT in the artifact, which no new
+#: mechanism can fail: shipping exploration left the guard green and the artifact wrong. A probe names the
+#: symbol whose existence falsifies its claim, so shipping the mechanism and forgetting to retire the claim
+#: breaks a test at merge time. A claim whose probe cannot be written is a claim too vague to ship inside an
+#: artifact, and that is the bar for adding one here.
+CLOSED_LOOP_PROBES = {
+    "anytime-valid bounds": lambda: not _module_has("tierbook.evidence", "anytime_valid_lower_bound"),
+    "change-point detection": lambda: not _module_has("tierbook.observe", "change_point"),
+    "reserved candidate's scarce capacity": lambda: not _module_has("tierbook.policy", "capacity_value"),
+}
+
+
+def _module_has(module: str, symbol: str) -> bool:
+    """Whether `module` defines `symbol`, with a missing module counting as not defining it.
+
+    An ImportError here means the module does not exist yet, which is a stronger form of the symbol being
+    absent rather than a failure to answer -- so it is not raised. What is NOT swallowed is the module
+    existing and failing to import for its own reasons; that would make every probe silently agree with
+    every claim, which is the failure this whole mechanism replaced.
+    """
+    import importlib
+
+    try:
+        mod = importlib.import_module(module)
+    except ModuleNotFoundError:
+        return False
+    return hasattr(mod, symbol)
 
 #: Why a guard cannot be evaluated or was never given a threshold. Closed so a gap can be counted.
 GAP_REASONS = (
