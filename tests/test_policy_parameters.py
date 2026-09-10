@@ -356,14 +356,25 @@ def test_a_bare_string_family_entry_is_refused_and_names_what_to_change(tmp_path
     message = str(excinfo.value)
     assert "f" in message
     assert "reference" in message and "floor" in message
+    # Disabling the migration branch was caught by nothing: the generic "must be an object with 'reference' and
+    # 'floor'" check downstream refuses a bare string too, and names all three, so every assertion above passed
+    # against a loader that had lost the explanation of WHAT CHANGED. The migration message is the only thing
+    # telling an operator their file was valid yesterday, so it is what this pins.
+    assert "config_format" in message
 
 
 def test_config_format_1_is_refused_rather_than_read_as_the_new_shape(tmp_path):
     """The same reasoning as C1's schema_version check, applied to the candidate file: a file written to a
     shape this reader does not know cannot be validated against the shape it does know. `config_format: 1`
     together with the OLD bare-string families shape was a completely valid file under format 1 -- and must
-    now be refused outright rather than parsed optimistically as if it were format 2."""
-    body = _minimal_candidates(config_format=1, families={"f": "ref"})
+    now be refused outright rather than parsed optimistically as if it were format 2.
+
+    The families shape here is the NEW one on purpose, which is the opposite of how this test first read. With
+    the old bare-string shape the file trips TWO refusals, and the bare-string one names `config_format` in its
+    migration text -- so accepting format 1 outright still produced a `ConfigError` matching `config_format` and
+    the test passed against a loader that read the old format happily. A file that is otherwise entirely
+    well-formed leaves the version check as the only thing that can refuse it."""
+    body = _minimal_candidates(config_format=1, families={"f": {"reference": "ref", "floor": 0.80}})
     with pytest.raises(ConfigError, match="config_format"):
         load_config(_write_candidates(tmp_path, body))
 

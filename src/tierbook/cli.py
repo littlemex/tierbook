@@ -523,7 +523,13 @@ def cmd_accept(args) -> int:
                             if args.floor is not None else f"read from {args.policy}'s compiled parameters")
     else:
         if args.floor is None:
-            sys.exit("--floor is required without --policy")
+            # 2, argparse's own code for an argument that had to be supplied and was not, because that is the
+            # operator action here: supply something. 4 is reserved for two present numbers that disagree, which is
+            # a different action -- one of the two sources is wrong and has to be found. Collapsing them would tell
+            # an operator to go looking for a conflict that does not exist.
+            print("--floor is required without --policy: there is no artifact to read it from or check it against",
+                  file=sys.stderr)
+            return 2
         floor = args.floor
         floor_provenance = "operator-supplied and unchecked: no --policy was given to confirm it against"
 

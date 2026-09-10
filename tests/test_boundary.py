@@ -38,13 +38,13 @@ def _write(tmp_path, body: dict, name="candidates.json"):
 
 def _minimal(**over) -> dict:
     base = {
-        "config_format": 1,
+        "config_format": 2,
         "candidates": {
             "ref": {"deployment": "api",
                     "endpoint": {"base_url": "https://x/v1", "model": "m"},
                     "price_per_mtok": {"fresh_in": 1.0, "cached_in": 0.1, "out": 5.0}},
         },
-        "families": {"f": "ref"},
+        "families": {"f": {"reference": "ref", "floor": 0.80}},
         "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
     }
     base.update(over)
