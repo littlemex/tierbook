@@ -297,3 +297,35 @@ on the caller's instruction.
 
 None of these reads a request's content, produces a stratum, or writes a feature vector. A worker who finds itself
 needing any of those has left the contract.
+
+## Amendment 1 — C1's reader stops one level above the field the design expects to grow
+
+Raised by both C1 workers independently, from opposite sides. Each reported the same section as under-specified, and
+integrating their work showed one of the three gaps is a defect rather than an ambiguity.
+
+**A1.1 — the ignored-and-named contract applies to a candidate row too.** As implemented, `_candidate_from_row`
+filters unknown keys out of a candidate dict **silently**, and its docstring justifies this on the grounds that "the
+candidate set has never grown a field since this record existed." Phase 1 falsifies that claim in its own findings:
+F12 proposes replacing `bound_n`/`bound_attempted` with an evidence reference, which is a **candidate-level** field.
+So the reader that exists to survive the log's evolution does not survive it at the growth site the design already
+names, and a candidate carrying an evidence reference would lose it with no counter, no reason and no error — the
+silent-corruption class, which this contract admits without debate.
+
+`from_row` therefore reports candidate-level unknown keys in the same `ignored` list, qualified by position
+(`candidates[1].evidence_ref`), and a candidate row missing a field the shape requires raises `Incomplete` naming it
+rather than a raw `TypeError`.
+
+**A1.2 — `__unreadable_rows__` has a shape.** `{"count": int, "reasons": list[str]}`, one string per row, and a
+version refusal's string names **both** the row's version and the reader's. The contract said "with the reason" and
+left the shape to two blind readers, which is the interface defect `/split-impl` exists to surface. It reconciled only
+because the test author bound loosely on purpose.
+
+**A1.3 — order and fate, stated so they are not each reader's choice.** `from_row` checks the version **before**
+validating fields, because a row written to a shape this reader does not know cannot be meaningfully validated against
+the shape it does know. A row that fails `from_row` is **excluded** from the returned `decisions`, matching how a
+corrupt line is already handled; it exists in `__unreadable_rows__` and nowhere else.
+
+**Not amended: the forward reference to C5.** `pool_across_versions` is named in C1's interface and specified in C5's.
+That is deliberate — C1 must add the keyword so C5 does not change a signature every earlier reader depends on — and
+the C1 worker is right that it invites a partial implementation. The mitigation is the instruction, not the contract:
+C1 accepts the keyword and does nothing with it.
