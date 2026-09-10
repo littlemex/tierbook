@@ -30,7 +30,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from .record import Candidate, Decision, check_certification
+from .record import check_certification, from_row
 
 PASS, FAIL, UNSUPPORTED = "pass", "fail", "unsupported"
 
@@ -61,17 +61,6 @@ class Verdict:
                 "numbers": self.numbers or {}}
 
 
-def _as_candidate(row: dict) -> Candidate:
-    return Candidate(id=row["id"], excluded_because=row["excluded_because"], bound=row.get("bound"),
-                     bound_kind=row.get("bound_kind", ""), cost_usd=row.get("cost_usd"),
-                     evidence_as_of=row.get("evidence_as_of", ""))
-
-
-def _as_decision(row: dict) -> Decision:
-    kw = {k: v for k, v in row.items() if k != "candidates"}
-    return Decision(candidates=[_as_candidate(c) for c in row["candidates"]], **kw)
-
-
 def no_false_certification(decisions: list, *, floor: float, latency_feasible: bool | None) -> Verdict:
     """Section 12's falsifier. Every certified decision, against section 2's three-part definition."""
     if not decisions:
@@ -79,7 +68,7 @@ def no_false_certification(decisions: list, *, floor: float, latency_feasible: b
                        "the log holds no decisions, so there is nothing to check against the definition")
     bad = []
     for row in decisions:
-        d = _as_decision(row)
+        d, _ignored = from_row(row)
         for v in check_certification(d, floor=floor, latency_feasible=latency_feasible):
             if "hiding place" not in v:
                 bad.append(f"{d.request_id}: {v}")
@@ -104,7 +93,7 @@ def default_is_not_a_hiding_place(decisions: list, *, floor: float, latency_feas
         return Verdict("default_is_not_a_hiding_place", UNSUPPORTED, "the log holds no decisions")
     hid = []
     for row in decisions:
-        d = _as_decision(row)
+        d, _ignored = from_row(row)
         for v in check_certification(d, floor=floor, latency_feasible=latency_feasible):
             if "hiding place" in v:
                 hid.append(f"{d.request_id}: {v}")
@@ -266,12 +255,18 @@ def _needs_a_design(criterion: str, why: str) -> Verdict:
 def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible: bool | None = None,
               uncertified_tolerance: float | None = None, budgeted_exploration: float | None = None,
               latency_limit_s: float | None = None, slo_tolerance: float | None = None,
-              significance: float = 0.05) -> list:
+              significance: float = 0.05, pool_across_versions: bool = False) -> list:
     """Every criterion section 12 names, in its order, each with its own verdict.
 
     The three that cannot be computed from a log at all say what they need instead of sharing a message: a reader told
     "insufficient data" learns nothing about what to collect.
+
+    `pool_across_versions` is accepted here so the signature does not move again under C5, which is the entry that
+    gives it a behaviour -- refusing the mixture-sensitive criteria with `UNSUPPORTED` when decisions span more than
+    one `schema_version` and this is false. C1 only reads a mixed log without raising; it does not yet detect or
+    refuse the mixture.
     """
+    del pool_across_versions  # threaded nowhere yet; C5 owns the refusal this keyword requests
     return [
         floor_compliance(decisions, outcomes, floor=floor, significance=significance),
         _needs_a_design("bound_calibration",
