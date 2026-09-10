@@ -210,7 +210,7 @@ def test_default_is_not_a_hiding_place_also_survives_an_unknown_key():
     """Catches only one of accept's two `_as_decision` call sites being migrated to `from_row`, leaving the other
     to raise on the same new field -- a partial migration is a bug that only shows up on whichever criterion runs
     second."""
-    rows = [row(schema_version=2, a_future_field="x", certified=False,
+    rows = [row(schema_version=2, a_future_field="x", certified=False, chosen="fallback",
                 candidates=[cand("fallback", "chosen", 0.50), cand("box", "not_priced", 0.95)])]
     v = ac.default_is_not_a_hiding_place(rows, floor=0.80, latency_feasible=True)
     assert v.verdict == ac.FAIL and "hiding place" in v.detail
