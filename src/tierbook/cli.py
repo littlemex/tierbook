@@ -211,7 +211,11 @@ def cmd_compile(args) -> int:
                                  latency_p95_slo_s=(args.capacity_p95_slo_s
                                                     or ((o.latency_slo_p95_ms / 1000.0)
                                                         if o and o.latency_slo_p95_ms else None)),
-                                 max_evidence_age_days=args.max_age_days)
+                                 max_evidence_age_days=args.max_age_days,
+                                 # Written into the artifact rather than left to be typed again at `assign` or
+                                 # `accept` time -- see decide.Policy.parameters. `None` when the operator did
+                                 # not state one at compile time, which is the true statement, not a guess.
+                                 floor=args.floor)
             table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
             bound = ((pol.domain or {}).get(f"inflight:{sorted(self_hosted)[0]}")
                      if self_hosted else None)
@@ -440,13 +444,24 @@ def cmd_assign(args) -> int:
 
     Every request is assigned somewhere -- section 2 of SCOPE is explicit that there is no "choose nothing" -- so this
     prints an assignment even when nothing could be certified, and the record says which it was.
+
+    `--floor` is optional here: the policy artifact carries the floor it was compiled under (decide.Policy.parameters,
+    C2), so a caller with nothing to add gets the artifact's own value. A caller who DOES supply one is checked
+    against the artifact through `decide.parameter` rather than trusted outright -- a floor typed at this shell prompt
+    that disagrees with the one the table was compiled under is exactly the "two homes for one number" this exists to
+    refuse, so a mismatch exits 4 rather than picking a side.
     """
-    from tierbook.decide import from_dict
+    from tierbook.decide import from_dict, parameter
     from tierbook.observe import observe
     from tierbook.record import Log
     from tierbook.serve import route_once
 
     policy = from_dict(json.loads(Path(args.policy).read_text()))
+    try:
+        floor = parameter(policy, "floor", args.floor)
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 4
     prev = None
     if args.previous and Path(args.previous).exists():
         prev = json.loads(Path(args.previous).read_text()).get("readings")
@@ -463,7 +478,7 @@ def cmd_assign(args) -> int:
         evidence_as_of=args.measured_on or "",
         # Without a floor, every non-chosen candidate is recorded `not_evaluated` rather than being assigned a reason
         # nobody computed. With one, the reason comes from the same admissibility function the falsifier uses.
-        bound_kind=args.bound_kind, floor=args.floor, latency_feasible=args.latency_feasible,
+        bound_kind=args.bound_kind, floor=floor, latency_feasible=args.latency_feasible,
         max_age_days=args.max_age_days,
         log=Log(args.log) if args.log else None)
     print(json.dumps({"assign": decision["assign"], "certified": record.certified,
@@ -478,18 +493,41 @@ def cmd_accept(args) -> int:
     Exits non-zero on a failure and zero otherwise, including when most criteria are `unsupported`: an unsupported
     criterion is a measurement nobody has made, not a defect in the mechanism, and treating it as a failure would make
     the check impossible to adopt.
+
+    `--floor` is optional given `--policy`: the artifact carries the floor it was compiled under (C2), and a supplied
+    value is checked against it through `decide.parameter` rather than trusted outright -- a mismatch exits 4. Without
+    `--policy` there is nothing to check against, so `--floor` is required and the output records that the number was
+    operator-supplied and unchecked, which is the honest description of what `no_false_certification: pass` in
+    docs/verify/v0.1.0-accept.json actually rested on.
     """
     from tierbook.accept import FAIL, check_all, summarise
+    from tierbook.decide import from_dict, parameter
     from tierbook.record import Log
 
+    if args.policy:
+        policy = from_dict(json.loads(Path(args.policy).read_text()))
+        try:
+            floor = parameter(policy, "floor", args.floor)
+        except ValueError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 4
+        floor_provenance = (f"checked against {args.policy} through decide.parameter"
+                            if args.floor is not None else f"read from {args.policy}'s compiled parameters")
+    else:
+        if args.floor is None:
+            sys.exit("--floor is required without --policy")
+        floor = args.floor
+        floor_provenance = "operator-supplied and unchecked: no --policy was given to confirm it against"
+
     decisions, outcomes = Log(args.log).read()
-    verdicts = check_all(decisions, outcomes, floor=args.floor,
+    verdicts = check_all(decisions, outcomes, floor=floor,
                          latency_feasible=args.latency_feasible,
                          uncertified_tolerance=args.uncertified_tolerance,
                          budgeted_exploration=args.budgeted_exploration,
                          latency_limit_s=args.latency_limit_s, slo_tolerance=args.slo_tolerance,
                          significance=args.significance)
-    out = {"verdicts": [v.as_dict() for v in verdicts], "summary": summarise(verdicts)}
+    out = {"verdicts": [v.as_dict() for v in verdicts], "summary": summarise(verdicts),
+          "floor": floor, "floor_provenance": floor_provenance}
     print(json.dumps(out, indent=2))
     if args.out:
         Path(args.out).write_text(json.dumps(out, indent=1))
@@ -551,6 +589,11 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--alpha", type=float, default=0.05)
     c.add_argument("--throughput-per-family", action="append", metavar="FAMILY=TASKS_PER_HOUR")
     c.add_argument("--max-age-days", type=int, default=90)
+    c.add_argument("--floor", type=float, default=None,
+                   help="the family's success-rate floor this table is compiled under. Written into the "
+                        "compiled policy's parameters (decide.Policy.parameters) so `assign` and `accept` can "
+                        "confirm what they are given against it instead of trusting a number typed again at a "
+                        "shell prompt. Absent by default, which is recorded as absent rather than guessed")
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
     c.add_argument("--service-curve", action="append", default=None,
@@ -674,7 +717,9 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--feature-vector-version", default="fv1")
     a.add_argument("--policy-version", default="unversioned")
     a.add_argument("--floor", type=float, default=None,
-                   help="the family's floor. Without it every non-chosen candidate is recorded as not_evaluated, "
+                   help="the family's floor. Checked against the value --policy was compiled under (decide.parameter) "
+                        "rather than trusted outright; a mismatch exits 4. Left absent, the artifact's own value is "
+                        "used, and without one there either every non-chosen candidate is recorded as not_evaluated, "
                         "because a reason nobody computed is worse than no reason")
     a.add_argument("--bound-kind", default="unstated",
                    help="what kind of number --bounds carries. Never inferred: a log of point estimates must not "
@@ -688,7 +733,13 @@ def main(argv: list[str] | None = None) -> int:
     k = sub.add_parser("accept", parents=[common],
                        help="SCOPE section 12's criteria over a decision log, each with its own verdict")
     k.add_argument("--log", required=True)
-    k.add_argument("--floor", type=float, required=True)
+    k.add_argument("--policy", default=None,
+                   help="a compiled policy, as decide.as_dict wrote it. Gives --floor something to be checked "
+                        "against through decide.parameter; without it --floor is required and the run is "
+                        "recorded as operator-supplied and unchecked")
+    k.add_argument("--floor", type=float, default=None,
+                   help="the family's floor. Required unless --policy supplies one to check it against; a "
+                        "value that disagrees with the artifact's exits 4 rather than picking a side")
     k.add_argument("--latency-feasible", type=_tri, default=None)
     k.add_argument("--uncertified-tolerance", type=float, default=None)
     k.add_argument("--budgeted-exploration", type=float, default=None)
