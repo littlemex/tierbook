@@ -10,19 +10,36 @@ either way, so declining to choose only means the declared default chooses while
 consequence. When the state is incomplete or no rule fires, this returns the default with `certified: False` -- an
 assignment, with the reason recorded.
 
-**The propensity is 1 and the record says why that matters.** A compiled policy here is deterministic, so the logged
-selection probability is 1 for the arm it chose and there is no data at all for the others. That is enough for section
-9's record and **not** enough for section 9's off-policy claim, which is why `accept.spend_regret` reports
-`unsupported` rather than a number. Writing 1.0 without saying so would leave a reader to discover that later.
+**The propensity was 1 before C3, and the record said why that mattered.** A compiled policy here is deterministic,
+so with no exploration mechanism the logged selection probability is 1 for the arm decide() chose and there is no
+data at all for the others -- enough for section 9's record and not enough for section 9's off-policy claim, which
+is why `accept.spend_regret` reported `unsupported` rather than a number.
+
+**C3 makes the randomiser part of this composition, not a layer on top of it.** `route_once` calls `explore.draw`
+exactly once per decision -- CONTRACT C3's "one draw" -- over the eligible set `explore.eligible` computes from
+the same admissibility facts `candidate_set` already gathers. Exploration applies even when `decide` fell to the
+declared default: the default is a choice like any other, and excluding it from the draw would fix its propensity
+at 1 forever, which is the defect the paragraph above described and this module no longer has. The propensity and
+the eligible set recorded on the `Decision` are exactly what the draw returned -- never recomputed by a caller,
+because a caller re-deriving them from the policy afterwards could derive a different number than the one that was
+actually drawn from.
 """
 from __future__ import annotations
 
+import random
+
 from . import decide as dc
+from . import explore as ex
 from . import observe as ob
 from .record import Candidate, Decision, Log, admissible
 
-#: The propensity of a deterministic policy's chosen arm. Named rather than written as a literal at the call site,
-#: because the name is where the consequence is recorded: an off-policy estimate over a log of these is unidentified.
+#: The propensity of an arm nothing was drawn for -- either because no rate was declared (or it was zero) or
+#: because the eligible set held no alternative to draw. `explore.draw` returns this value itself, as a literal,
+#: for exactly those two cases (its "rate_zero" and "no_eligible_arm" reasons); `route_once` below records
+#: whatever `draw` returns rather than substituting this name for it, so an off-policy estimate never has to
+#: guess which decisions in a log got a live draw and which got this constant. Kept, named, for a caller
+#: elsewhere in this codebase that still wants "the propensity of a deterministic policy's chosen arm" as a
+#: fact to compare against.
 DETERMINISTIC_PROPENSITY = 1.0
 
 
@@ -104,15 +121,60 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
                bounds: dict | None = None, costs: dict | None = None, evidence_as_of: str = "",
                bound_kind: str = "unstated", floor: float | None = None,
                latency_feasible: bool | None = None, max_age_days: float | None = None,
+               exploration_rate: float | None = None, staleness_limit_days: float | None = None,
+               rng: random.Random | None = None,
                log: Log | None = None) -> tuple[dict, Decision]:
-    """Observe -> decide -> record, once.
+    """Observe -> decide -> record, once -- and now explore -> record, because CONTRACT C3 makes the randomiser
+    part of this composition. `decide` still produces ONE assignment; what changed is that this function no
+    longer writes that assignment down uncontested.
 
     Returns the raw decision from `decide` and the record that was written, because the two say different things: the
     first carries the gaps, the second carries what a later claim will be computed from.
+
+    `rng` is a parameter rather than a module-level generator (CONTRACT constraint), so a caller can seed one run
+    and get a reproducible draw. Left absent, a fresh `random.Random()` is used -- harmless even then, because
+    `explore.draw` never touches it when `exploration_rate` is `None` or `0`: the "rate_zero" branch returns
+    before any random number is drawn.
     """
     got = dc.decide(policy, observation.state)
-    chosen = got["assign"][0]
+    deterministic = got["assign"][0]
     authorised = bool(observation.state.get("metered_authorised", False))
+    available = {c: observation.state.get(f"available:{c}") for c in (bounds or {})}
+    evidence_age_days = observation.state.get("evidence_age_days")
+
+    # Built around decide()'s own choice first, because that is the candidate set `explore.eligible` reads to
+    # find who else clears the floor -- the same admissibility facts this function already gathers for the
+    # record, not a second, separately-computed set.
+    candidates = candidate_set(
+        policy, deterministic, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of, bound_kind=bound_kind,
+        floor=floor, authorised=authorised, latency_feasible=latency_feasible, available=available,
+        evidence_age_days=evidence_age_days, max_age_days=max_age_days)
+
+    # `explore.eligible` requires a real floor -- it compares a candidate's bound against it, and `None` would
+    # make that comparison a `TypeError` rather than a refusal. Without one there is no basis to say what clears
+    # it, so nothing is eligible, matching how `_why_not` above already answers "not_evaluated" rather than
+    # asserting a comparison nobody made.
+    eligible_ids = ([] if floor is None else
+                    ex.eligible(candidates, floor=floor, authorised=authorised, latency_feasible=latency_feasible,
+                               available=available, staleness_limit_days=staleness_limit_days,
+                               evidence_age_days=evidence_age_days))
+    chosen, propensity, exploration_reason = ex.draw(
+        deterministic, eligible_ids, exploration_rate or 0.0, rng if rng is not None else random.Random())
+
+    if chosen != deterministic:
+        # ONE DRAW chose an arm decide() did not. `candidate_set` is rebuilt around the arm actually served, so
+        # `excluded_because == "chosen"` names the one that was, not the one decide() proposed -- the invariant
+        # `Decision.__post_init__` already enforces. And CONTRACT C3 ("not uncertified by construction"): the
+        # drawn arm came from `eligible_ids`, which already required its bound to clear the floor and the rest
+        # of admissibility except the expiry `clears_floor` deliberately overrides -- so it is certified here,
+        # not left to inherit whatever `decide` said about a rule it did not fire.
+        candidates = candidate_set(
+            policy, chosen, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of, bound_kind=bound_kind,
+            floor=floor, authorised=authorised, latency_feasible=latency_feasible, available=available,
+            evidence_age_days=evidence_age_days, max_age_days=max_age_days)
+        certified = True
+    else:
+        certified = bool(got["certified"])
 
     decision = Decision(
         family=policy.family,
@@ -121,15 +183,17 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
         # A reference, not a snapshot: section 9 forbids the snapshot because it would be unbounded and would carry
         # tenant content. The observation is logged separately by whoever collected it.
         state_ref=state_ref(observation),
-        candidates=candidate_set(
-            policy, chosen, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of, bound_kind=bound_kind,
-            floor=floor, authorised=authorised, latency_feasible=latency_feasible,
-            available={c: observation.state.get(f"available:{c}") for c in (bounds or {})},
-            evidence_age_days=observation.state.get("evidence_age_days"), max_age_days=max_age_days),
+        candidates=candidates,
         chosen=chosen,
-        selection_probability=DETERMINISTIC_PROPENSITY,
-        exploration=False,
-        certified=bool(got["certified"]),
+        # Whatever `explore.draw` actually returned -- never DETERMINISTIC_PROPENSITY substituted back in, and
+        # never recomputed from the policy after the fact: a caller re-deriving the propensity from the eligible
+        # set could derive a different number than the one the draw used, which is a second home for a value
+        # section 9 needs identified to exactly one.
+        selection_probability=propensity,
+        exploration=(exploration_reason == "explored"),
+        exploration_reason=exploration_reason,
+        eligible_set=eligible_ids,
+        certified=certified,
         policy_version=policy_version,
         mechanism_version=mechanism_version,
         agent=agent,
