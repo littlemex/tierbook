@@ -31,6 +31,12 @@ import time
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
 
+# Imported for its `evidence_age_days`, which `check_certification` reuses rather than recomputing
+# `date.fromisoformat` / UTC midnight / `(now - then) / 86400` a third time (amendment 7, C6). Checked for a
+# cycle before writing this: `observe` imports only `decide.STATE_VARS`, and neither `decide` nor `observe`
+# imports `record`, so this edge does not close a loop.
+from . import observe
+
 #: The shape this module writes and reads by default. Verified: `accept._as_decision` used to splat every row key
 #: into `Decision(**kw)`, so a record carrying a field the reader's Decision does not define raised
 #: `TypeError: __init__() got an unexpected keyword argument` on every line -- outside `Log.read`'s corrupt-line
@@ -55,6 +61,11 @@ EXCLUSION_REASONS = (
     "not_priced",               # no cost figure, so it cannot be compared on the objective
     "no_bound",                 # no comparable bound, so admissibility cannot be evaluated
     "evidence_expired",         # its estimate is past its freshness limit
+    # Amendment 7 (C6): distinct from `evidence_expired`, which asserts an age the record does not carry.
+    # `Candidate.evidence_as_of` defaults to `""`, so an undated candidate is representable, and with a limit
+    # declared there is no honest use of `evidence_expired` for it and no honest way to admit it either --
+    # admitting it silently skips freshness, which is the v0.1.0 defect this entry exists to close.
+    "no_evidence_date",
     "chosen",                   # it is the one that was selected; recorded so the set is complete
     # For a candidate whose admissibility was never evaluated. Added because the alternative was worse than "other":
     # `serve.candidate_set` used to assert `below_floor` for anything it could not otherwise classify, WITHOUT a floor
@@ -318,19 +329,56 @@ def admissible(candidate: Candidate, *, floor: float, authorised: bool,
     return True, "chosen"
 
 
+def _admissible_at_decision(candidate: Candidate, *, floor: float, authorised: bool,
+                            latency_feasible: bool | None, max_age_days: float | None,
+                            decided_at: float) -> tuple[bool, str]:
+    """`admissible`, with the age it needs derived here rather than supplied by the caller (amendment 7, C6).
+
+    DEFECT this replaces: `check_certification` used to take one `evidence_age_days` and apply it to every
+    candidate in the decision, while each candidate carries its own `evidence_as_of` and tiers are measured at
+    different times -- differing dates are the normal case, not an edge one. Measured on one decision holding a
+    617-day-old candidate and a 9-day-old one: a 400-day scalar reported NOTHING where the 9-day candidate's
+    certification was a real hiding place, and a 5-day scalar reported BOTH where only the 617-day one had
+    actually expired. No scalar is right for a set whose members differ by 608 days, so the age is computed per
+    candidate instead of threaded through as a fourth copy of the same number.
+
+    The reference is `decided_at` -- when the decision was made -- not the clock at the moment this runs.
+    Re-evaluating against accept-time would make a verdict drift as the file ages, which is the defect
+    `classify_label` already refuses for label states: a criterion whose answer changes because the file got
+    older is not a criterion.
+
+    An empty `evidence_as_of` is never passed to `observe.evidence_age_days`: with `max_age_days` declared there
+    is no honest reading of an undated candidate -- `evidence_expired` would assert an age the record does not
+    carry, and treating the age as absent would silently skip freshness for it, which is the v0.1.0 defect
+    amendment 7 exists to close. `no_evidence_date` names which of the two applies, checked after `no_bound` so
+    it keeps `admissible`'s own priority (a candidate with no bound is `no_bound` regardless of its date). With
+    no `max_age_days` declared the condition is simply absent, exactly as for every dated candidate.
+    """
+    if candidate.bound is not None and max_age_days is not None and not candidate.evidence_as_of:
+        return False, "no_evidence_date"
+    age = (observe.evidence_age_days(candidate.evidence_as_of, now=decided_at)
+          if candidate.evidence_as_of else None)
+    return admissible(candidate, floor=floor, authorised=authorised, latency_feasible=latency_feasible,
+                      evidence_age_days=age, max_age_days=max_age_days)
+
+
 def check_certification(decision: Decision, *, floor: float, latency_feasible: bool | None,
-                        evidence_age_days: float | None = None, max_age_days: float | None = None) -> list:
+                        max_age_days: float | None = None) -> list:
     """Section 12's falsifier, computed rather than asserted.
 
     Returns the violations found. Two are possible and they are opposite errors: an assignment marked certified whose
     candidate was not admissible, and an uncertified assignment made while an admissible candidate existed -- the
     second is section 12's "default is not a hiding place".
+
+    `evidence_age_days` is gone from this signature (amendment 7, C6): each candidate's age is derived from its
+    own `evidence_as_of` against `decision.decided_at` by `_admissible_at_decision`, which is what a scalar
+    covering every candidate could never be right about. See that function for the measured defect this closes.
     """
     out = []
     kw = dict(floor=floor, authorised=decision.gateway_authorised, latency_feasible=latency_feasible,
-              evidence_age_days=evidence_age_days, max_age_days=max_age_days)
+              max_age_days=max_age_days, decided_at=decision.decided_at)
     chosen = next(c for c in decision.candidates if c.id == decision.chosen)
-    ok, why = admissible(chosen, **kw)
+    ok, why = _admissible_at_decision(chosen, **kw)
     if decision.certified and not ok:
         out.append(f"certified but the chosen candidate {chosen.id!r} was not admissible: {why}")
     if not decision.certified:
@@ -339,7 +387,7 @@ def check_certification(decision: Decision, *, floor: float, latency_feasible: b
         # version skipped it, which made exactly that case undetectable. Every violation is reported rather than the
         # first: an earlier version broke out of the loop and undercounted.
         for c in decision.candidates:
-            was, _ = admissible(c, **kw)
+            was, _ = _admissible_at_decision(c, **kw)
             if was:
                 out.append(f"uncertified while {c.id!r} was admissible, so the default was a hiding place")
     return out
