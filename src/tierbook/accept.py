@@ -61,15 +61,25 @@ class Verdict:
                 "numbers": self.numbers or {}}
 
 
-def no_false_certification(decisions: list, *, floor: float, latency_feasible: bool | None) -> Verdict:
-    """Section 12's falsifier. Every certified decision, against section 2's three-part definition."""
+def no_false_certification(decisions: list, *, floor: float, latency_feasible: bool | None,
+                           max_age_days: float | None = None) -> Verdict:
+    """Section 12's falsifier. Every certified decision, against section 2's four-part definition.
+
+    `max_age_days` gained here (amendment 7, C6): before this entry, this function called
+    `record.check_certification` with freshness absent since v0.1.0 -- the release in which `record.admissible`
+    gained freshness as its fourth condition -- so the falsifier was blind to it. Unlike the age, which
+    `check_certification` now derives per candidate, the limit is not in the record: it is the family's declared
+    policy input, so it comes from outside, and `cli.cmd_accept` is the one caller that supplies it (from the
+    policy artifact, never a flag). Absent here, the condition is absent rather than satisfied, as with
+    `latency_feasible`.
+    """
     if not decisions:
         return Verdict("no_false_certification", UNSUPPORTED,
                        "the log holds no decisions, so there is nothing to check against the definition")
     bad = []
     for row in decisions:
         d, _ignored = from_row(row)
-        for v in check_certification(d, floor=floor, latency_feasible=latency_feasible):
+        for v in check_certification(d, floor=floor, latency_feasible=latency_feasible, max_age_days=max_age_days):
             if "hiding place" not in v:
                 bad.append(f"{d.request_id}: {v}")
     if bad:
@@ -82,19 +92,24 @@ def no_false_certification(decisions: list, *, floor: float, latency_feasible: b
 
 
 def default_is_not_a_hiding_place(decisions: list, *, floor: float, latency_feasible: bool | None,
-                                  uncertified_tolerance: float | None = None) -> Verdict:
+                                  uncertified_tolerance: float | None = None,
+                                  max_age_days: float | None = None) -> Verdict:
     """An uncertified assignment made while something admissible existed, and the uncertified share against its
     stated tolerance.
 
     The share half is `unsupported` when no tolerance was declared, rather than compared against a number chosen
     here: section 12 says "exceeds its stated tolerance", and inventing the tolerance would be grading our own work.
+
+    `max_age_days` gained here for the same reason `no_false_certification` gained it (amendment 7, C6): this is
+    the mirror falsifier over the same `check_certification`, and a scalar age applied to every candidate would
+    have been just as wrong for a default that hides behind a stale bound as for a certified one.
     """
     if not decisions:
         return Verdict("default_is_not_a_hiding_place", UNSUPPORTED, "the log holds no decisions")
     hid = []
     for row in decisions:
         d, _ignored = from_row(row)
-        for v in check_certification(d, floor=floor, latency_feasible=latency_feasible):
+        for v in check_certification(d, floor=floor, latency_feasible=latency_feasible, max_age_days=max_age_days):
             if "hiding place" in v:
                 hid.append(f"{d.request_id}: {v}")
     share = sum(1 for r in decisions if not r["certified"]) / len(decisions)
@@ -313,7 +328,8 @@ def _needs_a_design(criterion: str, why: str) -> Verdict:
 def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible: bool | None = None,
               uncertified_tolerance: float | None = None, budgeted_exploration: float | None = None,
               latency_limit_s: float | None = None, slo_tolerance: float | None = None,
-              significance: float = 0.05, pool_across_versions: bool = False) -> list:
+              significance: float = 0.05, pool_across_versions: bool = False,
+              max_age_days: float | None = None) -> list:
     """Every criterion section 12 names, in its order, each with its own verdict.
 
     The three that cannot be computed from a log at all say what they need instead of sharing a message: a reader told
@@ -323,6 +339,11 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
     gives it a behaviour -- refusing the mixture-sensitive criteria with `UNSUPPORTED` when decisions span more than
     one `schema_version` and this is false. C1 only reads a mixed log without raising; it does not yet detect or
     refuse the mixture.
+
+    `max_age_days` (amendment 7, C6) is the family's declared freshness limit, passed down to the two falsifiers
+    that call `record.check_certification`. It is not in the record the way an age is -- it is a policy input, so
+    it comes from outside, and `cli.cmd_accept` is the one caller that supplies it, read from the compiled policy
+    through `decide.parameter` rather than a second CLI flag.
     """
     del pool_across_versions  # threaded nowhere yet; C5 owns the refusal this keyword requests
     return [
@@ -332,9 +353,9 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
                         "pre-registered resampling or simulation where the estimand is known, run against the "
                         "procedure -- no amount of routed traffic substitutes, because in traffic the estimand is "
                         "what is unknown"),
-        no_false_certification(decisions, floor=floor, latency_feasible=latency_feasible),
+        no_false_certification(decisions, floor=floor, latency_feasible=latency_feasible, max_age_days=max_age_days),
         default_is_not_a_hiding_place(decisions, floor=floor, latency_feasible=latency_feasible,
-                                      uncertified_tolerance=uncertified_tolerance),
+                                      uncertified_tolerance=uncertified_tolerance, max_age_days=max_age_days),
         slo(decisions, outcomes, latency_limit_s=latency_limit_s, tolerance=slo_tolerance),
         _needs_a_design("spend_regret",
                         "an off-policy estimate with an interval, by the method section 9 declares. It needs logged "

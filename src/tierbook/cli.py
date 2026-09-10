@@ -537,6 +537,7 @@ def cmd_accept(args) -> int:
     from tierbook.decide import from_dict, parameter
     from tierbook.record import Log
 
+    max_age_days = None
     if args.policy:
         policy = from_dict(json.loads(Path(args.policy).read_text()))
         try:
@@ -546,6 +547,10 @@ def cmd_accept(args) -> int:
             return 4
         floor_provenance = (f"checked against {args.policy} through decide.parameter"
                             if args.floor is not None else f"read from {args.policy}'s compiled parameters")
+        # The artifact's own value, `supplied=None` because there is no CLI flag to check it against (amendment
+        # 7, C6, following amendment 2's rule for the floor): a second typed number here would reopen the very
+        # defect amendment 2 closed, in a second value.
+        max_age_days = parameter(policy, "max_evidence_age_days", None)
     else:
         if args.floor is None:
             # 2, argparse's own code for an argument that had to be supplied and was not, because that is the
@@ -564,7 +569,7 @@ def cmd_accept(args) -> int:
                          uncertified_tolerance=args.uncertified_tolerance,
                          budgeted_exploration=args.budgeted_exploration,
                          latency_limit_s=args.latency_limit_s, slo_tolerance=args.slo_tolerance,
-                         significance=args.significance)
+                         significance=args.significance, max_age_days=max_age_days)
     out = {"verdicts": [v.as_dict() for v in verdicts], "summary": summarise(verdicts),
           "floor": floor, "floor_provenance": floor_provenance}
     print(json.dumps(out, indent=2))
