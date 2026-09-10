@@ -231,8 +231,13 @@ the floor was operator-supplied and unchecked.
 `label_source: none` fails `validate` with a message naming both — the omission is a compile failure, not a runtime
 discovery.
 
-**`outcomes.classify_label(decided_at, now, max_label_latency_s, label) -> str`** — returns a member of
+**`record.classify_label(decided_at, now, max_label_latency_s, label) -> str`** — returns a member of
 `record.LABEL_STATES`.
+
+Housed in `record` rather than in `outcomes`, and the correction is worth recording: `outcomes` is the potential-outcome
+table — what every tier did on every item, so a policy can be chosen over it. A label's lifecycle is a different
+subject, and the module that defines `LABEL_STATES` is the one that decides the transitions between them. Named in the
+wrong module in a first draft of this section, and caught before any worker read it.
 
 - A label present returns `labelled`.
 - No label and `now - decided_at <= max_label_latency_s` returns `pending`.
