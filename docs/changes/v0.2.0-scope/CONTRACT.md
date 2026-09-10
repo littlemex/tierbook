@@ -933,3 +933,53 @@ unreadable later. It does **not** make a criterion `UNSUPPORTED` — unlike C11'
 from the population, and refusing here would make every reader-behind-its-log run unusable rather than
 annotated. The distinction between "the population is incomplete" and "the rows are complete and I understood
 less of them than they contain" is exactly the one C1 built the return value to express.
+
+## Amendment 15 — C13, the falsifier cannot detect a fabricated bound, found by running the thing
+
+Phase 5, on a real engine. The compiled policy for the example ledger's `agentic-coding` family carries
+`parameters` — floor, evidence-age limit, staleness limit, exploration rate — and **no bounds**. `serve.route_once`
+takes `bounds` from its caller. So the two halves of the comparison `admissible` performs have different homes: the
+floor is in the artifact and read through `decide.parameter`, and the bound it is compared against is a number
+somebody typed.
+
+Measured. The ledger's own records for that family:
+
+```
+api-cheap-a      measured solved/attempted = 16/20
+api-strong-a     measured solved/attempted = 20/20
+self-hosted-a    measured solved/attempted = 14/20
+```
+
+A caller asserting a bound of `0.99` for `self-hosted-a` — a tier the evidence puts at 70% — and recording
+`certified: true`:
+
+```
+no_false_certification -> pass | every certified assignment's candidate was admissible under section 2
+```
+
+SCOPE section 12 calls that criterion the falsifier and reads its silence as evidence that the mechanism is sound.
+It computes admissibility **from the caller's own bound**, so what it verifies is that the recorded number clears the
+floor. That is a self-consistency check. A fabricated bound satisfies it by construction.
+
+**And the project already states this boundary, on the other path.** The README: *"A candidate entry setting any key
+that exists in the record schema also fails to load, because that file is where an operator would otherwise
+hand-write the accuracy figure a routing decision then rests on."* `load_config` refuses a hand-written measurement.
+`route_once` accepts one as an argument. The same value, refused through the file and accepted through the call.
+
+**C13.** The bound comes from the artifact, not the caller, by the rule amendment 2 established for the floor: the
+compiled policy records the bounds it was compiled from, and `route_once` reads them rather than receiving them. A
+`bounds=` argument that disagrees with the artifact is refused naming both, exactly as `decide.parameter` refuses a
+disagreeing floor; a caller with no artifact value to check against is told so in the record, as amendments 11 and 14
+require for the floor and the ignored keys.
+
+This is the fourth time in one release that a number reached a criterion with no recorded copy, and the first three
+were C2, C6 and C12. Worth stating as the pattern rather than the instance: **every value that two components compare
+needs one home, and the way to find the ones that do not have it is to ask which component would notice if the value
+were wrong.** For the bound, the answer was nobody.
+
+**What phase 5 has established so far, and what it has not.** The engine half is verified: `observe` read occupancy
+from a live vLLM across six distinct values from 3 to 24 under a 24-way load, and a variable it could not read is
+absent with a reason rather than defaulted. Exploration's live behaviour is **not** verified — the example ledger's
+compiled policy has no rule and no eligible alternative, so every draw returned `no_eligible_arm` and the diverted
+share was 0. That is correct behaviour on that fixture and it is not evidence about the draw. Said plainly here
+because a gap presented as coverage is the failure phase 5 exists to prevent.
