@@ -18,8 +18,14 @@ object, and today `families` maps a family name to a reference candidate id as a
 ```
 
 **Resolved:** C2 owns the shape change, because it needs it first. `families` becomes an object with `reference` and
-`floor`; `config_format` goes from 1 to 2; a bare string is refused naming what to change. C4 then **appends** `labeller`
-and `max_label_latency_s` to the shape C2 created and does **not** re-bump `config_format`.
+`floor`; `config_format` goes from 1 to 2; a bare string is refused naming what to change. C4 then **appends**
+`label_source`, `max_label_latency_s` and `label_independent_of_candidate` to the shape C2 created and does **not**
+re-bump `config_format`.
+
+Amendment 4 settled which file that object lives in, and the seam is the reason it was caught: C4's interface section
+named `schema.json`, the **tier record** — a measurement artifact — while this entry said C4 appends to the config
+object C2 created. The two could not both be true, and reading the schema file decided it in favour of this entry. A
+seam recorded before implementation is what made a wrong interface visible without a worker building on it first.
 
 **Rejected: each entry adds its own keys independently.** Two authors bumping `config_format` in the same release gives
 two version 2s that are not each other, and a reader cannot tell which it has. Worse, whichever merges second discovers
