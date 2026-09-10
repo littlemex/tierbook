@@ -11,6 +11,13 @@ preferring one. Every test below is either that refusal or a way it could quietl
 
 Only C2 is in scope here. Nothing about `schema_version`, `from_row`, exploration, a labeller, or pooling across
 versions is tested in this file.
+
+Amendment 2 (below the original tests): the code author found the floor never entered the compile path at all --
+it was not lost, it had never been declared anywhere. A2.2/A2.3 move it into the ledger's per-family declaration:
+`families` in the candidate file stops mapping a family name to a bare reference-id string and becomes an object
+`{"reference": <candidate id>, "floor": <float>}`, and `config_format` goes from 1 to 2. `compile --floor` never
+existed and is not tested. A2.4 (a labeller and max label latency joining the same object, for C4) is out of scope
+here.
 """
 from __future__ import annotations
 
@@ -24,8 +31,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from tierbook import cli  # noqa: E402
 from tierbook import decide as D  # noqa: E402
+from tierbook.config import ConfigError, load_config  # noqa: E402
 
 V010_SMOKE_POLICY = ROOT / "docs" / "verify" / "v0.1.0-smoke-policy.json"
+EXAMPLE_CANDIDATES = ROOT / "examples" / "ledger" / "candidates.json"
+EXAMPLE_LEDGER_TIERS = str(ROOT / "examples" / "ledger" / "tiers")
 
 
 def run_cli(argv: list[str]) -> int:
@@ -234,10 +244,14 @@ def test_accept_floor_mismatch_against_the_policy_exits_4_with_the_message_on_st
 def test_accept_with_no_policy_requires_floor(tmp_path):
     """This is the fifth named negative case: an `accept` run with no `--policy` and no `--floor` has no artifact to
     read a floor from and no operator-supplied one either, so it must not silently proceed -- SCOPE's own criteria
-    are computed against a floor, and there is none here at all."""
+    are computed against a floor, and there is none here at all.
+
+    Exit code 2, the CLI's existing code for a missing required argument -- not 4. 4 is reserved for a mismatch
+    between two PRESENT numbers, which is a different operator action: 2 means supply something, 4 means two
+    sources disagree and one is wrong. Amendment 2 settled this; it was previously reported as an open ambiguity."""
     log_path = tmp_path / "decisions.jsonl"
     rc = run_cli(["accept", "--log", str(log_path)])
-    assert rc != 0
+    assert rc == 2
 
 
 def test_accept_with_no_policy_but_a_supplied_floor_still_runs(tmp_path):
@@ -258,3 +272,126 @@ def test_accept_with_no_policy_records_that_the_floor_was_operator_supplied_and_
     out = (tmp_path / "out.json").read_text() + capsys.readouterr().out
     assert "operator" in out.lower()
     assert "unchecked" in out.lower() or "not checked" in out.lower() or "not_checked" in out.lower()
+
+
+# =====================================================================================================
+# Amendment 2 -- the floor moves from a CLI flag to the ledger's per-family declaration.
+# =====================================================================================================
+#
+# A2.2: the floor is per FAMILY, not one global number threaded through the compile path.
+# A2.3: the home is `families` in the candidate file, which stops being `{family: reference_id}` and
+# becomes `{family: {"reference": reference_id, "floor": float}}`. `config_format` goes 1 -> 2.
+# A2.4 (a labeller and max label latency joining the same object) is C4's and is not tested here.
+
+
+def _minimal_candidates(*, config_format=2, families=None) -> dict:
+    """The smallest candidate file `load_config` will look at. Deliberately not the example ledger: the
+    config_format / families-shape refusals are about the loader's own checks, not about whether real
+    evidence backs the family, and tying them to the bigger fixture would make a failure here harder to
+    read than it needs to be."""
+    return {
+        "config_format": config_format,
+        "candidates": {
+            "ref": {"deployment": "api",
+                    "endpoint": {"base_url": "https://x/v1", "model": "m"},
+                    "price_per_mtok": {"fresh_in": 1.0, "cached_in": 0.1, "out": 5.0}},
+        },
+        "families": families if families is not None else {"f": {"reference": "ref", "floor": 0.5}},
+        "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
+    }
+
+
+def _write_candidates(tmp_path, body: dict) -> Path:
+    p = tmp_path / "candidates.json"
+    p.write_text(json.dumps(body))
+    return p
+
+
+# --- decide.parameter, amendment 2's answers to ambiguities 2 and 3 --------------------------------
+
+
+def test_parameter_treats_an_artifacts_explicit_none_as_carrying_the_parameter():
+    """Amendment 2's answer to ambiguity 2: a key present with value `None` DOES carry the parameter --
+    `None` is the declared value "no limit", not an absence. Supplying a real number against it is a
+    MISMATCH (raise naming both), the same refusal as any other disagreement, not the separate "cannot
+    confirm" refusal that fires only when the key is missing entirely. The two are one line apart in the
+    reader and the wrong one is invisible: this is the artifact-carries-None half of that pair."""
+    pol = D.Policy(family="f", rules=(), default=("api",),
+                   parameters={"floor": 0.05, "max_evidence_age_days": None})
+    with pytest.raises(ValueError) as excinfo:
+        D.parameter(pol, "max_evidence_age_days", supplied=30.0)
+    message = str(excinfo.value)
+    assert "30.0" in message or "30" in message
+    assert "none" in message.lower()
+
+
+def test_parameter_with_the_name_genuinely_absent_still_raises_on_a_supplied_value():
+    """The other half of the same pair: a key ABSENT from `parameters` (not present-as-None) still raises
+    the "cannot confirm" refusal on a supplied value, distinct from the mismatch above. Restated here beside
+    the None case on purpose, since amendment 2 says the two are one line apart in the implementation."""
+    pol = D.Policy(family="f", rules=(), default=("api",), parameters={"floor": 0.05})
+    with pytest.raises(ValueError):
+        D.parameter(pol, "max_evidence_age_days", supplied=30.0)
+
+
+def test_parameter_with_no_supplied_value_and_the_name_entirely_absent_returns_none():
+    """Amendment 2's answer to ambiguity 3: reading the artifact is a read, and with nothing supplied there
+    is nothing to disagree with, so this returns `None` rather than raising. The alternative -- refusing
+    because the artifact never carried the name -- would break every caller that reads an optional parameter
+    with no opinion of its own, which is most of them."""
+    pol = D.Policy(family="f", rules=(), default=("api",), parameters={"floor": 0.05})
+    assert D.parameter(pol, "staleness_limit_days", supplied=None) is None
+
+
+# --- config.load_config, A2.3: a bare string is refused and A2.3/A2.4's version bump ----------------
+
+
+def test_a_bare_string_family_entry_is_refused_and_names_what_to_change(tmp_path):
+    """`families` stops being `{family: reference_id}`. The old shape has to be refused outright -- not
+    read with the floor silently treated as absent -- and the message has to tell an operator what object
+    to write and why, not merely that loading failed."""
+    body = _minimal_candidates(config_format=2, families={"f": "ref"})
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(_write_candidates(tmp_path, body))
+    message = str(excinfo.value)
+    assert "f" in message
+    assert "reference" in message and "floor" in message
+
+
+def test_config_format_1_is_refused_rather_than_read_as_the_new_shape(tmp_path):
+    """The same reasoning as C1's schema_version check, applied to the candidate file: a file written to a
+    shape this reader does not know cannot be validated against the shape it does know. `config_format: 1`
+    together with the OLD bare-string families shape was a completely valid file under format 1 -- and must
+    now be refused outright rather than parsed optimistically as if it were format 2."""
+    body = _minimal_candidates(config_format=1, families={"f": "ref"})
+    with pytest.raises(ConfigError, match="config_format"):
+        load_config(_write_candidates(tmp_path, body))
+
+
+# --- A2.2: the floor is genuinely per family, proven by compiling two that disagree -----------------
+
+
+def test_two_families_with_different_floors_each_carry_their_own_in_the_compiled_artifact(tmp_path):
+    """The sharpest test in this group, by design. A later change that collapsed the per-family floor back
+    into one global value threaded through the compile path would still pass a test that only checked ONE
+    family's floor against ITS declared value -- a global floor equal to that one family's number looks
+    identical from the inside. Asserting on BOTH families, against DIFFERENT floors, is what makes that
+    regression fail here specifically rather than surviving unnoticed, which is the exact failure mode A2.2
+    exists to close: two families with different accuracy requirements silently sharing one number."""
+    raw = json.loads(EXAMPLE_CANDIDATES.read_text())
+    raw["config_format"] = 2
+    raw["families"] = {
+        "agentic-coding": {"reference": "api-strong-a", "floor": 0.65},
+        "tool-agent-user-retail": {"reference": "api-strong-a", "floor": 0.85},
+    }
+    config_path = _write_candidates(tmp_path, raw)
+    out_path = tmp_path / "table.json"
+    rc = run_cli(["compile", "--config", str(config_path), "--out", str(out_path),
+                 "--registry", EXAMPLE_LEDGER_TIERS])
+    assert rc == 0
+    table = json.loads(out_path.read_text())
+    coding_floor = table["decide"]["agentic-coding"]["cannot_reject"]["parameters"]["floor"]
+    retail_floor = table["decide"]["tool-agent-user-retail"]["cannot_reject"]["parameters"]["floor"]
+    assert coding_floor == 0.65
+    assert retail_floor == 0.85
+    assert coding_floor != retail_floor
