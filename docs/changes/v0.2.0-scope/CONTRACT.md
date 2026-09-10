@@ -159,3 +159,136 @@ unwatched.
 | Exploration among admissible candidates only | Cannot reach the arm the ratchet locked out, which is the door's whole purpose. **A7.** |
 | Exploration overriding every exclusion | Routes paid traffic through a randomiser whose eligible set nobody can enumerate. **F22.** |
 | Adding a watcher for the labeller declaration | A watcher buys the next round the same finding one level up. Replaced by making the omission unrepresentable in the artifact. **F24.** |
+
+## Interface
+
+Written because phase 3 depends on two workers reading this the same way with no chance to ask. Failure paths are
+stated for every entry: a review of the split found that most divergences between a test author and a code author sit
+in "what does this return when it cannot do its job", so that is answered here rather than left to whoever gets there
+first.
+
+Names are binding. Behaviour not stated here is not contracted, and a worker who needs it stops and asks rather than
+choosing.
+
+### C1 — a reader that survives a field being added
+
+**`record.SCHEMA_VERSION: int = 2`** — the version this writer stamps. v0.1.0 records carry no version and are read as
+version 1.
+
+**`record.Decision`** gains `schema_version: int`, defaulted to `SCHEMA_VERSION` by the writer. A caller **may not**
+pass it: `Decision(schema_version=…)` raises `Incomplete` naming the writer as the owner.
+
+**`record.from_row(row: dict) -> tuple[Decision, list[str]]`** — the only way a logged row becomes a `Decision`.
+Returns the decision and the names of keys it ignored.
+
+- A row with no `schema_version` is read as version 1.
+- A key the dataclass does not define is **ignored and named** in the returned list. Not an error: this is the whole
+  point of the entry.
+- A row whose `schema_version` exceeds `SCHEMA_VERSION` raises `Incomplete`, naming both versions. A future shape read
+  as if it were this one is the silent-corruption case.
+- A row missing a field this version requires raises `Incomplete` naming the field. Absent is not defaulted.
+
+**`accept._as_decision` is replaced by `from_row`.** Every caller goes through it.
+
+**`accept.check_all`** gains a keyword `pool_across_versions: bool = False` — see C5.
+
+**Failure surfaces.** `Log.read` continues to count unreadable *lines*; a row that parses as JSON but fails `from_row`
+is a different failure and is counted separately as `__unreadable_rows__`, with the reason, because "the file was
+truncated" and "the record is from a newer version" are different operator actions.
+
+### C2 — the policy artifact records the parameters it was compiled under
+
+**`decide.Policy`** gains `parameters: dict`, holding at least `floor: float` and `max_evidence_age_days: float | None`,
+plus `staleness_limit_days: float | None` for C3. `as_dict` writes it; `from_dict` reads it.
+
+**`decide.from_dict`** raises `ValueError` naming the absent key when an artifact carries rules but no `parameters`.
+An artifact from v0.1.0 is exactly that case, and the message says to recompile — the same stance the prose-only guard
+already takes.
+
+**`decide.parameter(policy, name, supplied=None) -> float | None`** — the single reader.
+
+- With `supplied is None`, returns the artifact's value.
+- With a `supplied` value **equal** to the artifact's, returns it.
+- With a `supplied` value **different** from the artifact's, raises `ValueError` naming both. It does not prefer either.
+  A consumer that could prefer one is a second home for the number.
+- When the artifact does not carry `name` and a value is supplied, raises `ValueError`: an artifact that did not record
+  the parameter cannot confirm one.
+
+**`cli`**: `assign --floor` and `accept --floor` become optional. When given, they are checked against the artifact
+through `parameter`, and a mismatch exits **4** with the message on stderr. When absent, the artifact's value is used.
+`accept` gains `--policy` so it has an artifact to read; without it, `--floor` is required and the output records that
+the floor was operator-supplied and unchecked.
+
+### C4 — the family declares its labeller, and no labeller means no exploration rate
+
+**`schema.json`**, family object: `required` gains `label_source` and `max_label_latency_s`. `label_source` is one of
+`executable_check`, `caller_supplied`, `none`. `max_label_latency_s` is a number, or `null` when `label_source` is
+`none`.
+
+**`validate`** fails a ledger whose family omits either, naming the family and the field.
+
+**`exploration_rate`** may appear on a family only when `label_source != "none"`. A family with a rate and
+`label_source: none` fails `validate` with a message naming both — the omission is a compile failure, not a runtime
+discovery.
+
+**`outcomes.classify_label(decided_at, now, max_label_latency_s, label) -> str`** — returns a member of
+`record.LABEL_STATES`.
+
+- A label present returns `labelled`.
+- No label and `now - decided_at <= max_label_latency_s` returns `pending`.
+- No label and beyond it returns `missing`.
+- `max_label_latency_s is None` raises `ValueError`: with no declared latency the distinction is not the join's to make.
+
+**`Log.read` does not reclassify.** A row at `schema_version < 2` keeps the label state it was written with, and
+`classify_label` is never applied to it.
+
+### C3 — exploration
+
+**`explore.clears_floor(candidate, floor, *, staleness_limit_days=None, evidence_age_days=None) -> tuple[bool, str]`** —
+separate from `admissible` because `admissible` decides expiry before comparing the bound.
+
+- Returns `(False, "no_bound")` when the bound is absent.
+- Returns `(False, "below_floor")` when the bound is under the floor.
+- Returns `(False, "too_stale_to_explore")` when a limit is declared and the age exceeds it.
+- Otherwise `(True, "eligible")`. **Expiry against `max_evidence_age_days` is not consulted**: that is the override.
+
+**`explore.eligible(candidates, *, floor, authorised, latency_feasible, available, staleness_limit_days,
+evidence_age_days) -> list[str]`** — candidate ids that may be explored into. A candidate excluded for
+`not_authorised`, `latency_infeasible`, `unavailable`, `not_priced` or `no_bound` is **not** eligible. Only expiry is
+overridden.
+
+**`explore.draw(deterministic, eligible, rate, rng) -> tuple[str, float, str]`** — the chosen id, its propensity, and
+the reason exploration did or did not happen.
+
+- `rate` is 0, or `eligible` has no member other than `deterministic`: returns `(deterministic, 1.0, "no_eligible_arm")`
+  or `("…", 1.0, "rate_zero")`. Distinguishable, because `exploration: false` had three causes and one bit.
+- Otherwise the alternatives are drawn uniformly with total probability `rate`, so the deterministic arm's propensity is
+  `1 - rate` and each of the `k` alternatives has `rate / k`. The returned propensity is **the chosen arm's**, and with
+  `rate = 0.05` over one alternative that is `0.95` or `0.05`.
+- `rate` outside `[0, 1)` raises `ValueError`. A rate of 1 would leave the deterministic arm propensity 0, which the
+  record refuses.
+
+**`record.Decision`** gains `exploration_reason: str` — one of `explored`, `no_eligible_arm`, `rate_zero`,
+`no_mechanism`. Version 1 rows read as `no_mechanism`. And `eligible_set: list`, the ids the draw was over, so the
+propensity can be checked rather than reconstructed.
+
+**`accept.floor_compliance`** returns **two** rates, `certified` and `all_served`, each with its own bound and verdict.
+Its `numbers` gains `served_labelled` and `served_rate`.
+
+### C5 — a pooling rule, or a refusal
+
+**`accept.check_all(..., pool_across_versions: bool = False)`**. When the decisions carry more than one
+`schema_version` and `pool_across_versions` is false, **every criterion whose value depends on the mixture** returns
+`UNSUPPORTED` with a detail naming the versions present and the count in each. Those criteria are
+`floor_compliance`, `default_is_not_a_hiding_place`, `exploration_cost` and `spend_regret`.
+
+`no_false_certification` does **not** refuse: it is a per-decision universal claim, not a rate, so a mixture does not
+change what it means.
+
+With `pool_across_versions=True` the criteria compute and every affected verdict's detail says the versions were pooled
+on the caller's instruction.
+
+### What no entry does
+
+None of these reads a request's content, produces a stratum, or writes a feature vector. A worker who finds itself
+needing any of those has left the contract.
