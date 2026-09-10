@@ -54,3 +54,25 @@ property that makes the change safe to roll out and roll back. No entry in this 
 **Rejected: adding the field now because the reader is ready.** The reader being ready is not a reason to write the
 producer; nothing in this release computes an evidence reference, so the field would be present-and-absent — assumption
 A4's failure mode, already recorded in phase 1.
+
+## S3 — `exploration_rate` is parsed by C4 and drawn from by C3
+
+**Raised by** C4's code author, from the implementation side, and it is a genuine boundary rather than a gap in either
+entry.
+
+C4's interface says `exploration_rate` may appear on a family only under two conditions, and names neither the field's
+type nor its owner. But a loader cannot refuse the *presence* of a key it does not parse, and parsing a key only to
+discard it would make the refusal a statement about a value nothing can read.
+
+**Resolved:** `FamilyDeclaration` carries `exploration_rate: float | None = None`, added by C4. C4 decides whether a rate
+**may** exist; C3 reads the rate and draws from it. C3's author will find the field already present and must not add it
+again.
+
+**Rejected: C3 adds the field and C4 refuses on the raw dict.** It splits one value across two entries — C4 validating
+`raw["families"][fam]["exploration_rate"]` while C3 owns the parsed attribute — so the declaration's shape would be
+stated in one entry and its parsing in another. C2's amendment 2 exists because a number with two homes and no recorded
+copy is the defect this release opened with; reproducing that shape inside the fix would be worse than the original.
+
+**Rejected: C4 refuses without parsing, by checking key presence only.** It works, and it leaves the rate readable only
+as an unparsed dict key, so C3 would have to re-derive the type and the absent-versus-zero distinction that C4 already
+decided. Two readers of one value again.
