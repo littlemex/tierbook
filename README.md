@@ -334,16 +334,21 @@ They will go stale; that is what the pin is for.
 
 ## Status
 
-**v0.1.0.** One turn runs end to end: a state is observed from a live engine, a compiled policy decides from it, the
-decision is recorded in the shape SCOPE section 9 requires, and the acceptance criteria are computed from that log.
-**The loop does not close** -- nothing feeds an outcome or a verdict back into the policy, and saying otherwise was the
-one over-claim a review found in this release. Verified
-against a running vLLM engine rather than a fixture, and the three evaluable criteria passed on the resulting log
-while six reported `unsupported`.
+**v0.2.0.** One turn runs end to end and the log can now be learned from. A state is observed from a live engine, a
+compiled policy decides from it, a family that declares an exploration rate draws randomly among the candidates whose
+bound clears its floor, the decision is recorded in the shape SCOPE section 9 requires with the realised propensity and
+the set it was drawn over, and the acceptance criteria are computed from that log.
 
-What v0.1.0 does **not** do: explore, log a propensity that varies, hold an anytime-valid bound, detect a
-change-point, or price the reserved candidate's scarce capacity. Those five are named in
-`decide.MISSING_FOR_A_CLOSED_LOOP` and are why six of nine acceptance criteria cannot be evaluated from a log yet.
+**The loop still does not close.** Nothing feeds an outcome or a verdict back into the policy. What changed is which
+part is missing: the propensities vary now, so an off-policy estimate is unidentified for want of an **estimator**
+rather than for want of data, and a family declares what produces its labels and how long to wait without anything
+calling the labeller.
+
+What v0.2.0 does **not** do: hold an anytime-valid bound, detect a change-point, or price the reserved candidate's
+scarce capacity. Those three are named in `decide.MISSING_FOR_A_CLOSED_LOOP`, which ships inside every compiled policy,
+and each now names the symbol whose existence would falsify it — because three items were removed this release after
+one of them had been false for a whole release while a test required the artifact to keep claiming it.
+
 Two backlog items are written up in `docs/issues/`: reading the box's hidden state to find out whether it breaks an
 abstention limit that measured `AUC 0.5000` for a structural reason, and deriving the tie band from a jackknife
 instead of taking `--margin` from a human.
