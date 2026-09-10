@@ -53,14 +53,28 @@ section 4 for why the agent is a conditioning variable here and a selectable one
 **Admissible** for a request means, jointly:
 
 1. the candidate's corrected lower bound on success clears the family's floor (section 6),
-2. the gateway authorises the spend (section 3), and
+2. the gateway authorises the spend (section 3),
 3. any latency constraint the operator has set is feasible at current occupancy — and where none is set,
-   this condition is simply absent rather than invented.
+   this condition is simply absent rather than invented, and
+4. the evidence the bound was computed from is no older than the family's declared limit — and where no limit
+   is declared, this condition is absent rather than invented, exactly as in 3.
+
+Clause 4 was implemented before it was written here, and the omission cost something, so it is worth naming rather
+than quietly adding: this document listed three conditions while the code enforced four, and a worker implementing
+exploration read "the rest of admissibility" as everything except freshness — because this section is what
+"admissibility" means. Under this document's own premise that the environment moves, a bound computed on evidence
+from an arbitrarily old environment does not support a claim about now, so an unbounded evidence age makes the floor
+claim in the next paragraph meaningless. The condition belongs here.
 
 **Certified assignment** — an admissible candidate was chosen. The floor is claimed for this request.
 
 **Uncertified assignment** — no candidate was admissible, so the request goes to the family's **declared
-default candidate** and the record says the floor is **not** claimed for it.
+default candidate** and the record says the floor is **not** claimed for it. **Or** a candidate was reached by
+exploration through the expiry override of section 11 — its bound clears the floor but the evidence behind it is past
+the family's limit — in which case the request is served by that candidate and the floor is still not claimed. The
+distinction matters because the second case is the mechanism doing its job: it serves the request, it collects the
+label that refreshes the evidence, and it does not pretend the stale bound supports a claim. Both appear in the
+all-served rate of section 12.
 
 **There is no "choose nothing".** An earlier draft of this document made refusal a runtime outcome, and
 that was incoherent: the request is served either way, so declining to choose only means the default

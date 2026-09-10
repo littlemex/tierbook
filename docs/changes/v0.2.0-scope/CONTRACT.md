@@ -492,3 +492,55 @@ treatment applies to `eligible_set`, whose version 1 value is the empty list.
 
 This is the shape `/review-contract` calls making the omission unrepresentable rather than watched: a v2 writer that
 forgets the field fails at read time, loudly, instead of the forgotten value being indistinguishable from a real one.
+
+## Amendment 6 — exploration through the expiry override does not claim the floor, and SCOPE was one clause short
+
+Found by C3's code author, reported rather than worked around, and reproduced here before deciding anything:
+
+```
+clears_floor (explore): (True, 'eligible')
+admissible (record)   : (False, 'evidence_expired')
+check_certification   : ["certified but the chosen candidate 'box' was not admissible: evidence_expired"]
+```
+
+The falsifier fires on the exact case C3 exists to create. SCOPE section 12 calls that signal *the mechanism is
+broken, not mistuned*, so this is the most consequential finding in the release and it is not a bug in either worker's
+code.
+
+**A6.1 — the root cause is in the governing document, not the contract.** SCOPE section 2 listed admissibility as
+three conditions. `record.admissible` has enforced four since v0.1.0, freshness among them, added because
+`evidence_expired` sat in the exclusion vocabulary with nothing able to produce it. So the document said three and the
+code did four, and a worker told an explored assignment "is certified when the rest of admissibility holds" read *the
+rest* as everything except freshness — reasonably, because section 2 is what admissibility means. SCOPE section 2 now
+carries the fourth clause, and says that it was implemented before it was written and what the omission cost.
+
+**A6.2 — an arm reached through the override is served uncertified.** Its bound clears the floor and the evidence
+behind that bound is past the family's limit, so the bound describes a past environment and cannot support a claim
+about this request. `serve.route_once` decides `certified` from full admissibility, freshness included — never from
+`explore.eligible`'s verdict, which answers a different question: who may be drawn, not whether the floor is claimed.
+
+This does not reopen F8. F8's objection to "uncertified by construction" was that it removes traffic from
+`floor_compliance`'s denominator, and C3 already answers that by reporting **two** rates. The traffic appears in
+`all_served`. What F8 forbids is certification following from *why* an arm was selected; what this requires is
+certification following from whether the arm was admissible, which is the same rule applied to every assignment.
+
+And the door still does its work: the request is served by the arm, the label comes back, the evidence refreshes, and
+the arm becomes admissible again. That was the point of opening it — assumption A3's ratchet was that an arm never
+chosen is never labelled. Serving it uncertified breaks the ratchet. Certifying it was never necessary.
+
+**A6.3 — `check_certification` needs the two limits kept apart.** It compares evidence age against
+`max_evidence_age_days` and must keep doing so; nothing about it changes. What changes is that `route_once` stops
+recording `certified=True` for the case it would flag. The falsifier was right and is left alone — a falsifier
+adjusted to stop reporting a real inconsistency is a falsifier that has been switched off.
+
+**A6.4 — the two ambiguities C3's workers each reported independently, settled.**
+
+`rate_zero` takes precedence over `no_eligible_arm` when both hold. With a rate of zero the eligible set is never
+consulted, so reporting `no_eligible_arm` would report on a code path that did not run. Both workers chose this
+independently; it is recorded so the next reader does not have to.
+
+`floor_compliance` stays **one** verdict, not two. SCOPE section 12 defines nine criteria and splitting one into two
+would put `accept.CRITERIA` at ten, diverging from the governing document over a presentation choice. The two rates,
+their two bounds and their two sub-verdicts live in `numbers`, and the criterion's own verdict is the worse of the two:
+a criterion that passed while its all-served half failed would be the defeat F8 describes, reintroduced through the
+report instead of through the definition.
