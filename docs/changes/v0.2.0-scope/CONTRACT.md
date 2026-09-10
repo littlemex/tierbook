@@ -832,3 +832,74 @@ The probes are the honest part and the reason this is not just a deletion. "Anyt
 checkable — no bound in the repository is anytime-valid — but the check has to be something a future author cannot
 satisfy by accident. So each probe names the symbol or module whose existence would falsify its claim, and a claim
 whose probe cannot be written is a claim too vague to ship in an artifact.
+
+## Amendment 13 — two findings the audit reproduced, both in the direction that flatters the mechanism
+
+Round 1 of phase 4. Both reproduced here before deciding anything, and both are the shape this release kept closing:
+a number that looks right because the population it was computed over quietly excluded something.
+
+### C10 — `exploration` records that the randomiser ran, not that traffic was diverted
+
+`explore.draw` returns `"explored"` for **both** outcomes of an active draw — the alternative winning, and the
+deterministic arm winning anyway — and `serve.route_once` sets `exploration=(exploration_reason == "explored")`.
+Measured over 5,000 seeds at a rate of 0.05:
+
+```
+reason == 'explored' : 100.0% of draws
+actually diverted    : 5.5%
+seed 0               : ('box', 0.95, 'explored')   <- the incumbent won and the reason still says explored
+```
+
+`accept.exploration_cost` computes its share straight off that field, so it reports **100%** against a budget the
+mechanism is 5.5% inside. SCOPE section 8 defines the exploration budget as a **share of traffic and spend**, so the
+field has to mean diversion. A criterion that fails a mechanism operating well within budget pressures an operator to
+shrink or disable exploration — starving the evidence refresh that amendment 6's whole ratchet-recovery argument
+depends on.
+
+The right signal is three lines away and already used: `serve.route_once` decides whether to re-derive `certified`
+from `chosen != deterministic`. That is what `exploration` means.
+
+**And the vocabulary is one value short, which is why the field could not carry the distinction.** C3's own text says
+`exploration: false` had three causes sharing one bit — no mechanism, an empty eligible set, a zero rate — and gave
+each a name. There is a fourth: the randomiser ran and the incumbent won. `exploration_reason` gains
+`not_diverted`, and `exploration` becomes `chosen != deterministic`.
+
+**The propensity does not change and must not.** When the incumbent wins under an active randomiser its propensity is
+`1 - rate`, not 1, because that is the probability of the arm actually chosen under the draw actually performed. So a
+record with `exploration: false` and `selection_probability: 0.95` is correct and is the common case — the two fields
+answer different questions, one for budget accounting and one for off-policy identification, and conflating them is
+what produced this defect.
+
+### C11 — the rate criteria narrow their denominator by exactly the rows C1 taught them to distinguish
+
+`accept._unreadable` reads `outcomes["__bad_lines__"]` only. A row that parses but fails `from_row` lands in
+`outcomes["__unreadable_rows__"]` — the counter **C1 added in this release** so that "the file was truncated" and "the
+record is from a newer schema" would be different operator actions — and no criterion consults it. Reproduced with 40
+labelled successes and 15 rows stamped `schema_version: 999`, all labelled failures:
+
+```
+decisions read : 40      unreadable rows: 30      bad lines: 0
+floor_compliance: pass   rate 1.0   lower_bound 0.9278
+true rate had the dropped rows counted: 0.7273     (fails an 80% floor)
+```
+
+This is F8's shape — a denominator narrowed until the violation is outside it — in the one category C1 itself
+introduced. `floor_compliance`'s own docstring states that principle for the certified-versus-all-served split and it
+was never extended here.
+
+**`_unreadable` counts both classes and names them separately.** A criterion whose population is incomplete returns
+`UNSUPPORTED` saying which class of row was dropped and how many, because the two call for different actions: repair
+the file, versus upgrade the reader.
+
+**`default_is_not_a_hiding_place` takes `outcomes`** so it can refuse for the same reason. It does not take them today,
+which is why it has no guard against either class.
+
+### The two low findings, and what is done with each
+
+`docs/releases/v0.1.0-pr.md` is retroactive release notes for the **previous** release, added inside this window with
+no authorising entry. It is left in place and named here, which is what the out-of-scope table is for; deleting a
+correct document to satisfy a mapping would be worse than recording that the mapping missed it.
+
+`tests/journeys/test_v020_journeys.py`'s module docstring still says both findings are recorded as `xfail(strict=True)`
+and "not fixed." Both were fixed and both markers are gone. The assertions still discriminate correctly; only the prose
+is stale. Fixed with C10 and C11 rather than as a separate entry, since it is one paragraph.
