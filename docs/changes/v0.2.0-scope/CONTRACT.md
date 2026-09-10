@@ -688,3 +688,41 @@ four times over. Nothing in the report distinguishes the two mechanisms.
 
 C5's interface is unchanged. The number is recorded because the entry was argued from a principle and is now also
 supported by an observation, and because it is the test C5 must make fail.
+
+## Amendment 9 — a guard that overwrites a better reason, and a message this release made false
+
+C5's code author reported the first; checking it surfaced the second, which is worse and which nothing in the release
+had noticed.
+
+**A9.1 — the mixture guard must not replace a criterion's own stronger reason.** `spend_regret` is a stub: it returns
+`UNSUPPORTED` unconditionally, for a reason of its own. Applying the mixture guard ahead of it replaces "this criterion
+has no implementation" with "your log spans two schema versions," which sends the operator to fix their log when the
+real blocker is that nothing computes the number. That is a downgrade in exactly the dimension `accept.py`'s module
+docstring says the third verdict exists for: each criterion says what it needs **in its own words**, because a reader
+told "insufficient data" learns nothing about what to collect.
+
+So the guard applies where a criterion would otherwise **produce a value**. Compute first; if the result is already
+`UNSUPPORTED`, keep its detail unchanged; replace only a `PASS` or a `FAIL` with the mixture refusal. Computing and
+discarding costs nothing and is what distinguishes "would have answered" from "could not have answered anyway."
+
+The contract's own list of four criteria caused this: it named `spend_regret` among those "whose value depends on the
+mixture," which is true of the value it will one day compute and false of the stub that stands there now. The list
+stays — the rule above makes it correct for both states of each entry, which a list edited per release would not be.
+
+**A9.2 — `spend_regret`'s message is now false in its central clause, and this release falsified it.** It reads: *"It
+needs logged selection probabilities that vary -- every decision in a deterministic policy has propensity 1 ...
+Randomised exploration is the prerequisite, not a refinement."*
+
+C3 shipped randomised exploration. A family declaring an `exploration_rate` now produces a log with varying
+propensities, and `tests/test_exploration.py` contains records carrying `selection_probability: 0.05`. So an operator
+reading this message is told to build the thing they may already have, and the criterion's actual blocker — that no
+estimator is implemented — is not stated at all.
+
+The message says the estimator and its interval are what is missing, and that exploration is now available and is what
+makes the estimate identifiable **once a family declares a rate**. The dependency is not deleted, because a family
+with no rate still has propensity 1 for every decision; what changes is that it stops being described as absent from
+the mechanism.
+
+This is the check `/change-pipeline` calls treating your own prose as a claim to test, and it is worth naming what
+found it: not a review of the message, but a worker's report about a guard three layers away. The message had been
+correct when written one release earlier, which is why no reader of the diff would have looked at it.
