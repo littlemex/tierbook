@@ -298,6 +298,44 @@ def check_certification(decision: Decision, *, floor: float, latency_feasible: b
     return out
 
 
+def classify_label(decided_at: float, now: float, max_label_latency_s: float | None, label: bool | None) -> str:
+    """A label's lifecycle, so `pending` and `missing` are computed rather than guessed at read time.
+
+    Housed here rather than in `outcomes` (amendment 4, C4): `outcomes` is the potential-outcome table -- what
+    every tier did on every item, so a policy can be chosen over it -- and a label's lifecycle is a different
+    subject. This module already owns `LABEL_STATES`, and the module that defines the three states is the one
+    that decides the transitions between them.
+
+    Three-valued for the same reason `admissible` is: collapsing `missing` into `pending`, or either into
+    `labelled`, is how a task nobody ever labelled becomes a silent success or a silent failure in a rate
+    somebody reports.
+
+    `max_label_latency_s is None` raises rather than picking a state. A family with `label_source: none`
+    (config.FamilyDeclaration) has no declared latency, and with none declared there is no line between "still
+    waiting" and "gave up waiting" for this function to draw on the caller's behalf -- so a caller with no
+    latency to give has no join to perform, not a call that returns some default.
+
+    Never called from `Log.read` on a row's own recorded `label_state`, and that omission is deliberate:
+    `Log.read` returns each row's `label_state` exactly as it was written, at whatever `schema_version` wrote
+    it. Passing a row's `decided_at` through this function at read time would reclassify `pending` against a
+    latency rule declared AFTER that row was logged -- silently restating every success rate already computed
+    from it, for every row at `schema_version < 2` and not only the ones that changed. A caller that wants a
+    fresh classification calls this function itself, with the label state it already has as a fact, not as an
+    invitation to overwrite.
+    """
+    if max_label_latency_s is None:
+        raise ValueError(
+            "max_label_latency_s is None: with no declared latency, the distinction between 'pending' and "
+            "'missing' is not classify_label's to make -- the caller has no join to perform here, not a "
+            "default to fall back on."
+        )
+    if label is not None:
+        return "labelled"
+    if now - decided_at <= max_label_latency_s:
+        return "pending"
+    return "missing"
+
+
 class Log:
     """Append-only JSONL. One line per decision, and the outcome attached later by request id.
 
