@@ -501,6 +501,7 @@ class Log:
         with the reason, and `strict=True` raises for a caller that wants that.
         """
         decisions, outcomes, observations, bad, unreadable = [], {}, {}, 0, []
+        ignored_keys: dict = {}
         if not self.path.exists():
             return decisions, outcomes
         for n, line in enumerate(self.path.read_text().splitlines(), 1):
@@ -527,7 +528,14 @@ class Log:
                 outcomes[rid] = row
             else:
                 try:
-                    from_row(row)
+                    _decision, row_ignored = from_row(row)
+                    # CONTRACT C12. `from_row` names the keys it did not understand and every caller discarded
+                    # the list, so a reader that survived a field being added named it to nobody -- the same
+                    # outcome as dropping it. Counted per key name rather than in total: an operator who reads
+                    # "4,000 keys ignored" and one who reads "this reader does not know evidence_ref" take the
+                    # same action, and only the second is told what it is.
+                    for key in row_ignored:
+                        ignored_keys[key] = ignored_keys.get(key, 0) + 1
                 except Incomplete as exc:
                     if strict:
                         raise Incomplete(f"line {n} of {self.path} parsed as JSON but its record could not be "
@@ -546,4 +554,8 @@ class Log:
                                                                "the intact records before and after them are kept"}
         if unreadable:
             outcomes["__unreadable_rows__"] = {"count": len(unreadable), "reasons": unreadable}
+        # Absent rather than empty when nothing was ignored, so its absence reads as "this reader understood
+        # every field in every row" rather than as one more key a caller has to interpret.
+        if ignored_keys:
+            outcomes["__ignored_keys__"] = ignored_keys
         return decisions, outcomes

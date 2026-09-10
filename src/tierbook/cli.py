@@ -581,7 +581,12 @@ def cmd_accept(args) -> int:
                          significance=args.significance, max_age_days=max_age_days)
     out = {"verdicts": [v.as_dict() for v in verdicts], "summary": summarise(verdicts),
           "floor": floor, "floor_provenance": floor_provenance,
-          "max_age_days": max_age_days, "max_age_days_provenance": max_age_provenance}
+          "max_age_days": max_age_days, "max_age_days_provenance": max_age_provenance,
+          # CONTRACT C12. Always present, empty when the reader understood every field: a key that
+          # appears only when something went wrong leaves a reader unable to tell "this reader
+          # understood everything" from "this version of the tool did not look". It does NOT make a
+          # criterion unsupported -- nothing was lost from the population, unlike C11's two classes.
+          "ignored_keys": dict(outcomes.get("__ignored_keys__") or {})}
     print(json.dumps(out, indent=2))
     if args.out:
         Path(args.out).write_text(json.dumps(out, indent=1))
