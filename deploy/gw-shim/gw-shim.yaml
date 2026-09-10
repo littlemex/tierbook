@@ -1,8 +1,11 @@
+# No namespace is set on any object here on purpose: the namespace belongs to whoever owns the cluster, and
+# a manifest that names one has quietly made a decision about someone else's cluster -- and, applied with
+# `kubectl -n <ns> apply -f`, a namespace hardcoded here would conflict with whatever `-n` the applier chose.
+# Set it with `-n` at apply time, or in an overlay's `namespace:`, as the README here already tells you to.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: gw-shim-code
-  namespace: qwen-trial
 data:
   oai_to_anthropic.py: |
     """An OpenAI chat-completions face over the billing gateway's Anthropic surface, so an arm can change one thing.
@@ -469,7 +472,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gw-shim
-  namespace: qwen-trial
 spec:
   replicas: 1
   selector: { matchLabels: { app: gw-shim } }
@@ -514,7 +516,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: gw-shim
-  namespace: qwen-trial
 spec:
   selector: { app: gw-shim }
   ports: [{ name: http, port: 8000, targetPort: http }]

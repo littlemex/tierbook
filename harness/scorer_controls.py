@@ -21,6 +21,7 @@ per task, so the battery is worth running across the set rather than on one memb
 and does not compete for the reservation.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,7 +31,14 @@ sys.path.insert(0, str(HERE))
 import dataset  # noqa: E402
 
 INSTANCE = sys.argv[1]
-CTX, NS = "distai-eks", "qwen-trial"
+# No cluster default here on purpose: a constant that names one person's context or namespace is a footgun
+# in a public repo, not a convenience -- a reader who runs this unedited would run the battery against
+# somebody else's cluster. Required via the environment; refused below rather than guessed.
+CTX, NS = os.environ.get("TIERBOOK_K8S_CONTEXT"), os.environ.get("TIERBOOK_K8S_NAMESPACE")
+if not CTX or not NS:
+    raise SystemExit(
+        "TIERBOOK_K8S_CONTEXT and TIERBOOK_K8S_NAMESPACE must both be set; this will not guess which "
+        "cluster and namespace to run the scorer controls against")
 
 inst = next(i for i in dataset.load() if i.instance_id == INSTANCE)
 print(f"{INSTANCE}: gold patch {len(inst.gold_patch)} bytes, test patch {len(inst.test_patch)} bytes")

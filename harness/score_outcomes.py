@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -86,12 +87,21 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--outcomes", required=True, help="the JSONL the driver appended to, updated in place")
     ap.add_argument("--instance", required=True)
-    ap.add_argument("--context", default="distai-eks")
-    ap.add_argument("--namespace", default="qwen-trial")
+    # No cluster default here on purpose: a default that names one person's context or namespace is a
+    # footgun in a public repo, not a convenience -- it lets `--help`'s own output run against somebody
+    # else's cluster. Required via the flag or the environment; refused below rather than guessed.
+    ap.add_argument("--context", default=os.environ.get("TIERBOOK_K8S_CONTEXT"))
+    ap.add_argument("--namespace", default=os.environ.get("TIERBOOK_K8S_NAMESPACE"))
     ap.add_argument("--run-group", help="judge only rows from this invocation. A row from another group is "
                                        "another run's business and is left alone")
     ap.add_argument("--timeout", type=int, default=2400)
     a = ap.parse_args()
+    if not a.context:
+        ap.error("no --context given and TIERBOOK_K8S_CONTEXT is not set; this will not guess which "
+                 "cluster to score against")
+    if not a.namespace:
+        ap.error("no --namespace given and TIERBOOK_K8S_NAMESPACE is not set; this will not guess which "
+                 "namespace to score against")
 
     path = Path(a.outcomes)
     rows = [json.loads(x) for x in path.read_text().splitlines() if x.strip()]

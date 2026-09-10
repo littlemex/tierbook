@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -300,8 +301,11 @@ def main() -> int:
     ap.add_argument("--instance", required=True)
     ap.add_argument("--workspace",
                     help="the agent's returned tree as a tar on the shared volume, for `score`")
-    ap.add_argument("--context", default="distai-eks")
-    ap.add_argument("--namespace", default="qwen-trial")
+    # No cluster default here on purpose: a default that names one person's context or namespace is a
+    # footgun in a public repo, not a convenience -- it lets `--help`'s own output run against somebody
+    # else's cluster. Required via the flag or the environment; refused below rather than guessed.
+    ap.add_argument("--context", default=os.environ.get("TIERBOOK_K8S_CONTEXT"))
+    ap.add_argument("--namespace", default=os.environ.get("TIERBOOK_K8S_NAMESPACE"))
     ap.add_argument("--cache", default="~/.cache/swebench-verified.json")
     ap.add_argument("--agent-dir",
                     default="/Users/akazawt/eks/distributed-ai/2026-08-24-mom-vsr-eks-benchmark/agent")
@@ -309,6 +313,12 @@ def main() -> int:
     a = ap.parse_args()
     if a.action == "score" and not a.workspace:
         ap.error("score needs --workspace")
+    if not a.context:
+        ap.error("no --context given and TIERBOOK_K8S_CONTEXT is not set; this will not guess which "
+                 "cluster to talk to")
+    if not a.namespace:
+        ap.error("no --namespace given and TIERBOOK_K8S_NAMESPACE is not set; this will not guess which "
+                 "namespace to talk to")
     return {"up": cmd_up, "export": cmd_export, "put-scorer": cmd_put_scorer,
             "score": cmd_score, "down": cmd_down}[a.action](a)
 
