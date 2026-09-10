@@ -44,7 +44,8 @@ def _minimal(**over) -> dict:
                     "endpoint": {"base_url": "https://x/v1", "model": "m"},
                     "price_per_mtok": {"fresh_in": 1.0, "cached_in": 0.1, "out": 5.0}},
         },
-        "families": {"f": {"reference": "ref", "floor": 0.80, "label_source": "executable_acceptance", "max_label_latency_s": 3600.0, "label_independent_of_candidate": True}},
+        "families": {"f": {"reference": "ref", "floor": 0.80, "label_source": "executable_acceptance", "max_label_latency_s": 3600.0, "label_independent_of_candidate": True,
+                            "staleness_limit_days": 14.0}},
         "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
     }
     base.update(over)

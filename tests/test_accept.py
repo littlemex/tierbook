@@ -30,6 +30,7 @@ def dec(rid="r1", certified=True, chosen="box", candidates=None, exploration=Fal
         "selection_probability": prob, "exploration": exploration, "certified": certified,
         "policy_version": "p1", "mechanism_version": "0.1.0", "agent": "opencode", "model": "m",
         "endpoint": "http://e", "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": 1000.0,
+        "exploration_reason": "no_mechanism", "eligible_set": [],
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
     }
 
@@ -231,7 +232,8 @@ def test_the_checker_reads_what_the_log_writes(tmp_path):
                     rec.Candidate(id="api", excluded_because="below_floor", bound=0.7, cost_usd=0.012)],
         chosen="box", selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
         mechanism_version="0.1.0", agent="opencode", model="m", endpoint="http://e",
-        gateway_quote_usd=0.004, gateway_authorised=True))
+        gateway_quote_usd=0.004, gateway_authorised=True,
+        exploration_reason="no_mechanism", eligible_set=[]))
     log.attach_outcome("r1", label_state="labelled", label=True, latency_s=30.0)
     decisions, outcomes = log.read()
     got = {v.criterion: v for v in ac.check_all(decisions, outcomes, floor=0.80)}
