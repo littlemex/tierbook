@@ -373,3 +373,28 @@ needs it first; C4 appends to the shape C2 creates and does not re-bump `config_
 argument" as shorthand for the CLI `assign` verb's `--floor`, on the grounds that `policy.assign_family`'s argument is
 named `margin` and is a different quantity. That reading is correct and the original entry's wording was loose. The
 three supply points are the CLI `assign`, `serve.route_once`, and `accept`.
+
+## Amendment 3 — two exit codes, and two tests that were green against the defect
+
+**A3.1 — `accept` given neither `--policy` nor `--floor` exits 2.** The mismatch code 4 was in the contract; this
+case was not, and it was answered to C2's test author and not to its code author, so one expected 2 and the other
+shipped 1. 2 is argparse's own code for an argument that had to be supplied and was not, and that is the operator
+action here: supply something. 4 stays reserved for two present numbers that disagree, which is a different action —
+one of the two sources is wrong and has to be found. Collapsing them would send an operator looking for a conflict
+that does not exist. Recorded as a contract defect rather than a worker error: an interface question answered to one
+side of a deliberately blind pair is the coordinator's failure, and answering it once in the contract is the fix.
+
+**A3.2 — a refusal that another refusal already covers is not pinned by a test of its effect.** Two of C2's
+tests passed against mutations that removed the behaviour they name.
+
+Disabling the bare-string migration refusal changed nothing observable to the test: a generic shape check downstream
+refuses a bare string too, and its message names `reference` and `floor`. So the test's assertions all held against a
+loader that had lost the *only* message telling an operator their file was valid yesterday and why it no longer is.
+Accepting `config_format: 1` outright was invisible for the mirror reason — the fixture paired format 1 with the old
+families shape, which trips both refusals, and the bare-string one names `config_format` in its migration text.
+
+Both are the same shape and it is worth stating as a general obligation rather than two fixes: **when a value is
+refused in two places, a test written against the refusal's effect cannot tell which one fired.** Pin the message
+that only one of them produces, and build the fixture so that exactly one refusal can apply. Found by mutating each
+refusal in turn, which is the check `/split-impl` requires before a phase is called finished and which no amount of
+reading would have produced — both tests looked correct, and were, about the wrong thing.
