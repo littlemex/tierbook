@@ -233,8 +233,10 @@ def test_log_read_separates_unreadable_lines_from_unreadable_rows(tmp_path):
     assert len(decisions) == 1
     assert outcomes["__bad_lines__"]["count"] == 1
     assert outcomes["__unreadable_rows__"]["count"] == 1
-    detail = json.dumps(outcomes["__unreadable_rows__"], default=str)
-    assert str(future) in detail and str(rec.SCHEMA_VERSION) in detail
+    # A1.2: the shape is {"count": int, "reasons": list[str]}, one string per row, naming both versions.
+    reasons = outcomes["__unreadable_rows__"]["reasons"]
+    assert len(reasons) == 1
+    assert str(future) in reasons[0] and str(rec.SCHEMA_VERSION) in reasons[0]
 
 
 def test_a_row_that_fails_from_row_does_not_also_count_as_a_bad_line(tmp_path):
@@ -246,3 +248,55 @@ def test_a_row_that_fails_from_row_does_not_also_count_as_a_bad_line(tmp_path):
     _, outcomes = log.read()
     assert outcomes.get("__bad_lines__", {}).get("count", 0) == 0
     assert outcomes["__unreadable_rows__"]["count"] == 1
+    assert len(outcomes["__unreadable_rows__"]["reasons"]) == 1
+
+
+# --- amendment 1: the candidate row, __unreadable_rows__'s shape, and version-before-fields -----------
+
+
+def test_a_candidate_carrying_an_unknown_key_is_ignored_and_named_by_position():
+    """A1.1: catches a candidate-level unknown key being silently dropped instead of reported. F12 proposes
+    replacing bound_n/bound_attempted with an evidence reference -- a candidate-level field -- so a reader that
+    exists to survive the log's evolution must survive it at that growth site too, not only on the decision's own
+    fields. Named with an index, not always index 0, because a position qualifier that is always candidates[0] is
+    the defect this clause is most likely to ship with."""
+    candidates = [cand(), cand("api", "below_floor", 0.70, 0.012)]
+    candidates[1]["evidence_ref"] = "ev:abc123"
+    d, ignored = rec.from_row(row(schema_version=2, candidates=candidates))
+    assert "candidates[1].evidence_ref" in ignored
+    assert d.request_id == "r1"
+
+
+def test_a_candidate_missing_a_required_field_raises_incomplete_naming_it_not_typeerror():
+    """A1.1's negative case: catches a candidate row short a required field reaching the old raw `_as_candidate`
+    splat and raising `KeyError`/`TypeError` instead of the same named `Incomplete` a decision-level omission gets."""
+    candidates = [cand(), cand("api", "below_floor", 0.70, 0.012)]
+    del candidates[1]["excluded_because"]
+    with pytest.raises(rec.Incomplete, match="excluded_because"):
+        rec.from_row(row(schema_version=2, candidates=candidates))
+
+
+def test_the_version_check_happens_before_field_validation():
+    """A1.3: catches from_row validating fields before checking the version. A row from a future schema cannot be
+    meaningfully checked against a shape it was not written to, so a row that is both from the future AND missing a
+    field this reader requires must refuse with the version message, not a spurious 'missing field' one."""
+    bad = row(schema_version=rec.SCHEMA_VERSION + 1)
+    del bad["family"]
+    with pytest.raises(rec.Incomplete) as exc:
+        rec.from_row(bad)
+    msg = str(exc.value)
+    assert str(rec.SCHEMA_VERSION + 1) in msg and str(rec.SCHEMA_VERSION) in msg
+    assert "family" not in msg
+
+
+def test_a_row_that_fails_from_row_is_absent_from_decisions_not_kept_for_audit(tmp_path):
+    """A1.3: catches a row that fails from_row being appended to `decisions` anyway -- e.g. 'for audit' -- when the
+    amendment settles that it exists in __unreadable_rows__ and nowhere else. Checked by request id, not by
+    length, so a partial or raw row slipped in under a different index would still be caught."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    with log.path.open("a") as fh:
+        fh.write(json.dumps(row(schema_version=2, request_id="good")) + "\n")
+        fh.write(json.dumps(row(schema_version=rec.SCHEMA_VERSION + 1, request_id="from_the_future")) + "\n")
+    decisions, outcomes = log.read()
+    ids = {d["request_id"] if isinstance(d, dict) else d.request_id for d in decisions}
+    assert ids == {"good"}
