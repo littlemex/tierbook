@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -623,7 +624,14 @@ class TestStreamsThatSayNothing:
     def consume(self, *lines) -> transport.Reply:
         reply = transport.Reply(model="x")
         connection, response = self.stream(*lines)
-        transport._consume(reply, connection, response, 0.0, transport.Endpoint(url="http://x"))
+        # A real reading, never a literal 0.0. `time.perf_counter()`'s reference epoch is undefined by the
+        # language, and on macOS it is the boot time from CPython 3.11 onward but the process start on 3.9. So
+        # `perf_counter() - 0.0` is the machine's uptime there, which trips `_consume`'s stall ceiling before a
+        # single line is parsed -- these four tests passed on 3.9 and failed on 3.11 and 3.12 on one machine, at
+        # the same moment, off the same commit. A suite that is green or red depending on the interpreter's clock
+        # epoch is not reporting on the code under test.
+        transport._consume(reply, connection, response, time.perf_counter(),
+                           transport.Endpoint(url="http://x"))
         return reply
 
     def test_an_error_event_is_an_error(self):
