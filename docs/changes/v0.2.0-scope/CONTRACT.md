@@ -726,3 +726,41 @@ the mechanism.
 This is the check `/change-pipeline` calls treating your own prose as a claim to test, and it is worth naming what
 found it: not a review of the message, but a worker's report about a guard three layers away. The message had been
 correct when written one release earlier, which is why no reader of the diff would have looked at it.
+
+## Amendment 10 — C8's own contract contradicted itself, and one message is two round trips on its own
+
+Raised by C8's test author, who could not satisfy both halves of what I wrote and said so instead of picking one.
+
+**A10.1 — the numeric target and the noise argument cannot both hold for the real file.** C8 says the round trip must
+reach **two loads**, and it also told the code author that a `config_format` mismatch means the file's whole shape is
+unknown so continuing to validate families would produce noise. The real v0.1.0 file has `config_format: 1`. If the
+version check short-circuits, load 1 reports only the version, and the five family problems arrive afterwards — three
+loads at best, and six as measured. The two statements are inconsistent and the test author was right to refuse to
+resolve it by guessing.
+
+The noise argument is wrong **for this transition**, and the reason is worth stating rather than just overruling it:
+the format bump is narrow. Format 1's `families` maps a name to a string; format 2 maps it to an object. Both shapes
+are known, and the difference between them is exactly what the family check reports. Validating a format-1 file against
+format 2 does not produce noise, it produces the one message that tells the operator what changed.
+
+So the rule, which is the rule C1 already established for the decision log rather than a new one: **a format older than
+the current one is known, so every downstream check runs and everything is collected. A format newer than the current
+one is unknown, so only the version is reported.** Same shape, same reason, and it means neither entry has to invent a
+policy for the case it does not face.
+
+**A10.2 — the bare-string message is two round trips by itself, and this is the larger half of the six.** Measured on
+the current code, a family declared as a bare string is told:
+
+> Change it to `{"reference": <id>, "floor": <this family's success-rate floor>}`.
+
+Two keys, of the six a family now requires. An operator who does exactly that gets a second refusal naming the four
+they were not told about. Across two families that is four of the six loads, and it is not an aggregation problem at
+all — a single message, read alone, sends the reader to a state it knows is still invalid.
+
+**A refusal that names a shape names the whole shape.** The bare-string message lists every required key. It keeps its
+existing prose about why the floor moved — that is the part explaining what changed — and the shape it prints is the
+one that loads.
+
+This is the finding worth keeping from C8: aggregation was the visible defect and it was not the biggest one. Four of
+the six round trips came from a message that was individually correct, reviewed, and complete about its own subject.
+Nothing that looked only at one refusal at a time could have seen it, which is the same reason the journey layer exists.
