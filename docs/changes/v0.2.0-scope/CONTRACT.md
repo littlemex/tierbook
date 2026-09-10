@@ -544,3 +544,54 @@ would put `accept.CRITERIA` at ten, diverging from the governing document over a
 their two bounds and their two sub-verdicts live in `numbers`, and the criterion's own verdict is the worse of the two:
 a criterion that passed while its all-served half failed would be the defeat F8 describes, reintroduced through the
 report instead of through the definition.
+
+## Amendment 7 — C6, because the falsifier can miss the violation it exists to catch
+
+Found by C3's code author as a third interaction, reported rather than worked around, and the reproduction turned out
+larger than the report. This is admitted without debate under pass 1: the artifact's reason for existing is defeated.
+
+`accept.py` contains no `evidence_age_days` and no `max_age_days` anywhere. So
+`accept.default_is_not_a_hiding_place` and `accept.no_false_certification` have called `record.check_certification`
+with freshness absent since v0.1.0, in which release `record.admissible` gained freshness as its fourth condition.
+The criterion has been blind to it ever since.
+
+Threading the value through would not fix it. `check_certification` builds one `kw` dict and applies **one**
+`evidence_age_days` to **every** candidate in the decision, while each candidate carries its own `evidence_as_of` — and
+tiers are measured at different times, so differing dates are the normal case, not an edge one. Measured on one
+decision holding a 617-day-old candidate and a 9-day-old one:
+
+| scalar age supplied | what the falsifier reports | what is true |
+|---|---|---|
+| 400 days | **nothing** | the 9-day candidate was admissible and the default hid behind it |
+| 5 days | **both** candidates | only the 9-day one; the 617-day one was expired |
+
+Both directions are wrong and no scalar produces the right answer, because the two ages differ by 608 days. A
+falsifier that can report **nothing** where a real hiding place exists is worse than an absent one, since SCOPE
+section 12 reads its silence as evidence.
+
+### C6 — the falsifier reads the age it already holds
+
+**`record.check_certification`** loses `evidence_age_days`. Each candidate's age is derived from its own
+`evidence_as_of` against the decision's `decided_at`, both already in the record. This removes a parameter rather than
+threading one through four signatures, and it fixes the one-age-for-many defect at the same time — a scalar cannot be
+correct for a set whose members differ.
+
+**The reference is `decided_at`, not the time the check runs.** The question is whether the evidence was fresh *when
+the decision was made*. Re-evaluating against the clock at accept time would make a verdict drift as the file ages,
+which is the defect C4 already refuses for label states: a criterion whose answer changes because the file got older
+is not a criterion.
+
+**`EXCLUSION_REASONS`** gains `no_evidence_date`. `Candidate.evidence_as_of` defaults to the empty string, so an
+undated candidate is representable, and with a limit declared there are only wrong alternatives: `evidence_expired`
+asserts an age the record does not carry, and admitting it silently skips freshness — the v0.1.0 defect, restored.
+An undated bound cannot be certified against a declared limit, and the reason says which of the two it is.
+
+**`accept.no_false_certification`, `accept.default_is_not_a_hiding_place` and `accept.check_all`** gain
+`max_age_days: float | None = None`. Unlike the age, the limit is not in the record: it is the family's declared
+policy input, so it comes from outside — and from exactly one place. **`cmd_accept` reads it from the policy artifact
+through `decide.parameter`**, the same rule amendment 2 established for the floor. No new CLI flag: a second typed
+number is the defect amendment 2 exists to close, and adding one here would reopen it in a second value.
+
+**With `max_age_days` absent the condition is absent, not satisfied** — as with the latency constraint, and as SCOPE
+section 2's clause 4 now says. A criterion run without a policy is honest about having checked three conditions rather
+than claiming four.
