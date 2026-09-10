@@ -595,3 +595,28 @@ number is the defect amendment 2 exists to close, and adding one here would reop
 **With `max_age_days` absent the condition is absent, not satisfied** — as with the latency constraint, and as SCOPE
 section 2's clause 4 now says. A criterion run without a policy is honest about having checked three conditions rather
 than claiming four.
+
+### C6's interface, and the copy it must not become
+
+**`observe.evidence_age_days(measured_on, now=None) -> float` already exists** and already does this arithmetic:
+`date.fromisoformat`, UTC midnight, `(now - then) / 86400`, and a refusal naming the bad value when the string is not
+an ISO date. `check_certification` calls it rather than repeating it. A third copy of the same three lines is the
+duplicated-knowledge class every other entry in this release closed, and the drift it invites is a criterion and a
+collector disagreeing about how old the same evidence is.
+
+**`record.check_certification(decision, *, floor, latency_feasible, max_age_days=None)`** — `evidence_age_days` is
+gone from the signature. Per candidate: `observe.evidence_age_days(candidate.evidence_as_of, now=decision.decided_at)`.
+An empty `evidence_as_of` is not passed to it; that candidate is `no_evidence_date` when a limit is declared, and the
+condition is absent when none is.
+
+The import direction is worth a check before writing: `record` importing `observe` must not create a cycle. If it
+does, the shared arithmetic moves to whichever module both can import, and the move is reported — not resolved by
+copying the three lines.
+
+**`accept.no_false_certification`, `accept.default_is_not_a_hiding_place`, `accept.check_all`** gain
+`max_age_days: float | None = None` and pass it down. **`cli.cmd_accept`** reads it through
+`decide.parameter(policy, "max_evidence_age_days", None)` — the artifact's own value, no flag, no second copy.
+
+**`record.EXCLUSION_REASONS`** gains `no_evidence_date`. C1's `from_row` reads a version 1 row whose candidate carries
+an exclusion reason from the old, shorter vocabulary, so the tuple only ever grows: removing a value would make a
+v0.1.0 log unreadable, which is the failure C1 exists to prevent.
