@@ -903,3 +903,33 @@ correct document to satisfy a mapping would be worse than recording that the map
 `tests/journeys/test_v020_journeys.py`'s module docstring still says both findings are recorded as `xfail(strict=True)`
 and "not fixed." Both were fixed and both markers are gone. The assertions still discriminate correctly; only the prose
 is stale. Fixed with C10 and C11 rather than as a separate entry, since it is one paragraph.
+
+## Amendment 14 — C12, the list the contract calls C1's whole point reaches no operator
+
+Reported by two independent audit passes and confirmed by C11's implementer: `record.from_row` returns
+`(Decision, ignored)`, and every production call site discards the second value. `Log.read` at `record.py:522`
+drops the whole tuple; `accept.py` binds it as `_ignored` at three sites. No CLI output, report or log surface
+shows which keys a read ignored.
+
+C1's interface calls that list the entry's subject: a reader that survives a field being added does so by
+*naming* what it did not understand, rather than dropping it. Naming it to nobody is the same as dropping it,
+and the asymmetry is the tell — the two failure classes C11 just wired up (`__bad_lines__`,
+`__unreadable_rows__`) both reach a criterion, while the success-with-losses case reaches nothing.
+
+**Who needs it and when.** An operator rolling a reader BACK — the direction C1's own interface names first —
+gets a log full of fields the older reader does not know. Every line reads fine. Every criterion computes. And
+the fields the newer mechanism recorded, including the propensity and the eligible set an off-policy estimate
+needs, are silently absent from every decision the criteria saw. The count of ignored keys is the only signal
+that the reader is behind its log, and it is computed on every line already.
+
+**`Log.read` carries `__ignored_keys__`** in the outcomes mapping, beside the two counters it already carries:
+the distinct key names encountered and how many rows carried each. Names rather than a count alone, because
+"this reader ignored 4,000 keys" and "this reader does not know `evidence_ref`" call for the same action and
+only the second says what to do.
+
+**`accept`'s report records it**, for the same reason amendment 11 gave for the freshness limit: a criterion
+computed over rows whose new fields were dropped is not wrong, but a committed report that cannot say so is
+unreadable later. It does **not** make a criterion `UNSUPPORTED` — unlike C11's two classes, nothing was lost
+from the population, and refusing here would make every reader-behind-its-log run unusable rather than
+annotated. The distinction between "the population is incomplete" and "the rows are complete and I understood
+less of them than they contain" is exactly the one C1 built the return value to express.
