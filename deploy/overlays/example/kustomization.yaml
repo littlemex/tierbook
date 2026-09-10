@@ -1,8 +1,12 @@
-# This cluster's overlay for the tap.
+# An EXAMPLE overlay for the tap -- named for its role (namespace + RWX storage class), not for one
+# cluster, because a directory named after a real cluster is the same leak as a literal in a manifest.
+# Copy this directory, rename it if you like, and edit `namespace:` and the storage class below for your
+# own cluster before applying it; this one's values are illustrative and are not your cluster's.
 #
-# `efs-shared` because the log volume is ReadWriteMany: two tap replicas write it while a reader reads
-# it. `gp2` on this cluster is EBS and cannot be RWX, and neither class is the default here, so a PVC
-# with no class named would stay Pending rather than bind to something wrong.
+# `efs-shared` here stands in for whatever RWX-capable class your cluster offers: the log volume is
+# ReadWriteMany because two tap replicas write it while a reader reads it, and a default class that is EBS
+# or otherwise block-only cannot satisfy that -- a PVC with no class named would stay Pending rather than
+# bind to something wrong.
 #
 # The proxy's source is NOT generated into a ConfigMap here. kustomize refuses to read a file outside
 # its own root, and the alternative -- a copy of `harness/agent_tap.py` under this directory -- would be
@@ -11,7 +15,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: qwen-trial
+namespace: example
 
 resources:
   - ../../agent-tap

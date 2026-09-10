@@ -160,6 +160,12 @@ def run_probe(context: str, namespace: str, deployment: str, workspace: str, cwd
     `sys.path[0]` already shadows the finder, and from `<ws>/<package>` it does not. A replay that only probes from
     the root cannot see the defect it is checking for.
     """
+    # Checked here rather than in argparse: a caller who supplies this function directly (a test, an import) gets
+    # to choose its own context and namespace, but the one path that actually reaches a cluster -- this one -- must
+    # not fall through to `kubectl --context None -n None`, which fails confusingly instead of cleanly.
+    if not context or not namespace:
+        raise SystemExit("no context/namespace given (--context/--namespace or TIERBOOK_K8S_CONTEXT/"
+                         "TIERBOOK_K8S_NAMESPACE); this will not guess which cluster to run the probe on")
     assignments = " ".join(f"{k}={v}" for k, v in sorted(env.items()))
     inner = f"cd {cwd} && {assignments} python3 -c {json_quote(PROBE_SOURCE)} {' '.join(names)}"
     argv = ["kubectl", "--context", context, "-n", namespace, "exec", f"deploy/{deployment}", "--",
@@ -185,8 +191,11 @@ def main() -> int:
                          "fails, NOT the workspace root, where sys.path[0] already shadows the finder")
     ap.add_argument("--pythonpath", default=None,
                     help="set PYTHONPATH for the probe. Omit for the 'before' side of the replay")
-    ap.add_argument("--context", default="distai-eks")
-    ap.add_argument("--namespace", default="qwen-trial")
+    # No cluster default here on purpose: a default that names one person's context or namespace is a
+    # footgun in a public repo, not a convenience -- it lets `--help`'s own output run against somebody
+    # else's cluster. Required via the flag or the environment; refused below rather than guessed.
+    ap.add_argument("--context", default=os.environ.get("TIERBOOK_K8S_CONTEXT"))
+    ap.add_argument("--namespace", default=os.environ.get("TIERBOOK_K8S_NAMESPACE"))
     ap.add_argument("--deployment", default="opencode")
     ap.add_argument("--packages", default=None, help="comma-separated subset of " + ",".join(PROBES))
     ap.add_argument("--drop-editable-finders", action="store_true",
@@ -194,6 +203,8 @@ def main() -> int:
                          "finders inside the probe. Read-only: it does not touch the pod")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    # Not refused here: `run_probe` is the seam a test replaces to run this without a cluster, and it is the
+    # one that actually shells out to `kubectl`, so it is the one that refuses a missing context/namespace.
 
     probes = PROBES if not a.packages else {k: PROBES[k] for k in a.packages.split(",") if k in PROBES}
     if not probes:

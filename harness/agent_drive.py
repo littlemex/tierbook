@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -448,8 +449,11 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=1,
                     help="runs per agent. More than one is how run-to-run variation becomes visible "
                          "instead of being reported as an agent difference.")
-    ap.add_argument("--context", default="distai-eks")
-    ap.add_argument("--namespace", default="qwen-trial")
+    # No cluster default here on purpose: a default that names one person's context or namespace is a
+    # footgun in a public repo, not a convenience -- it lets `--help`'s own output run against somebody
+    # else's cluster. Required via the flag or the environment; refused below rather than guessed.
+    ap.add_argument("--context", default=os.environ.get("TIERBOOK_K8S_CONTEXT"))
+    ap.add_argument("--namespace", default=os.environ.get("TIERBOOK_K8S_NAMESPACE"))
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--order", choices=["rotate", "fixed", "shuffle"], default="rotate",
                     help="agent order per iteration. The engine's prefix cache survives a run and "
@@ -493,6 +497,12 @@ def main() -> int:
 
     if not args.task and not args.task_file:
         ap.error("one of --task or --task-file is required")
+    if not args.context:
+        ap.error("no --context given and TIERBOOK_K8S_CONTEXT is not set; this driver will not guess which "
+                 "cluster to run agents on")
+    if not args.namespace:
+        ap.error("no --namespace given and TIERBOOK_K8S_NAMESPACE is not set; this driver will not guess "
+                 "which namespace to run agents in")
     prompt = args.task or Path(args.task_file).read_text()
 
     doc = json.loads(Path(args.spec).read_text())

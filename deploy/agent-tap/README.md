@@ -22,27 +22,34 @@ after:   agents ──> qwen-serving ──> agent-tap ────> vllm-qwen-.
 
 ## Apply
 
-The engine's own Service name is the tap's upstream; set it if yours differs. Never point the tap at the
-alias — once the alias selects the tap, that is a loop that presents as a hang under load.
+Set your namespace and the alias Service name once; every command below reads them back. The engine's own
+Service name is the tap's upstream, so if the alias in your cluster is not called `qwen-serving`, change
+`ALIAS_SVC` to match. Never point the tap at the alias itself — once the alias selects the tap, that is a
+loop that presents as a hang under load.
 
 ```bash
-kubectl -n qwen-trial create configmap agent-tap-src --from-file=agent_tap.py=harness/agent_tap.py
-kubectl -n qwen-trial apply -f deploy/base/agent-tap.yaml
-kubectl -n qwen-trial rollout status deploy/agent-tap
+export NS=your-namespace
+export ALIAS_SVC=qwen-serving
+```
+
+```bash
+kubectl -n "$NS" create configmap agent-tap-src --from-file=agent_tap.py=harness/agent_tap.py
+kubectl -n "$NS" apply -f deploy/base/agent-tap.yaml
+kubectl -n "$NS" rollout status deploy/agent-tap
 ```
 
 Exercise the tap directly, before any agent traffic goes near it:
 
 ```bash
-kubectl -n qwen-trial run tapcheck --rm -it --restart=Never --image=curlimages/curl -- \
+kubectl -n "$NS" run tapcheck --rm -it --restart=Never --image=curlimages/curl -- \
   curl -sS http://agent-tap:8000/v1/models
 ```
 
 Then move the alias. Record what it was first, because that is the rollback:
 
 ```bash
-kubectl -n qwen-trial get svc qwen-serving -o jsonpath='{.spec.selector}'
-kubectl -n qwen-trial patch svc qwen-serving --type=json \
+kubectl -n "$NS" get svc "$ALIAS_SVC" -o jsonpath='{.spec.selector}'
+kubectl -n "$NS" patch svc "$ALIAS_SVC" --type=json \
   -p '[{"op":"replace","path":"/spec/selector","value":{"app.kubernetes.io/name":"agent-tap"}}]'
 ```
 
@@ -56,8 +63,8 @@ Rolling back is the same command with the selector that was printed — which is
 ## Read the observations
 
 ```bash
-kubectl -n qwen-trial exec deploy/agent-tap -- sh -c 'ls -la /data/agent-tap'
-kubectl -n qwen-trial exec deploy/agent-tap -- sh -c 'cat /data/agent-tap/*.jsonl' > tap.jsonl
+kubectl -n "$NS" exec deploy/agent-tap -- sh -c 'ls -la /data/agent-tap'
+kubectl -n "$NS" exec deploy/agent-tap -- sh -c 'cat /data/agent-tap/*.jsonl' > tap.jsonl
 python3 harness/agent_tap_report.py tap.jsonl
 ```
 

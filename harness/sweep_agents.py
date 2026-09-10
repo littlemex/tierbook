@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -227,8 +228,11 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--agent-timeout", type=int, default=900)
     ap.add_argument("--score-timeout", type=int, default=2400)
-    ap.add_argument("--context", default="distai-eks")
-    ap.add_argument("--namespace", default="qwen-trial")
+    # No cluster default here on purpose: a default that names one person's context or namespace is a
+    # footgun in a public repo, not a convenience -- it lets `--help`'s own output run against somebody
+    # else's cluster. Required via the flag or the environment; refused below rather than guessed.
+    ap.add_argument("--context", default=os.environ.get("TIERBOOK_K8S_CONTEXT"))
+    ap.add_argument("--namespace", default=os.environ.get("TIERBOOK_K8S_NAMESPACE"))
     ap.add_argument("--cache", default="~/.cache/swebench-verified.json")
     ap.add_argument("--agent-dir",
                     default="/Users/akazawt/eks/distributed-ai/2026-08-24-mom-vsr-eks-benchmark/agent")
@@ -250,6 +254,12 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="leave each testbed pod up (for debugging)")
     ap.add_argument("--limit", type=int, help="stop after this many new instances")
     a = ap.parse_args()
+    if not a.context:
+        ap.error("no --context given and TIERBOOK_K8S_CONTEXT is not set; this will not guess which "
+                 "cluster to sweep against")
+    if not a.namespace:
+        ap.error("no --namespace given and TIERBOOK_K8S_NAMESPACE is not set; this will not guess which "
+                 "namespace to sweep against")
 
     instances = (a.instances.split(",") if a.instances
                  else json.loads(Path(a.subset).read_text()))

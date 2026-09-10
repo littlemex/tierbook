@@ -129,7 +129,7 @@ Phase 5 builds a registry **from scratch**, on the real cluster, and observes a 
 5. **A single-turn re-ask from a captured trajectory** (I12, I14): take one turn from a stored trajectory, re-issue it byte-identically to a different candidate, and record both outcomes. Evidence: the two responses, the two costs computed from the rows alone, and a refusal when a whole-trajectory replay is attempted.
 6. The trusted objects this change creates are watched: `<out>/tiers/*.json`, `<out>/evidence/*.jsonl`, the compiled table and the trajectory artifacts are all inputs a later claim rests on, so step 1 re-derives them rather than reading a stored copy.
 
-Environment: `distai-eks` / namespace `qwen-trial`, the engine and agents already deployed; the registry directory is created fresh and not reused.
+Environment: a private cluster with the engine and agents already deployed, reached by whatever context and namespace `TIERBOOK_K8S_CONTEXT` / `TIERBOOK_K8S_NAMESPACE` name; the registry directory is created fresh and not reused.
 
 ## Amendments
 

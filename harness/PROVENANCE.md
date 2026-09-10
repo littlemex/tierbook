@@ -47,8 +47,9 @@ just that one.
 
 Checked directly. The staged (unmodified) tree for `django__django-11880` was submitted to the scorer:
 
+    export TIERBOOK_K8S_CONTEXT=... TIERBOOK_K8S_NAMESPACE=...
     python3 harness/testbed.py score --instance django__django-11880 \
-        --workspace /work/returned/pristine-check.tar --context distai-eks --namespace qwen-trial
+        --workspace /work/returned/pristine-check.tar
 
 It returned `"resolved": false` with 111 tests passing and the FAIL_TO_PASS set unmet. So the metric does
 discriminate: a tree with no fix in it does not score as solved, and the instance's own tests are what decide.
