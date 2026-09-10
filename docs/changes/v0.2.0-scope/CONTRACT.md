@@ -329,3 +329,47 @@ corrupt line is already handled; it exists in `__unreadable_rows__` and nowhere 
 That is deliberate — C1 must add the keyword so C5 does not change a signature every earlier reader depends on — and
 the C1 worker is right that it invites a partial implementation. The mitigation is the instruction, not the contract:
 C1 accepts the keyword and does nothing with it.
+
+## Amendment 2 — the floor has no declared home, and a global flag cannot be its home
+
+C2's instruction said to find where the floor enters the compile path and carry it through, and not to invent a new
+source. The worker searched the whole path — `cli.cmd_compile`, `table.compile_to_file`, `policy.assign_family`,
+`config.Objective` — and found that **the floor does not enter it anywhere**. The instruction was unsatisfiable as
+written. Checked again here: `grep floor` over `src/tierbook/config.py` and `src/tierbook/schema.json` returns nothing,
+and the example ledger's `objective.constraints` carries only `non_inferiority.margin`, which is a relative margin
+against a reference and not an absolute floor.
+
+So the finding is larger than the entry. The floor is not a number the compile path lost; it is a number **nothing in
+this repository has ever declared**. Every one of its three supply points is a live argument, which is why C2's audit
+found zero recorded copies: there was no first copy to record.
+
+**A2.1 — the floor is supplied, not derived, and SCOPE says so.** Section 5's table of things no measurement settles
+lists "accuracy floor, per family and per tenant — no measurement says whether 90% or 95% is acceptable," and section 12
+names floors among the "genuinely environment-owned rows" of a policy file. A future round proposing to derive the floor
+is answered here: the mechanism cannot derive how much accuracy its operator requires, and a derived floor would be the
+mechanism grading its own homework. This is not a threshold in the sense the project forbids configuring; it is the
+requirement the thresholds are derived *against*.
+
+**A2.2 — the floor is per family, so a global flag is wrong on its face.** Sections 2, 5 and 12 all say "the family's
+floor," in those words. `compile --floor` as the worker added it is one number for every family in a ledger, so two
+families with different accuracy requirements would silently share whichever was typed. That is a correctness defect,
+not a matter of taste, and it is worse than the defect C2 set out to fix: today a mismatch is at least a second typed
+number an operator can compare, whereas one flag for two families is a wrong answer with nothing to compare it to.
+
+**A2.3 — the home is the family's declaration in the ledger.** `families` currently maps a family name to a reference
+candidate id, a bare string. It becomes an object with `reference` and `floor`, the ledger's `config_format` goes to 2,
+and a bare string is refused naming what to change. The reasons, in order of weight: SCOPE already calls floors rows in
+a *file*, so a flag was never the contracted shape; the ledger is reviewable and under version control where a shell
+history is not; and the floor is per family, which is exactly what the `families` mapping is keyed by.
+
+`compile --floor` is withdrawn. `compile` reads each family's floor from the ledger and `compile_policy` writes it into
+`parameters` as before — the rest of C2, which is the part that closes the three-copies defect, is unchanged and stays.
+
+**A2.4 — the seam with C4, recorded rather than discovered at integration.** C4 adds a labeller and a maximum label
+latency **per family**, which needs the same `families`-becomes-an-object change. C2 owns the shape change because it
+needs it first; C4 appends to the shape C2 creates and does not re-bump `config_format`. Recorded in `SEAMS.md`.
+
+**Not amended: `policy.assign_family`'s argument.** The C2 worker read the entry's reference to "`assign_family`'s
+argument" as shorthand for the CLI `assign` verb's `--floor`, on the grounds that `policy.assign_family`'s argument is
+named `margin` and is a different quantity. That reading is correct and the original entry's wording was loose. The
+three supply points are the CLI `assign`, `serve.route_once`, and `accept`.
