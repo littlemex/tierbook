@@ -91,7 +91,8 @@ def no_false_certification(decisions: list, *, floor: float, latency_feasible: b
                    {"decisions": len(decisions), "certified": sum(1 for r in decisions if r["certified"])})
 
 
-def default_is_not_a_hiding_place(decisions: list, *, floor: float, latency_feasible: bool | None,
+def default_is_not_a_hiding_place(decisions: list, outcomes: dict | None = None, *, floor: float,
+                                  latency_feasible: bool | None,
                                   uncertified_tolerance: float | None = None,
                                   max_age_days: float | None = None) -> Verdict:
     """An uncertified assignment made while something admissible existed, and the uncertified share against its
@@ -103,7 +104,19 @@ def default_is_not_a_hiding_place(decisions: list, *, floor: float, latency_feas
     `max_age_days` gained here for the same reason `no_false_certification` gained it (amendment 7, C6): this is
     the mirror falsifier over the same `check_certification`, and a scalar age applied to every candidate would
     have been just as wrong for a default that hides behind a stale bound as for a certified one.
+
+    `outcomes` gained here (amendment 13, C11): before this entry this function had no way to see either class
+    of row `record.Log.read` drops (`__bad_lines__`, `__unreadable_rows__`), so its own uncertified share -- a
+    rate over `decisions` -- could be narrowed by exactly the same rows `floor_compliance` was found narrowed
+    by. Optional and defaulted to `None`/treated as empty, so a caller that does not pass it gets this
+    criterion's ordinary behaviour rather than a newly-required argument.
     """
+    incomplete = _incomplete_population(outcomes or {})
+    if incomplete:
+        return Verdict("default_is_not_a_hiding_place", UNSUPPORTED,
+                       f"the uncertified share is a rate over the decisions that survived reading, and "
+                       f"{incomplete}. Fix the log before reading a share from it",
+                       {"unreadable": _unreadable(outcomes or {})})
     if not decisions:
         return Verdict("default_is_not_a_hiding_place", UNSUPPORTED, "the log holds no decisions")
     hid = []
@@ -159,9 +172,45 @@ def clopper_pearson_lower(n: int, k: int, alpha: float) -> float:
     return lo
 
 
-def _unreadable(outcomes: dict) -> int:
-    """How many log lines could not be read. A rate over "all" decisions is not that when some are missing."""
-    return int((outcomes.get("__bad_lines__") or {}).get("count", 0))
+def _unreadable(outcomes: dict) -> dict:
+    """How many log lines/rows could not be read, one count per class `record.Log.read` distinguishes.
+
+    CONTRACT C11 (Amendment 13): before this entry, this returned one merged count, read from
+    `__bad_lines__` only. `__unreadable_rows__` -- the counter C1 added THIS RELEASE so that "the file was
+    truncated" and "the record is from a newer schema" would be different operator actions -- was not
+    consulted anywhere, so a criterion's population could be narrowed by rows from a schema this reader
+    refuses with nothing reporting it. Returns both counts, separately, rather than one sum: merging them
+    back into a single number here would undo C1's distinction from the other end of the pipeline.
+    """
+    o = outcomes or {}
+    return {
+        "bad_lines": int((o.get("__bad_lines__") or {}).get("count", 0)),
+        "unreadable_rows": int((o.get("__unreadable_rows__") or {}).get("count", 0)),
+    }
+
+
+def _incomplete_population(outcomes: dict) -> str | None:
+    """`None` when the log's `decisions` are the whole population a rate can be computed over; otherwise a
+    detail naming each class of dropped row and its count, so a criterion whose value is a rate over a
+    population can refuse rather than compute the rate over whichever rows happened to survive reading.
+
+    CONTRACT C11: this is `floor_compliance`'s own pre-existing principle -- "a rate over 'all' decisions is
+    not that when some are missing" -- extended to the second class C1 introduced. The two are named
+    separately, never merged into one phrase: "the file was truncated" (`bad_lines`) calls for repairing or
+    truncating the log, "the record is from a newer schema" (`unreadable_rows`) calls for upgrading the
+    reader, and an operator handed one merged number cannot tell which action applies.
+    """
+    counts = _unreadable(outcomes)
+    parts = []
+    if counts["bad_lines"]:
+        parts.append(f"{counts['bad_lines']} log line(s) unreadable as JSON, most likely a crash mid-append "
+                     f"-- repair or truncate the file")
+    if counts["unreadable_rows"]:
+        parts.append(f"{counts['unreadable_rows']} row(s) parsed but could not be read as a record, most "
+                     f"likely from a schema_version newer than this reader knows -- upgrade the reader")
+    if not parts:
+        return None
+    return "; ".join(parts)
 
 
 def _rate_against_floor(pairs: list, *, total_population: int, floor: float, significance: float) -> tuple[dict, str]:
@@ -232,12 +281,12 @@ def floor_compliance(decisions: list, outcomes: dict, *, floor: float, significa
     own `verdict` is FAIL if either population fails, PASS if both pass, and UNSUPPORTED otherwise, so a caller
     reading only the top-level field never sees a pass that a second, wider population would have contradicted.
     """
-    bad = _unreadable(outcomes)
-    if bad:
+    incomplete = _incomplete_population(outcomes)
+    if incomplete:
         return Verdict("floor_compliance", UNSUPPORTED,
-                       f"{bad} log line(s) could not be read, so a rate over the routed traffic is a rate over the "
-                       f"lines that survived. Repair or truncate the log before reading a rate from it",
-                       {"unreadable_lines": bad})
+                       f"a rate over the routed traffic is a rate over the rows that survived reading, and "
+                       f"{incomplete}. Fix the log before reading a rate from it",
+                       {"unreadable": _unreadable(outcomes)})
 
     def _labelled(rows: list) -> list:
         pairs = ((r, outcomes.get(r["request_id"], {})) for r in rows)
@@ -282,8 +331,21 @@ def floor_compliance(decisions: list, outcomes: dict, *, floor: float, significa
     return Verdict("floor_compliance", verdict, detail, numbers)
 
 
-def exploration_cost(decisions: list, *, budgeted_share: float | None = None) -> Verdict:
-    """The exploration share of the log against its budget."""
+def exploration_cost(decisions: list, outcomes: dict | None = None, *,
+                     budgeted_share: float | None = None) -> Verdict:
+    """The exploration share of the log against its budget.
+
+    `outcomes` gained here (amendment 13, C11): the exploration share is a rate over `len(decisions)`, and
+    `decisions` already had every unreadable row silently excluded by `record.Log.read` before this function
+    ever saw it, so this rate needed the same guard `floor_compliance` has. Optional, for the same
+    backward-compatibility reason `default_is_not_a_hiding_place` gained it.
+    """
+    incomplete = _incomplete_population(outcomes or {})
+    if incomplete:
+        return Verdict("exploration_cost", UNSUPPORTED,
+                       f"the exploration share is a rate over the decisions that survived reading, and "
+                       f"{incomplete}. Fix the log before reading a share from it",
+                       {"unreadable": _unreadable(outcomes or {})})
     if not decisions:
         return Verdict("exploration_cost", UNSUPPORTED, "the log holds no decisions")
     share = sum(1 for r in decisions if r.get("exploration")) / len(decisions)
@@ -301,7 +363,19 @@ def exploration_cost(decisions: list, *, budgeted_share: float | None = None) ->
 
 def slo(decisions: list, outcomes: dict, *, latency_limit_s: float | None = None,
         tolerance: float | None = None) -> Verdict:
-    """Realised `P(latency > L)` per traffic class, against the stated tolerance."""
+    """Realised `P(latency > L)` per traffic class, against the stated tolerance.
+
+    Guarded against an incomplete population for the same reason `floor_compliance` is (amendment 13, C11):
+    `P(latency > L)` is a rate over the latencies recorded on `decisions`, and `decisions` already excludes
+    every row `record.Log.read` could not turn into a `Decision` -- if any of those rows would have breached
+    the limit, this rate looks better than it is with nothing saying so.
+    """
+    incomplete = _incomplete_population(outcomes)
+    if incomplete:
+        return Verdict("slo", UNSUPPORTED,
+                       f"a latency rate is a rate over the decisions that survived reading, and {incomplete}. "
+                       f"Fix the log before reading a rate from it",
+                       {"unreadable": _unreadable(outcomes)})
     have = [o.get("latency_s") for o in (outcomes.get(r["request_id"], {}) for r in decisions)
             if o.get("latency_s") is not None]
     if latency_limit_s is None or tolerance is None:
@@ -444,7 +518,8 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
                         "what is unknown"),
         no_false_certification(decisions, floor=floor, latency_feasible=latency_feasible, max_age_days=max_age_days),
         guard("default_is_not_a_hiding_place",
-             lambda: default_is_not_a_hiding_place(decisions, floor=floor, latency_feasible=latency_feasible,
+             lambda: default_is_not_a_hiding_place(decisions, outcomes, floor=floor,
+                                                    latency_feasible=latency_feasible,
                                                     uncertified_tolerance=uncertified_tolerance,
                                                     max_age_days=max_age_days)),
         slo(decisions, outcomes, latency_limit_s=latency_limit_s, tolerance=slo_tolerance),
@@ -460,7 +535,8 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
                  "selection_probability vary -- the prerequisite this criterion needed is now met for that "
                  "traffic, and what remains missing is the estimator and its confidence interval, not "
                  "exploration itself")),
-        guard("exploration_cost", lambda: exploration_cost(decisions, budgeted_share=budgeted_exploration)),
+        guard("exploration_cost", lambda: exploration_cost(decisions, outcomes,
+                                                           budgeted_share=budgeted_exploration)),
         _needs_a_design("adaptation",
                         "an injected change -- a price change, a model release, an agent swap, a capacity loss -- and "
                         "then a check that the new candidate enters shadow evaluation within the adaptation window "
