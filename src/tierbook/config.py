@@ -177,6 +177,17 @@ class FamilyDeclaration:
     exist at all). `load_config` refuses it outright when the family cannot represent what it would mean --
     that is a load failure, not a runtime discovery, because the combination has no meaning for `explore.draw`
     to discover.
+
+    `staleness_limit_days` (amendment 5) is required and refused when absent, like C4's three fields above --
+    the same reasoning applies without change: it is per family for the same reason the floor is (how stale a
+    bound THIS family's operator will accept, which no measurement settles), and C2's `compile --floor` mistake
+    is exactly what amendment 5 found this field about to repeat if it were left to invent its own supply point.
+    `null` is a legitimate declaration meaning no limit -- an operator may have no evidence-age concern for a
+    family that never explores. But `null` combined with a present `exploration_rate` is refused: the door C3
+    opens exists to reach a candidate whose evidence expired (`explore.clears_floor` overrides
+    `max_evidence_age_days` for exactly that candidate), so an unbounded staleness there is a bound from any
+    past environment at all, not a declared one. A family may decline to state a limit, or may explore, but not
+    both.
     """
 
     reference: str
@@ -184,6 +195,7 @@ class FamilyDeclaration:
     label_source: str
     max_label_latency_s: float | None
     label_independent_of_candidate: bool
+    staleness_limit_days: float | None
     exploration_rate: float | None = None
 
 
@@ -370,15 +382,17 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
         # config_format 2's shape (S1) plus the three keys amendment 4 appends to it without a second bump:
         # a family cannot be joined to an outcome, and therefore cannot be given an exploration rate, without
         # saying where its label comes from and how long to wait for one.
-        required = ("reference", "floor", "label_source", "max_label_latency_s", "label_independent_of_candidate")
+        required = ("reference", "floor", "label_source", "max_label_latency_s", "label_independent_of_candidate",
+                   "staleness_limit_days")
         missing = [k for k in required if k not in decl]
         if missing:
             raise ConfigError(
                 f"family {fam!r} is missing {missing}: a family object needs the candidate it falls back to, "
-                "the floor its certified assignment must clear, and -- since C4 -- how a future request's "
-                "label will be produced (label_source), how long to wait for one (max_label_latency_s, null "
-                "only when label_source is 'none'), and whether that labeller is independent of any candidate "
-                "in the family (label_independent_of_candidate)"
+                "the floor its certified assignment must clear, how a future request's label will be produced "
+                "(label_source), how long to wait for one (max_label_latency_s, null only when label_source is "
+                "'none'), whether that labeller is independent of any candidate in the family "
+                "(label_independent_of_candidate) -- since C4 -- and how stale a bound exploration may draw "
+                "into before it is refused (staleness_limit_days, null meaning no limit) -- since C3"
             )
         label_source = decl["label_source"]
         if label_source not in label_source_values:
@@ -412,6 +426,12 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
                 f"{label_independent_of_candidate!r} -- there is no default, because a judge that is also a "
                 "candidate in its own family is a fact only the operator declaring the family knows."
             )
+        staleness_limit_days = decl["staleness_limit_days"]
+        if staleness_limit_days is not None and (
+                not isinstance(staleness_limit_days, (int, float)) or isinstance(staleness_limit_days, bool)):
+            raise ConfigError(
+                f"family {fam!r}.staleness_limit_days must be a number or null, not {staleness_limit_days!r}"
+            )
         exploration_rate = decl.get("exploration_rate")
         if "exploration_rate" in decl and (label_source == "none" or not label_independent_of_candidate):
             reason = ("label_source is 'none'" if label_source == "none"
@@ -422,11 +442,24 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
                 "all -- is not evidence, so this family cannot represent an exploration rate. This is a load "
                 "failure, not a runtime discovery: remove exploration_rate, or fix the reason above."
             )
+        # Amendment 5: an unbounded staleness limit combined with a rate to explore with is refused. Exploration
+        # exists to reach a candidate whose evidence has expired (`explore.clears_floor` overrides
+        # `max_evidence_age_days` for exactly that candidate), so `staleness_limit_days: null` there is a bound
+        # from any past environment at all, not a declared one -- a family may decline to state a limit, or may
+        # explore, but not both.
+        if "exploration_rate" in decl and staleness_limit_days is None:
+            raise ConfigError(
+                f"family {fam!r} declares exploration_rate {exploration_rate!r} and staleness_limit_days null: "
+                "exploration exists to reach a candidate whose evidence has expired, so an unbounded staleness "
+                "limit there is a bound from any past environment at all. Declare a staleness_limit_days, or "
+                "remove exploration_rate."
+            )
         families[fam] = FamilyDeclaration(
             reference=decl["reference"], floor=float(decl["floor"]),
             label_source=label_source,
             max_label_latency_s=(float(max_label_latency_s) if max_label_latency_s is not None else None),
             label_independent_of_candidate=label_independent_of_candidate,
+            staleness_limit_days=(float(staleness_limit_days) if staleness_limit_days is not None else None),
             exploration_rate=(float(exploration_rate) if exploration_rate is not None else None),
         )
     unknown = {f: d.reference for f, d in families.items() if d.reference not in candidates}
