@@ -150,12 +150,41 @@ class FamilyDeclaration:
     number was typed, which is worse than the config_format 1 defect this replaced: that defect at least left
     a second typed number to compare against, and one flag for two families leaves nothing to compare at all.
 
-    C4 (SEAMS.md S1) adds a labeller and a maximum label latency to this same object once it exists; this entry
-    creates the shape and does not anticipate those keys.
+    C4 (SEAMS.md S1, amendment 4) appends `label_source`, `max_label_latency_s` and
+    `label_independent_of_candidate` to this same object rather than to the record schema. `Log.attach_outcome`
+    exists and nothing calls it, and exploration on top of an unjoinable log would produce randomised
+    assignments nobody can learn from -- so a family declares HOW its future traffic gets a label before it may
+    declare a rate to explore with. Amendment 4 found the schema (`schema.json`) already names this concept as
+    `oracle.kind`, ordered strongest to weakest, plus the gate `oracle.independent_of_candidate` ("a standard
+    produced by a model that is also a candidate scores that candidate perfectly by construction"). Reusing
+    that vocabulary rather than inventing a second, coarser one is the whole point of the amendment: a
+    hardcoded second copy is exactly the drift it exists to remove.
+
+    `label_source` is one of `oracle.kind`'s seven values, read from the schema at load time, or `none` -- the
+    one state a measurement record has no reason to express, because a measurement always has a label by the
+    time it is written.
+
+    `max_label_latency_s` is `None` if and only if `label_source` is `none`: a family with no labeller has no
+    latency to wait out, and a family with one must say how long to wait for it.
+
+    `label_independent_of_candidate` has no default. `False` is a legitimate declaration, not a bug -- an
+    operator may be running a judge that is also a candidate in the same family and must be able to say so --
+    and it costs the family its exploration rate for the same reason `label_source: none` does: a candidate
+    grading itself is not evidence, so exploring to generate evidence a self-graded judge cannot supply buys
+    nothing.
+
+    `exploration_rate` is the one optional key here (C3 draws with it; this entry only decides when it may
+    exist at all). `load_config` refuses it outright when the family cannot represent what it would mean --
+    that is a load failure, not a runtime discovery, because the combination has no meaning for `explore.draw`
+    to discover.
     """
 
     reference: str
     floor: float
+    label_source: str
+    max_label_latency_s: float | None
+    label_independent_of_candidate: bool
+    exploration_rate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -205,6 +234,43 @@ def _record_schema_keys(schema_path: str | Path | None = None) -> frozenset[str]
                 if isinstance(sub, dict):
                     keys |= set(sub.get("properties") or {})
     return frozenset(keys - JOIN_KEYS)
+
+
+def _label_source_values(schema_path: str | Path | None = None) -> frozenset[str]:
+    """The vocabulary a family's `label_source` may take: `oracle.kind`'s seven values, read from the record
+    schema, plus `none`.
+
+    Read from the schema rather than copied here, for the reason amendment 4 exists at all: `oracle.kind` is
+    the schema's own name for what decided an outcome, ordered strongest to weakest, and a hand-typed second
+    copy of those seven strings would drift the moment the schema gained an eighth -- the loader would go on
+    accepting the seven it remembers and silently refuse the new one, which is a worse failure than never
+    checking, because it looks like a check that is still working.
+
+    `none` is not read from the schema. It is the one value a measurement record has no reason to express --
+    every record that exists was written because something produced a label -- so it is added here, once, as
+    the online-traffic case the offline vocabulary was never asked to cover.
+
+    Raises rather than returning an empty set when the schema file is missing, matching `_record_schema_keys`:
+    a silent fallback here would accept every string as a `label_source`, refusing nothing where a real check
+    exists, in exactly the deployment -- a candidate file shipped on its own -- where the check matters most.
+    """
+    from tierbook import SCHEMA_PATH
+
+    p = Path(schema_path) if schema_path is not None else SCHEMA_PATH
+    if not p.exists():
+        raise ConfigError(
+            f"the record schema is missing at {p}. It is what decides which label_source values a family may "
+            "declare, so loading configuration without it would drop that check rather than apply it."
+        )
+    schema = json.loads(p.read_text())
+    kind_enum = (((schema.get("properties") or {}).get("oracle") or {}).get("properties") or {}).get("kind", {})
+    values = kind_enum.get("enum") or []
+    if not values:
+        raise ConfigError(
+            f"{p} carries no oracle.kind enum to read label_source from -- the schema this loader was given "
+            "is not the one label_source is defined against."
+        )
+    return frozenset(values) | {"none"}
 
 
 def _reject_illegal(cid: str, raw: dict, observed: frozenset[str]) -> None:
@@ -285,6 +351,9 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
         min_completion_probability=(cons.get("reliability") or {}).get("min_completion_probability"),
         max_age_days=int(obj_raw.get("max_age_days", 90)),
     )
+    # Read once for every family rather than once per family: the vocabulary does not change mid-loop, and a
+    # ConfigError from a missing schema should name the loader's own action, not an arbitrary family.
+    label_source_values = _label_source_values(schema)
     families: dict[str, FamilyDeclaration] = {}
     for fam, decl in (raw.get("families") or {}).items():
         if isinstance(decl, str):
@@ -298,13 +367,68 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
             )
         if not isinstance(decl, dict):
             raise ConfigError(f"family {fam!r} must be an object with 'reference' and 'floor', not {decl!r}")
-        missing = [k for k in ("reference", "floor") if k not in decl]
+        # config_format 2's shape (S1) plus the three keys amendment 4 appends to it without a second bump:
+        # a family cannot be joined to an outcome, and therefore cannot be given an exploration rate, without
+        # saying where its label comes from and how long to wait for one.
+        required = ("reference", "floor", "label_source", "max_label_latency_s", "label_independent_of_candidate")
+        missing = [k for k in required if k not in decl]
         if missing:
             raise ConfigError(
-                f"family {fam!r} is missing {missing}: a family object needs both the candidate it falls back "
-                "to and the floor its certified assignment must clear"
+                f"family {fam!r} is missing {missing}: a family object needs the candidate it falls back to, "
+                "the floor its certified assignment must clear, and -- since C4 -- how a future request's "
+                "label will be produced (label_source), how long to wait for one (max_label_latency_s, null "
+                "only when label_source is 'none'), and whether that labeller is independent of any candidate "
+                "in the family (label_independent_of_candidate)"
             )
-        families[fam] = FamilyDeclaration(reference=decl["reference"], floor=float(decl["floor"]))
+        label_source = decl["label_source"]
+        if label_source not in label_source_values:
+            raise ConfigError(
+                f"family {fam!r}.label_source is {label_source!r}, which is not one of "
+                f"{sorted(label_source_values)}. label_source is oracle.kind's vocabulary, read from the record "
+                "schema so the two cannot drift, plus 'none' for a family with no labeller for online traffic."
+            )
+        max_label_latency_s = decl["max_label_latency_s"]
+        if label_source == "none":
+            if max_label_latency_s is not None:
+                raise ConfigError(
+                    f"family {fam!r} declares label_source 'none' and max_label_latency_s {max_label_latency_s!r}; "
+                    "a family with no labeller for online traffic has no latency to wait out, so "
+                    "max_label_latency_s must be null exactly when label_source is 'none'."
+                )
+        elif max_label_latency_s is None:
+            raise ConfigError(
+                f"family {fam!r} declares label_source {label_source!r} and max_label_latency_s null; a family "
+                "with a labeller must say how long to wait for a label, so max_label_latency_s must be a number "
+                "unless label_source is 'none'."
+            )
+        elif not isinstance(max_label_latency_s, (int, float)) or isinstance(max_label_latency_s, bool):
+            raise ConfigError(
+                f"family {fam!r}.max_label_latency_s must be a number, not {max_label_latency_s!r}"
+            )
+        label_independent_of_candidate = decl["label_independent_of_candidate"]
+        if not isinstance(label_independent_of_candidate, bool):
+            raise ConfigError(
+                f"family {fam!r}.label_independent_of_candidate must be a boolean, not "
+                f"{label_independent_of_candidate!r} -- there is no default, because a judge that is also a "
+                "candidate in its own family is a fact only the operator declaring the family knows."
+            )
+        exploration_rate = decl.get("exploration_rate")
+        if "exploration_rate" in decl and (label_source == "none" or not label_independent_of_candidate):
+            reason = ("label_source is 'none'" if label_source == "none"
+                     else "label_independent_of_candidate is false")
+            raise ConfigError(
+                f"family {fam!r} declares exploration_rate {exploration_rate!r}, but {reason}: exploration "
+                "exists to generate evidence, and a candidate grading itself -- or traffic with no labeller at "
+                "all -- is not evidence, so this family cannot represent an exploration rate. This is a load "
+                "failure, not a runtime discovery: remove exploration_rate, or fix the reason above."
+            )
+        families[fam] = FamilyDeclaration(
+            reference=decl["reference"], floor=float(decl["floor"]),
+            label_source=label_source,
+            max_label_latency_s=(float(max_label_latency_s) if max_label_latency_s is not None else None),
+            label_independent_of_candidate=label_independent_of_candidate,
+            exploration_rate=(float(exploration_rate) if exploration_rate is not None else None),
+        )
     unknown = {f: d.reference for f, d in families.items() if d.reference not in candidates}
     if unknown:
         raise ConfigError(f"families name references that are not candidates: {unknown}")

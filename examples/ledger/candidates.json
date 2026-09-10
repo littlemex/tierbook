@@ -50,10 +50,24 @@
     }
   },
   "families": {
-    "agentic-coding": {"reference": "api-strong-a", "floor": 0.80},
-    "tool-agent-user-retail": {"reference": "api-strong-a", "floor": 0.92}
+    "agentic-coding": {
+      "reference": "api-strong-a",
+      "floor": 0.80,
+      "label_source": "executable_acceptance",
+      "max_label_latency_s": 3600.0,
+      "label_independent_of_candidate": true,
+      "exploration_rate": 0.05
+    },
+    "tool-agent-user-retail": {
+      "reference": "api-strong-a",
+      "floor": 0.92,
+      "label_source": "model_judge",
+      "max_label_latency_s": 259200.0,
+      "label_independent_of_candidate": false
+    }
   },
   "_families_note": "config_format 2: a family is an object, not a bare reference string, because the floor is declared per family (SCOPE sections 2, 5, 12) beside the reference it falls back to. The two families here carry DIFFERENT floors on purpose -- agentic-coding tolerates more failure than the retail tool-use family does -- so a regression that collapsed them back to one shared number would show up as a wrong floor on one of the two rather than passing silently.",
+  "_label_source_note": "C4 (amendment 4): label_source is oracle.kind's vocabulary read from schema.json at load time, plus 'none'. The two families use DIFFERENT values on purpose, and neither is the obvious guess for its domain -- agentic-coding's CI-graded tasks settle fast (max_label_latency_s 3600s) and independently of any candidate, so it declares an exploration_rate; the retail family's label comes from an LLM judge (model_judge, the weakest and slowest of the seven, so max_label_latency_s is 259200s) that may itself be one of this family's candidates, so label_independent_of_candidate is false and exploration_rate is absent -- present, load_config would refuse it, naming both the rate and the reason.",
   "objective": {
     "objective": "cost",
     "constraints": {

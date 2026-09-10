@@ -35,8 +35,15 @@
     }
   },
   "families": {
-    "your-traffic-family": {"reference": "reference-api", "floor": 0.90}
+    "your-traffic-family": {
+      "reference": "reference-api",
+      "floor": 0.90,
+      "label_source": "none",
+      "max_label_latency_s": null,
+      "label_independent_of_candidate": true
+    }
   },
+  "_label_source_note": "label_source is oracle.kind's vocabulary (schema.json), read at load time, plus 'none'. 'none' is the template default because most deployments have not wired an online labeller yet -- replace it with whichever of the seven applies once one exists, set max_label_latency_s to a number (it must be null exactly when label_source is 'none'), and only then may this family carry an exploration_rate.",
   "objective": {
     "objective": "cost",
     "constraints": {
