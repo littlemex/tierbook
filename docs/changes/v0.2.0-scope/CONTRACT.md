@@ -764,3 +764,32 @@ one that loads.
 This is the finding worth keeping from C8: aggregation was the visible defect and it was not the biggest one. Four of
 the six round trips came from a message that was individually correct, reviewed, and complete about its own subject.
 Nothing that looked only at one refusal at a time could have seen it, which is the same reason the journey layer exists.
+
+## Amendment 11 — the report says which floor it used and not which freshness limit
+
+Found by running the sequence the README documents rather than by reading the diff. `accept --policy` produces a report
+whose top-level keys are `floor`, `floor_provenance`, `summary` and `verdicts`. Nothing records the freshness limit the
+run checked against, and nothing records whether it checked one at all.
+
+Amendment 7 ends with: *"A criterion run without a policy is honest about having checked three conditions rather than
+claiming four."* That honesty is not in the artifact. Two runs, one with `--policy` and one with `--floor` alone,
+produce reports that differ in `floor_provenance` and are **identical about freshness** — and in the second, freshness
+was not checked at all. A reader of a committed `docs/verify/*-accept.json` cannot tell which they are holding.
+
+This is the defect C2 closed for the floor, in the value C6 added, and it arrived the same way: the number reached the
+computation and no copy of it reached the record. C2's own audit found "zero recorded copies" of the floor; C6 has
+zero recorded copies of the limit.
+
+**The report gains `max_age_days` and `max_age_days_provenance`**, alongthe floor's two. The provenance says either
+that the limit was read from the named artifact, or that no `--policy` was given so freshness was not checked — in
+which case `max_age_days` is `null` and the two together say so rather than leaving `null` to mean either "no limit
+declared" or "nobody looked".
+
+That last distinction is the reason this is not cosmetic. `null` already means "the operator declared no limit, so the
+condition is absent" — a legitimate declaration under SCOPE section 2 clause 4. Without the provenance line, the same
+`null` also means "there was no artifact to read", and those are different facts about the run: the first says
+freshness was considered and found unbounded, the second says freshness was never considered.
+
+**Written test-first**, unusually for an integrator-authored change: the statement above is precise enough that writing
+the assertion before the code gives the same test either way, and doing it in that order keeps the property `/split-impl`
+protects — that no assertion was shaped by looking at an implementation.
