@@ -175,28 +175,31 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
             bound_provenance=bound_provenance,
             floor=floor, authorised=authorised, latency_feasible=latency_feasible, available=available,
             evidence_age_days=evidence_age_days, max_age_days=max_age_days)
-        # DEFECT this line prevents (amendment 6): `explore.eligible`'s verdict answers "who may be drawn INTO",
-        # and it deliberately does not consult `max_evidence_age_days` -- that override is the whole reason the
-        # door exists, so it can reach an arm the freshness ratchet locked out. But "may be drawn into" is not
-        # "the floor may be claimed for it". An earlier version of this line set `certified = True` whenever
-        # exploration picked an alternative, reasoning that eligibility already covered "the rest of
-        # admissibility" -- which was wrong, because SCOPE section 2's admissibility has always had a fourth,
-        # freshness clause (`record.admissible` has enforced it since v0.1.0), and eligibility is the one place
-        # that clause is deliberately absent. Certifying on the eligible verdict would claim the floor for a
-        # bound whose evidence is past the family's freshness limit -- a bound describing an environment that no
-        # longer exists. `admissible` is called here rather than re-derived, so this decision and
-        # `check_certification` (the falsifier that caught the earlier version) use the SAME predicate and
-        # cannot disagree by construction.
-        drawn = next(c for c in candidates if c.id == chosen)
-        certified, _not_admissible_because = admissible(
-            drawn, floor=floor, authorised=authorised, latency_feasible=latency_feasible,
-            evidence_age_days=evidence_age_days, max_age_days=max_age_days)
-    else:
-        # `got["validated"]` (CONTRACT C1) -- `decide()`'s key was `certified` and named `policy.certified`, the
-        # non-inferiority status, not SCOPE section 2 admissibility. The rename does not change what value lands
-        # in `record.Decision.certified` here, only what it is honestly called upstream; the value itself is
-        # unchanged from before this entry.
-        certified = bool(got["validated"])
+    # CONTRACT C1 (amendment 3): both branches call `admissible` on the candidate actually served, not only the
+    # explored one. `record.Decision.certified` is SCOPE section 2's judgment and nothing else -- before this,
+    # the deterministic branch (the MAJORITY of decisions) set it from `got["validated"]`
+    # (`policy.validated`, the non-inferiority status), which is the same conflation this entry renames the WORD
+    # to stop, still present in the VALUE: the rename alone would have left two words with one of them silently
+    # carrying the other's meaning, reading as though the distinction had been made when it had not.
+    #
+    # DEFECT this line prevents (amendment 6, generalised by amendment 3): `explore.eligible`'s verdict answers
+    # "who may be drawn INTO", and it deliberately does not consult `max_evidence_age_days` -- that override is
+    # the whole reason the door exists, so it can reach an arm the freshness ratchet locked out. But "may be
+    # drawn into" is not "the floor may be claimed for it", and neither is "the compiled rule fired": SCOPE
+    # section 2's admissibility has a bound-vs-floor clause and a freshness clause that a compiled rule's guards
+    # do not re-derive per request from the caller's own `bounds`. `admissible` is called here rather than
+    # re-derived, so this decision and `check_certification` (the falsifier that tests exactly this predicate)
+    # use the SAME predicate and cannot disagree by construction, on the deterministic path as well as the
+    # explored one.
+    #
+    # `floor is None` is guarded the same way `eligible_ids` above already is: `admissible` compares
+    # `candidate.bound < floor` unconditionally, and `None` would make that comparison a `TypeError` rather
+    # than a refusal. With no floor declared there is no basis to say the bound cleared it, so nothing can be
+    # certified -- the same "not_evaluated" honesty `_why_not` already gives the non-chosen candidates above.
+    drawn = next(c for c in candidates if c.id == chosen)
+    certified = (False if floor is None else
+                admissible(drawn, floor=floor, authorised=authorised, latency_feasible=latency_feasible,
+                          evidence_age_days=evidence_age_days, max_age_days=max_age_days)[0])
 
     decision = Decision(
         family=policy.family,

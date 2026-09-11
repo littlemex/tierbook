@@ -309,7 +309,12 @@ def cmd_route(args) -> int:
         "family": args.family,
         "send_to": arrangement.tiers[0],
         "then": list(arrangement.tiers[1:]),
-        "certified": entry["certified"],
+        # CONTRACT C1 (amendment 3): reported as `validated`, not `certified`. `entry["certified"]` (`policy.py`'s
+        # `Decision.certified`, the offline calibration-fold judgment `assign_family` computes) is unchanged and
+        # stays under its own name in its own subsystem; only the KEY this online JSON reports it under changes,
+        # because this is exactly the JSON a persona round found an operator trusting as a section 2 floor check
+        # when it was never that.
+        "validated": entry["certified"],
         "why": entry["why"],
         "status": entry.get("status"),
         "validated_by": (entry.get("validation") or {}).get("holdout"),

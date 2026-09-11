@@ -100,12 +100,15 @@ LABEL_STATES = ("labelled", "missing", "pending")
 #: measure diverted traffic (CONTRACT amendment 13, C10).
 EXPLORATION_REASONS = ("explored", "no_eligible_arm", "rate_zero", "no_mechanism", "not_diverted")
 
-#: SCOPE section 6's multiplicity family (candidates x families x tenants x the selection process), plus `none`,
-#: closed and tied to its producers the way EXCLUSION_REASONS is: a test drives every producer of a bound and
-#: asserts what comes back is a subset of this tuple, so a producer growing a value the tuple lacks fails at merge
-#: time rather than shipping an unrepresentable claim. `none` is what every producer this release ships actually
-#: returns -- CORRECTIONS_PERFORMED below is empty, so nothing here corrects over anything yet.
-BOUND_CORRECTIONS = ("none", "candidates", "families", "tenants", "selection_process")
+#: SCOPE section 6's multiplicity family (candidates x families x tenants x the selection process). Closed and
+#: tied to its producers the way EXCLUSION_REASONS is: a test drives every producer of a bound and asserts what
+#: comes back is a subset of this tuple, so a producer growing a value the tuple lacks fails at merge time rather
+#: than shipping an unrepresentable claim. There is no `none` member: the tuple names terms that CAN be corrected
+#: over, "none" is not a term, and `()` is the one spelling of "corrected over nothing" -- CONTRACT amendment 3
+#: (v0.3.0) removed the second spelling rather than let the release that closes one duplication class open
+#: another in the vocabulary it adds. `corrected_over=()` is what every producer this release ships returns,
+#: since CORRECTIONS_PERFORMED below is empty.
+BOUND_CORRECTIONS = ("candidates", "families", "tenants", "selection_process")
 
 #: The estimators a bound may be produced by. Closed for the same reason BOUND_CORRECTIONS is: this release ships
 #: exactly one, and adding `anytime_valid_*` is a later release's act (SCOPE section 6, out of scope in this
@@ -174,6 +177,18 @@ class Candidate:
             raise Incomplete(f"bound_provenance must be a BoundProvenance or None, not {self.bound_provenance!r}; "
                              f"a free string cannot state which of {BOUND_CORRECTIONS} the bound was corrected "
                              f"over, which is the vocabulary bound_kind left decorative")
+        # CONTRACT amendment 3 (v0.3.0): `bound` and `bound_provenance` are refused apart, each naming both
+        # fields. A numeric bound with no provenance is exactly the pre-C1 state -- a number with nothing saying
+        # what produced it -- so leaving that combination constructible would leave the defect representable
+        # beside the vocabulary meant to end it. The reverse (a provenance with no bound) is refused for the
+        # same reason C6 needs `None` to mean "no bound" unambiguously: a provenance describing a bound that is
+        # not there is a second, competing signal for the same fact.
+        if self.bound is not None and self.bound_provenance is None:
+            raise Incomplete(f"bound={self.bound!r} has no bound_provenance; a number with nothing saying what "
+                             f"produced it is the state this vocabulary exists to make unrepresentable")
+        if self.bound is None and self.bound_provenance is not None:
+            raise Incomplete(f"bound_provenance={self.bound_provenance!r} is set but bound is None; a provenance "
+                             f"cannot describe a bound that is not there")
 
 
 @dataclass
@@ -397,14 +412,15 @@ def admissible(candidate: Candidate, *, floor: float, authorised: bool,
     provenance naming a correction outside CORRECTIONS_PERFORMED is refused as `unearned_correction` rather than
     merely unlabelled, which is what makes the vocabulary checked instead of decorative: the earlier `bound_kind`
     let three records with the identical fabricated `bound` of 0.99 and `bound_kind` of `lcb`, `point_estimate` and
-    `asserted_by_operator` all certify identically, because nothing here read it.
+    `asserted_by_operator` all certify identically, because nothing here read it. `candidate.bound_provenance` is
+    read directly, not guarded by a second `is not None` check: `Candidate.__post_init__` already refuses a
+    non-`None` `bound` paired with a `None` `bound_provenance`, so having passed the `no_bound` return above, the
+    provenance is guaranteed present.
     """
     if candidate.bound is None:
         return False, "no_bound"
-    if candidate.bound_provenance is not None:
-        claimed = set(candidate.bound_provenance.corrected_over) - {"none"}
-        if claimed - set(CORRECTIONS_PERFORMED):
-            return False, "unearned_correction"
+    if set(candidate.bound_provenance.corrected_over) - set(CORRECTIONS_PERFORMED):
+        return False, "unearned_correction"
     if (max_age_days is not None and evidence_age_days is not None
             and evidence_age_days > max_age_days):
         return False, "evidence_expired"
