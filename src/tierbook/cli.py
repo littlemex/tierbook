@@ -475,6 +475,10 @@ def cmd_assign(args) -> int:
     against the artifact through `decide.parameter` rather than trusted outright -- a floor typed at this shell prompt
     that disagrees with the one the table was compiled under is exactly the "two homes for one number" this exists to
     refuse, so a mismatch exits 4 rather than picking a side.
+
+    `--policy-version` is optional for the same reason and checked the same way: `route_once` reads the artifact's
+    own digest (`decide.policy_digest`, CONTRACT C2), and a value typed here that disagrees with it exits 4 rather
+    than being written into the record as if it had been confirmed.
     """
     from tierbook.decide import from_dict, parameter
     from tierbook.observe import observe
@@ -504,21 +508,26 @@ def cmd_assign(args) -> int:
     bound_provenance = (BoundProvenance(estimator=bp_raw["estimator"], confidence=bp_raw["confidence"],
                                         corrected_over=tuple(bp_raw.get("corrected_over", ())))
                         if bp_raw else None)
-    decision, record = route_once(
-        policy=policy, observation=got, request_id=args.request_id,
-        feature_vector_version=args.feature_vector_version, policy_version=args.policy_version,
-        mechanism_version=__version__,
-        agent=args.agent, model=args.model_name or "", endpoint=args.endpoint,
-        gateway_quote_usd=args.quote_usd,
-        bounds=json.loads(args.bounds) if args.bounds else None,
-        costs=json.loads(args.costs) if args.costs else None,
-        evidence_as_of=args.measured_on or "",
-        # Without a floor, every non-chosen candidate is recorded `not_evaluated` rather than being assigned a reason
-        # nobody computed. With one, the reason comes from the same admissibility function the falsifier uses.
-        bound_provenance=bound_provenance, floor=floor, latency_feasible=args.latency_feasible,
-        max_age_days=args.max_age_days,
-        exploration_rate=exploration_rate, staleness_limit_days=staleness_limit_days,
-        log=Log(args.log) if args.log else None)
+    try:
+        decision, record = route_once(
+            policy=policy, observation=got, request_id=args.request_id,
+            feature_vector_version=args.feature_vector_version, policy_version=args.policy_version,
+            mechanism_version=__version__,
+            agent=args.agent, model=args.model_name or "", endpoint=args.endpoint,
+            gateway_quote_usd=args.quote_usd,
+            bounds=json.loads(args.bounds) if args.bounds else None,
+            costs=json.loads(args.costs) if args.costs else None,
+            evidence_as_of=args.measured_on or "",
+            # Without a floor, every non-chosen candidate is recorded `not_evaluated` rather than being assigned a
+            # reason nobody computed. With one, the reason comes from the same admissibility function the
+            # falsifier uses.
+            bound_provenance=bound_provenance, floor=floor, latency_feasible=args.latency_feasible,
+            max_age_days=args.max_age_days,
+            exploration_rate=exploration_rate, staleness_limit_days=staleness_limit_days,
+            log=Log(args.log) if args.log else None)
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 4
     print(json.dumps({
         # `decision["assign"]` is decide()'s own proposed cascade, unchanged by exploration -- useful on its own
         # to see what the deterministic policy would have done. `served` is `record.chosen`, the arm exploration
@@ -781,7 +790,11 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--bounds", help="json of candidate -> lower bound, for the record's candidate set")
     a.add_argument("--costs", help="json of candidate -> cost per task")
     a.add_argument("--feature-vector-version", default="fv1")
-    a.add_argument("--policy-version", default="unversioned")
+    a.add_argument("--policy-version", default=None,
+                   help="checked against --policy's own digest (decide.policy_digest, CONTRACT C2) rather than "
+                        "trusted outright; a mismatch exits 4. Left absent, the artifact's own digest is used -- "
+                        "there is no 'unversioned' default any more, because a value the mechanism can derive "
+                        "is not a value a caller supplies")
     a.add_argument("--floor", type=float, default=None,
                    help="the family's floor. Checked against the value --policy was compiled under (decide.parameter) "
                         "rather than trusted outright; a mismatch exits 4. Left absent, the artifact's own value is "

@@ -36,7 +36,9 @@ named in `MISSING_FOR_A_CLOSED_LOOP` rather than implied to be present.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import dataclass, field, replace
 
 #: State variables a guard may read. Closed on purpose: a guard over a variable nobody collects is a guard that
 #: cannot be evaluated, and discovering that at request time is worse than refusing to compile it.
@@ -226,6 +228,14 @@ class Policy:
     #: never write the floor down, so no criterion computed later could be known to have used the same number a
     #: shell prompt typed. This is the one home for that number; `parameter` is the one reader of it.
     parameters: dict = field(default_factory=dict)
+    #: CONTRACT C2: a content hash of this artifact's own serialisation, the way `policy.registry_version`
+    #: already hashes the ledger. Stamped by `compile_policy` (via `policy_digest`, below), never supplied by a
+    #: direct `Policy(...)` call -- there is no `__post_init__` guard against that here because a test building a
+    #: `Policy` by hand to exercise `decide()` has no artifact to be named after, and `""` reads as exactly that:
+    #: no digest was ever computed for this object. `route_once` reads this attribute rather than recomputing it,
+    #: so a record names the artifact `compile_policy` actually produced, not a hash of whatever the record's
+    #: own reader would derive from it later.
+    policy_digest: str = ""
 
     @property
     def overlaps(self) -> list[str]:
@@ -368,6 +378,7 @@ def as_dict(policy: Policy) -> dict:
         "domain": policy.domain,
         "provenance": policy.provenance,
         "parameters": policy.parameters,
+        "policy_digest": policy.policy_digest,
         "unmeasured_guards": policy.gaps,
         "can_ever_fire": policy.can_ever_fire,
         "rule_overlaps": policy.overlaps,
@@ -426,7 +437,11 @@ def from_dict(d: dict) -> Policy:
     return Policy(family=d["family"], rules=tuple(rules), default=tuple(d["default"]),
                   domain=d.get("domain", {}), validated=bool(d.get("validated", False)),
                   note=d.get("note", ""), provenance=d.get("provenance", {}),
-                  parameters=d.get("parameters", {}))
+                  parameters=d.get("parameters", {}),
+                  # Absent in every artifact from before this entry (v0.2.0 and earlier): "" is the true
+                  # statement that no digest was ever computed for it, not a guess at what compile_policy would
+                  # have produced had this field existed then.
+                  policy_digest=d.get("policy_digest", ""))
 
 
 def parameter(policy: Policy, name: str, supplied: float | None = None) -> float | None:
@@ -449,6 +464,32 @@ def parameter(policy: Policy, name: str, supplied: float | None = None) -> float
         raise ValueError(f"{name!r} supplied as {supplied!r} does not match {compiled!r}, the value this "
                          f"policy was compiled under. Refusing rather than preferring either")
     return supplied
+
+
+def policy_digest(policy: Policy) -> str:
+    """A hash of the compiled artifact's own serialisation, truncated the way `policy.registry_version` already
+    truncates its hash over the ledger (CONTRACT C2).
+
+    Computed over `as_dict(policy)` with the `policy_digest` key itself excluded first: hashing a field that
+    would hold its own hash has no stable answer, and excluding it is what makes this reproducible across a
+    compile -> write -> read round trip, whether the `Policy` passed in already carries a stamped digest or
+    still carries the `""` an artifact never stamped gets. `compile_policy` calls this once, to stamp the value
+    `route_once` later reads back rather than recomputing.
+    """
+    blob = as_dict(policy)
+    blob.pop("policy_digest", None)
+    encoded = json.dumps(blob, sort_keys=True)
+    return hashlib.sha256(encoded.encode()).hexdigest()[:16]
+
+
+def _compiled(policy: Policy) -> Policy:
+    """Stamp `policy_digest` onto a freshly built `Policy` before `compile_policy` returns it.
+
+    One function for every return site in `compile_policy` (there are several, including the refusals), so the
+    digest is computed once, over exactly what that call actually produced -- not re-derived separately at each
+    site, which is how two of them could end up disagreeing about what the artifact's own hash is.
+    """
+    return replace(policy, policy_digest=policy_digest(policy))
 
 
 def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_ids: set[str],
@@ -491,9 +532,10 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
              "staleness_limit_days": staleness_limit_days, "exploration_rate": exploration_rate}
     if not chosen or not validated:
         why = (entry.get("validation") or {}).get("reason") or "no held-out fold supports this assignment"
-        return Policy(family, (), default, domain={}, validated=False, provenance=prov, parameters=params,
-                      note=f"no rule: nothing was validated for this family ({why}), so every request takes "
-                           "the declared default")
+        return _compiled(Policy(family, (), default, domain={}, validated=False, provenance=prov,
+                                parameters=params,
+                                note=f"no rule: nothing was validated for this family ({why}), so every "
+                                     "request takes the declared default"))
 
     age = (Guard("evidence_age_days", "<=", max_evidence_age_days,
                  derived_from=("the freshness bound stated for this registry"
@@ -507,23 +549,25 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
 
     reserved = [c for c in chosen if c in reserved_ids]
     if not reserved:
-        return Policy(family, (Rule((age, *money), chosen,
-                                    "validated, and no candidate in this assignment is reserved, so the choice "
-                                    "does not turn on occupancy"),),
-                      default, domain={}, validated=True, provenance=prov, parameters=params,
-                      note="unconditional in occupancy: nothing here is capacity-bound")
+        return _compiled(Policy(family, (Rule((age, *money), chosen,
+                                              "validated, and no candidate in this assignment is reserved, so "
+                                              "the choice does not turn on occupancy"),),
+                                default, domain={}, validated=True, provenance=prov, parameters=params,
+                                note="unconditional in occupancy: nothing here is capacity-bound"))
 
     if len(reserved) > 1:
         # Refused rather than partially guarded. An earlier version guarded the first reserved candidate and
         # recorded the others as "not modelled" -- but the whole assignment still fired and was exported, so the
         # unguarded legs ran with no capacity semantics at all. A degenerate output is a correct output here:
         # refusing to compile is better than emitting an assignment whose occupancy nobody can evaluate.
-        return Policy(family, (), default, domain={}, validated=False, provenance=prov, parameters=params,
-                      note=("no rule: this assignment contains reserved candidates "
-                            f"{sorted(reserved)} and only one can be capacity-guarded. One occupancy figure "
-                            "cannot describe several of them, and firing the assignment anyway would run the "
-                            "unguarded legs with no capacity semantics. Compile one reserved candidate per "
-                            "assignment, or give each its own availability and occupancy"))
+        return _compiled(Policy(family, (), default, domain={}, validated=False, provenance=prov,
+                                parameters=params,
+                                note=("no rule: this assignment contains reserved candidates "
+                                      f"{sorted(reserved)} and only one can be capacity-guarded. One occupancy "
+                                      "figure cannot describe several of them, and firing the assignment anyway "
+                                      "would run the unguarded legs with no capacity semantics. Compile one "
+                                      "reserved candidate per assignment, or give each its own availability and "
+                                      "occupancy")))
 
     box = reserved[0]
     bound, source = _capacity_from_curve(service_curve, latency_p95_slo_s)
@@ -569,11 +613,12 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     domain = {} if bound is None else {f"inflight:{box}": [0, float("inf")]}
     if max_evidence_age_days is not None:
         domain["evidence_age_days"] = [0, max_evidence_age_days]
-    return Policy(family, tuple(rules), default, domain=domain, validated=True, provenance=prov,
-                  parameters=params,
-                  note=("the boundary between the reserved candidate and what follows it is the occupancy at "
-                        "which it stops meeting the declared latency constraint. That is the only derived "
-                        "threshold here, and it is " + ("measured" if bound is not None else "NOT measured yet")))
+    return _compiled(Policy(family, tuple(rules), default, domain=domain, validated=True, provenance=prov,
+                            parameters=params,
+                            note=("the boundary between the reserved candidate and what follows it is the "
+                                  "occupancy at which it stops meeting the declared latency constraint. That is "
+                                  "the only derived threshold here, and it is "
+                                  + ("measured" if bound is not None else "NOT measured yet"))))
 
 
 def _bound_from_one_run(points: list, latency_p95_slo_s: float) -> tuple[float | None, str]:
