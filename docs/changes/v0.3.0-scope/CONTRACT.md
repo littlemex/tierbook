@@ -619,3 +619,30 @@ Exempting that shape reads the incident's own artifact happily with an empty can
 wearing the fix's clothes. The refusal is unconditional, and the nine fixtures it broke carry the key a real artifact
 carries.
 
+## Amendment 11 (C4): the refusal the door promises happens one read too late, and a typo lands nowhere
+
+C4's interface says `attach-outcome` exits 1 "when the log refuses the outcome — a label that changes, or a state that
+does not admit the label". Measured against `record.Log` before writing the verb, one of those two refusals does not
+exist at the moment the verb needs it, and a third failure of the same shape has no refusal at all.
+
+| # | claim | measured | result |
+|---|---|---|---|
+| 1 | a state that does not admit the label is refused | `attach_outcome(label_state="labelled", label=None)` and an out-of-enum state | **holds** — `Incomplete` at append time, naming `LABEL_STATES` |
+| 2 | a label that changes is refused | appended `label=False`, then `label=True` for the same request | **fails** — the second append is **accepted**. The refusal comes from `Log.read()` afterwards: "r1 already carries the label False and a later line says True" |
+| 3 | (not claimed, found on the way) an outcome for a request the log does not contain | `attach_outcome("r1-typo", ...)` against a log holding only `r1` | **accepted**, and `read()` returns it as an orphan outcome |
+
+Cases 2 and 3 are one defect: **the door reports success and the operator's label does not land.** In case 2 the log
+is worse than unchanged — it is now unreadable, every criterion over it fails, and the append-only rule means the
+operator cannot take it back. In case 3 the label lands on nothing, so a criterion needing a realised rate stays
+`unsupported` and the report attributes that **to a missing measurement rather than to a typo** — which is word for
+word the failure C4's own scope entry exists to end, reproduced by the door built to end it.
+
+**So the verb reads the log before it appends**, and refuses at the door: an outcome for a `request_id` the log does
+not contain, and a label that contradicts one already recorded. `Log.read()`'s refusal stays exactly as it is. The two
+are not redundant and neither replaces the other: the door refuses **this operator's** mistake with a message they can
+act on, and the reader refuses a log written by **anything else** — a second implementation, an older version, a hand
+edit. Removing the reader's check because the door now has one would trust every future writer.
+
+This is the class rather than the instance, and that is deliberate: case 3 is not in C4's sentence and shares case 2's
+shape, so fixing one and leaving the other would leave the door's contract meaning "some of your mistakes are caught".
+
