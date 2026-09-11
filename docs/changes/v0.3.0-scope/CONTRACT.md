@@ -529,3 +529,25 @@ is what amendments 4.1 and 5 already make safe.
 
 Three tests asserting `ignored == []` against the real fixture are updated to name the two keys. Their subject was
 never that nothing is ignored; it was that the reader survives a field it does not model and says which one.
+
+## Amendment 8 (C6): the set comes from the ledger's outcomes, not from whatever `ranked` contains
+
+C6 says the candidate set comes from the ledger rather than the policy's rules, and A3 justified it by observing that
+`assign_family`'s `ranked` already covers every candidate with an outcome for both shipped families. Re-derived before
+writing code, that observation holds — and the way it can stop holding is now known and was not stated.
+
+`assign_family` builds `arrangements` inside a loop that can `continue` past a tier into an `excluded` map, on a
+declared `latency_slo_p95_ms` above the tier's recorded p95 and on `min_completion_probability`. A tier excluded there
+reaches neither `arrangements` nor `ranked`. A set derived from `ranked` would therefore omit it — which is exactly the
+invisibility C6 exists to end, reintroduced through a different door.
+
+It is unreachable with the shipped evidence, and that is the reason to state it rather than to rely on it: the retail
+records carry `p50` and `mean` and no `p95`, so `slo` is `None` and the guard never fires. Measured at
+`latency_slo_p95_ms` of `None`, 20000 and 15000, `excluded` was empty every time. An omission that cannot happen today
+because of a missing field in the evidence is an omission waiting for someone to record that field.
+
+**So the set is derived from every candidate the ledger records an outcome for**, and a candidate `assign_family`
+excluded is named with the reason it was excluded and no bound — the same treatment C6 already gives a candidate the
+ledger cannot bound. Deriving from `ranked` and adding a check that the two agree was rejected: it is a watcher over
+the omission rather than a construction in which the omission cannot occur.
+
