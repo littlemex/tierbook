@@ -671,3 +671,38 @@ times, which is the door working. A library caller, an older version or a hand-e
 reports "no decisions are labelled, so no realised rate exists", attributing a typo to a missing measurement. That
 sentence is the exact failure C4's scope entry names, surviving inside the entry built to end it.
 
+## Amendment 13 (C4): two exit codes the interface left to be guessed, and one sentence that fought the convention
+
+Both surfaced as phase-3 divergences — the test author and the code author read the same interface differently — which
+is the case the split exists to produce. Neither worker was wrong; the interface was underdetermined in one place and
+wrong in the other.
+
+### 13.1 An out-of-enum `--label-state` exits 2, not 1
+
+The interface states exit 2 for a missing required argument, exit 1 "when the log refuses the outcome — a label that
+changes, or a state that does not admit the label", and separately that "a `--label-state` outside `LABEL_STATES` is
+refused naming the tuple" **without an exit code**. So the out-of-enum case had no stated code and the two workers
+picked the two available ones.
+
+Exit 2. "A state that does not admit the label" is the `labelled`-with-no-`--label` mismatch, which is a fact about
+this outcome and reaches the log to be refused. A value outside the enum never reaches the log at all: the operator
+typed something the flag does not accept, which is the same class as omitting a required argument and is what exit 2
+already means everywhere else in this CLI. `argparse`'s `choices=LABEL_STATES` gives the refusal, names the tuple in
+its message, and fails before the log is opened — three things the contract asked for separately.
+
+### 13.2 The refusal message keeps the CLI's own `refused: ` marker
+
+The interface says the refusal carries "`record.Incomplete`'s own message on stderr, **unmodified**, because it already
+says what the operator did and why the log refuses it." Read against `cli.py`, **`refused: {e}` is the established
+form at six existing sites.** So the sentence asked one verb to print bare where every sibling prints a marker, and I
+wrote it without checking the convention it was overriding.
+
+The convention wins, and the contract's own reason is why: "it already says what the operator did" is not quite true of
+`label_state 'labelled' and label None disagree`, which states a disagreement and does not state that anything was
+refused. The marker supplies exactly the missing half, which is what a reader needs to tell a refusal from a crash.
+
+So: the message **body** is unmodified — not reworded, not truncated, not replaced by a paraphrase, which is what the
+sentence was protecting — and it is prefixed by the same `refused: ` every other refusal in this file carries. The four
+tests asserting a byte-exact bare message are changed to assert the body is carried through intact behind the marker,
+which is the assertion that still fails if a future author rewords it.
+
