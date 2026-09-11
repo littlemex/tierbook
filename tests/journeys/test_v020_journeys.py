@@ -348,7 +348,12 @@ def test_p2_old_decisions_log_gets_a_full_accept_report_not_a_crash(tmp_path: Pa
                cwd=tmp_path)
     assert r.returncode == 1, r.stdout + r.stderr  # non-zero because of a genuine FAIL below, not a crash
     out = json.loads(r.stdout)
-    assert out["summary"]["of"] == 9
+    # Deliberately changed by v0.3.0 C5, which adds `floor_is_reachable` as the tenth criterion. Cross-checked
+    # against the report's own verdict list rather than against `accept.CRITERIA`: this file drives the CLI as a
+    # subprocess on purpose, and importing the package here to read its constant would let the journey pass on a
+    # count the shipped binary never produced. The literal stays, because a self-consistent report of the wrong
+    # size is exactly what this catches.
+    assert out["summary"]["of"] == len(out["verdicts"]) == 10
     verdicts = {v["criterion"]: v for v in out["verdicts"]}
     # Amendment 5: over a log whose bounds carry no recorded provenance the criterion cannot check certification,
     # and `unsupported` is still a full report -- which is this journey's subject. A `pass` here would be the
