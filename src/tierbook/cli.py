@@ -247,7 +247,7 @@ def cmd_compile(args) -> int:
                     # wait; what a contended slot allocates is capacity, and capacity per task is concurrency
                     # over throughput. Using the latency inflated every slot value by about 23 percent.
                     seconds_at_bound, _ = occupancy_at(points, float(target))
-            if not pol.can_ever_fire and pol.certified:
+            if not pol.can_ever_fire and pol.validated:
                 print(f"  [WARN] {fam}/{label}: no rule can fire, so every request takes the declared "
                       f"default. Unmeasured: {pol.gaps}")
     # What a second of the box's occupancy is worth to each family, and therefore which family should get a
@@ -473,7 +473,7 @@ def cmd_assign(args) -> int:
     """
     from tierbook.decide import from_dict, parameter
     from tierbook.observe import observe
-    from tierbook.record import Log
+    from tierbook.record import BoundProvenance, Log
     from tierbook.serve import route_once
 
     policy = from_dict(json.loads(Path(args.policy).read_text()))
@@ -492,6 +492,13 @@ def cmd_assign(args) -> int:
         prev = json.loads(Path(args.previous).read_text()).get("readings")
     got = observe(candidate=args.candidate, metrics_url=args.metrics_url, model_name=args.model_name,
                   gateway_authorised=args.authorised, measured_on=args.measured_on, previous=prev)
+    # CONTRACT C1: `--bound-provenance` replaces `--bound-kind`. A free string could assert any correction at all;
+    # this is parsed into `record.BoundProvenance` so `estimator` and `corrected_over` are checked against their
+    # closed vocabularies before the record is ever written, not after.
+    bp_raw = json.loads(args.bound_provenance) if args.bound_provenance else None
+    bound_provenance = (BoundProvenance(estimator=bp_raw["estimator"], confidence=bp_raw["confidence"],
+                                        corrected_over=tuple(bp_raw.get("corrected_over", ())))
+                        if bp_raw else None)
     decision, record = route_once(
         policy=policy, observation=got, request_id=args.request_id,
         feature_vector_version=args.feature_vector_version, policy_version=args.policy_version,
@@ -503,7 +510,7 @@ def cmd_assign(args) -> int:
         evidence_as_of=args.measured_on or "",
         # Without a floor, every non-chosen candidate is recorded `not_evaluated` rather than being assigned a reason
         # nobody computed. With one, the reason comes from the same admissibility function the falsifier uses.
-        bound_kind=args.bound_kind, floor=floor, latency_feasible=args.latency_feasible,
+        bound_provenance=bound_provenance, floor=floor, latency_feasible=args.latency_feasible,
         max_age_days=args.max_age_days,
         exploration_rate=exploration_rate, staleness_limit_days=staleness_limit_days,
         log=Log(args.log) if args.log else None)
@@ -775,9 +782,10 @@ def main(argv: list[str] | None = None) -> int:
                         "rather than trusted outright; a mismatch exits 4. Left absent, the artifact's own value is "
                         "used, and without one there either every non-chosen candidate is recorded as not_evaluated, "
                         "because a reason nobody computed is worse than no reason")
-    a.add_argument("--bound-kind", default="unstated",
-                   help="what kind of number --bounds carries. Never inferred: a log of point estimates must not "
-                        "claim to be a log of corrected lower bounds")
+    a.add_argument("--bound-provenance", default=None,
+                   help="json object {estimator, confidence, corrected_over} naming what --bounds carries and "
+                        "which of record.BOUND_CORRECTIONS it was corrected over. Never inferred: a log of point "
+                        "estimates must not claim to be a log of corrected lower bounds. Absent means no bound")
     a.add_argument("--latency-feasible", type=_tri, default=None)
     a.add_argument("--max-age-days", type=float, default=None,
                    help="the freshness limit past which evidence stops being usable")

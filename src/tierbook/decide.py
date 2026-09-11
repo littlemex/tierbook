@@ -210,7 +210,13 @@ class Policy:
     rules: tuple[Rule, ...]
     default: tuple[str, ...]
     domain: dict = field(default_factory=dict)
-    certified: bool = False
+    #: CONTRACT C1: named `validated`, not `certified` -- this is the non-inferiority validation status (a held-out
+    #: fold supported this assignment against the reference), never SCOPE section 2 admissibility. Before this
+    #: rename, `decide.py` set `certified = entry.get("status") == "assigned"` and `record.check_certification`
+    #: computed something else under the identical word, and `tierbook route`'s online path returned the first to
+    #: an operator who declared a floor and had every reason to read it as the second. `certified` now belongs to
+    #: `record.Decision` alone, where it means section 2.
+    validated: bool = False
     note: str = ""
     #: Where the parts that were not derived came from. The default in particular is DECLARED, and an artifact
     #: that does not say who declared it invites a reader to take it for a measured choice.
@@ -315,6 +321,11 @@ def decide(policy: Policy, state: dict) -> dict:
     Returns the assignment, the rule that produced it, and -- always -- what about the answer is not supported:
     an out-of-domain state, an unmeasured guard, an uncollected variable. The point of returning that beside
     the assignment rather than logging it is that a caller cannot use one without seeing the other.
+
+    CONTRACT C1: the key is `validated`, not `certified`. This is `policy.validated` -- the non-inferiority status
+    a held-out fold gave this assignment against the reference -- and it is the value `serve.route_once` reads (as
+    `got["validated"]`) for the deterministic path. Calling it `certified` here read as SCOPE section 2 admissibility
+    to a caller who had no way to know it was something else, which is R5's finding in this module by name.
     """
     ok, outside = policy.in_domain(state)
     if not ok:
@@ -328,7 +339,7 @@ def decide(policy: Policy, state: dict) -> dict:
                       "extrapolation from measurements that do not cover this state",
             "gaps": [f"{GAP_REASONS[2]}: {o}" for o in outside]
                     + [f"{GAP_REASONS[0]}: {g}" for g in policy.gaps],
-            "certified": False,
+            "validated": False,
         }
     gaps = []
     for i, rule in enumerate(policy.rules):
@@ -336,14 +347,14 @@ def decide(policy: Policy, state: dict) -> dict:
         gaps.extend(why)
         if fired:
             return {"assign": list(rule.assign), "rule": i, "reason": rule.because,
-                    "gaps": gaps, "certified": policy.certified}
+                    "gaps": gaps, "validated": policy.validated}
     return {
         "assign": list(policy.default),
         "rule": None,
         "reason": ("no rule fired, so the declared default applies. The default is deliberately not the "
                    "cheapest candidate: when no rule holds there is least reason to trust the cheapest one"),
         "gaps": gaps,
-        "certified": False,
+        "validated": False,
     }
 
 
@@ -352,7 +363,7 @@ def as_dict(policy: Policy) -> dict:
     return {
         "family": policy.family,
         "default": list(policy.default),
-        "certified": policy.certified,
+        "validated": policy.validated,
         "note": policy.note,
         "domain": policy.domain,
         "provenance": policy.provenance,
@@ -381,6 +392,14 @@ def from_dict(d: dict) -> Policy:
     evidence-age limit down -- a v0.1.0 artifact is exactly this case, and it is refused for the same reason the
     guards-as-prose case above is: an artifact that cannot say what it was compiled under is not the source, and
     guessing what a shell prompt typed at compile time is worse than recompiling.
+
+    CONTRACT C1: a `certified` key is refused, named against `validated`, rather than read as this release's field
+    under its old name. `certified` here was always the non-inferiority validation status computed by
+    `entry.get("status") == "assigned"`; `record.Decision.certified` is a different judgment -- SCOPE section 2
+    admissibility -- and reading a v0.2.0-or-earlier artifact's `certified` optimistically into `validated` would
+    quietly relabel the first as if it always meant the second, which is the ambiguity this entry exists to close.
+    A v0.2.0 artifact carries exactly this key and is exactly this case; recompiling under the current schema is
+    what produces `validated` honestly.
     """
     if d.get("rules") and "parameters" not in d:
         raise ValueError(
@@ -388,6 +407,14 @@ def from_dict(d: dict) -> Policy:
             "loaded: nothing here can say what floor or evidence-age limit it was compiled under. Recompile it: "
             "the artifact is not the source, and re-deriving it is cheaper than trusting a number nobody wrote "
             "down")
+    if "certified" in d:
+        raise ValueError(
+            "this policy carries a 'certified' key, which named the non-inferiority validation status in every "
+            "version before this one -- 'validated' is what this reader calls that same judgment now, and "
+            "'certified' is reserved for record.Decision's different one, SCOPE section 2 admissibility. Reading "
+            "'certified' into 'validated' here would relabel the first judgment as if it had always been named "
+            "correctly. Recompile it: the artifact is not the source, and re-deriving it under the current schema "
+            "is what produces 'validated' honestly")
     rules = []
     for r in d.get("rules", []):
         if "guards" not in r:
@@ -397,7 +424,7 @@ def from_dict(d: dict) -> Policy:
         rules.append(Rule(guards=tuple(Guard(**g) for g in r["guards"]),
                           assign=tuple(r["assign"]), because=r.get("because", "")))
     return Policy(family=d["family"], rules=tuple(rules), default=tuple(d["default"]),
-                  domain=d.get("domain", {}), certified=bool(d.get("certified", False)),
+                  domain=d.get("domain", {}), validated=bool(d.get("validated", False)),
                   note=d.get("note", ""), provenance=d.get("provenance", {}),
                   parameters=d.get("parameters", {}))
 
@@ -451,7 +478,9 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     assignment that could not be paid for, and reported no gap at all.
     """
     chosen = tuple(entry.get("chosen") or ())
-    certified = entry.get("status") == "assigned"
+    # CONTRACT C1: this is the non-inferiority validation status, not SCOPE section 2 admissibility -- named
+    # `validated` (Policy.validated) rather than `certified` for exactly that reason.
+    validated = entry.get("status") == "assigned"
     prov = {"default_declared_by": default_declared_by}
     # Written once and carried into every return below, including the refusals: the numbers this function was
     # GIVEN, not ones it derives. `staleness_limit_days` and `exploration_rate` are the family's own declaration
@@ -460,10 +489,10 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     # declaration from, only what its caller hands it.
     params = {"floor": floor, "max_evidence_age_days": max_evidence_age_days,
              "staleness_limit_days": staleness_limit_days, "exploration_rate": exploration_rate}
-    if not chosen or not certified:
+    if not chosen or not validated:
         why = (entry.get("validation") or {}).get("reason") or "no held-out fold supports this assignment"
-        return Policy(family, (), default, domain={}, certified=False, provenance=prov, parameters=params,
-                      note=f"no rule: nothing was certified for this family ({why}), so every request takes "
+        return Policy(family, (), default, domain={}, validated=False, provenance=prov, parameters=params,
+                      note=f"no rule: nothing was validated for this family ({why}), so every request takes "
                            "the declared default")
 
     age = (Guard("evidence_age_days", "<=", max_evidence_age_days,
@@ -479,9 +508,9 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     reserved = [c for c in chosen if c in reserved_ids]
     if not reserved:
         return Policy(family, (Rule((age, *money), chosen,
-                                    "certified, and no candidate in this assignment is reserved, so the choice "
+                                    "validated, and no candidate in this assignment is reserved, so the choice "
                                     "does not turn on occupancy"),),
-                      default, domain={}, certified=True, provenance=prov, parameters=params,
+                      default, domain={}, validated=True, provenance=prov, parameters=params,
                       note="unconditional in occupancy: nothing here is capacity-bound")
 
     if len(reserved) > 1:
@@ -489,7 +518,7 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
         # recorded the others as "not modelled" -- but the whole assignment still fired and was exported, so the
         # unguarded legs ran with no capacity semantics at all. A degenerate output is a correct output here:
         # refusing to compile is better than emitting an assignment whose occupancy nobody can evaluate.
-        return Policy(family, (), default, domain={}, certified=False, provenance=prov, parameters=params,
+        return Policy(family, (), default, domain={}, validated=False, provenance=prov, parameters=params,
                       note=("no rule: this assignment contains reserved candidates "
                             f"{sorted(reserved)} and only one can be capacity-guarded. One occupancy figure "
                             "cannot describe several of them, and firing the assignment anyway would run the "
@@ -511,11 +540,11 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     # gate the WHOLE assignment on `metered_authorised`, so a spend refusal made paid-for box capacity
     # unreachable -- the box charges nothing and was being withheld for want of authorisation it does not need.
     # And the above-capacity tail carried no availability test, so with the box down and occupancy below the
-    # bound neither rule fired even though the certified tail applied.
+    # bound neither rule fired even though the validated tail applied.
     rules = []
     if tail:
         rules.append(Rule((age, *money, avail, below), chosen,
-                          "the reserved candidate is certified and free at the margin while it has capacity, "
+                          "the reserved candidate is validated and free at the margin while it has capacity, "
                           "and its metered tail is authorised to catch what it cannot do"))
         # Explicitly the negation, not merely the absence, of the authorisation guard. Omitting it would leave
         # this rule a subset of the one above, and then which of them applied would be decided by the order they
@@ -534,13 +563,13 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
                           "the request rather than the unrelated default"))
     else:
         rules.append(Rule((age, *money, avail, below), chosen,
-                          "the reserved candidate is certified for this family and free at the margin while it "
+                          "the reserved candidate is validated for this family and free at the margin while it "
                           "has capacity, so paid-for capacity is used before anything metered is charged"))
 
     domain = {} if bound is None else {f"inflight:{box}": [0, float("inf")]}
     if max_evidence_age_days is not None:
         domain["evidence_age_days"] = [0, max_evidence_age_days]
-    return Policy(family, tuple(rules), default, domain=domain, certified=True, provenance=prov,
+    return Policy(family, tuple(rules), default, domain=domain, validated=True, provenance=prov,
                   parameters=params,
                   note=("the boundary between the reserved candidate and what follows it is the occupancy at "
                         "which it stops meeting the declared latency constraint. That is the only derived "

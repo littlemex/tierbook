@@ -73,6 +73,12 @@ EXCLUSION_REASONS = (
     # invented values aggregates confidently into nonsense, which is the failure the closed vocabulary was meant to
     # prevent.
     "not_evaluated",
+    # CONTRACT C1: its `bound_provenance.corrected_over` names a term of BOUND_CORRECTIONS this release's mechanism
+    # never applies. Before this reason existed, three records carrying a fabricated `bound` of 0.99 with
+    # `bound_kind` of `lcb`, `point_estimate` and `asserted_by_operator` all certified identically, because
+    # `admissible` compared only `bound < floor` and nothing anywhere read the kind. This is what makes an
+    # overclaimed correction refused rather than merely unlabelled.
+    "unearned_correction",
 )
 
 #: The three states a label can be in. `missing` and `pending` are different facts and collapsing them is how a
@@ -94,10 +100,55 @@ LABEL_STATES = ("labelled", "missing", "pending")
 #: measure diverted traffic (CONTRACT amendment 13, C10).
 EXPLORATION_REASONS = ("explored", "no_eligible_arm", "rate_zero", "no_mechanism", "not_diverted")
 
+#: SCOPE section 6's multiplicity family (candidates x families x tenants x the selection process), plus `none`,
+#: closed and tied to its producers the way EXCLUSION_REASONS is: a test drives every producer of a bound and
+#: asserts what comes back is a subset of this tuple, so a producer growing a value the tuple lacks fails at merge
+#: time rather than shipping an unrepresentable claim. `none` is what every producer this release ships actually
+#: returns -- CORRECTIONS_PERFORMED below is empty, so nothing here corrects over anything yet.
+BOUND_CORRECTIONS = ("none", "candidates", "families", "tenants", "selection_process")
+
+#: The estimators a bound may be produced by. Closed for the same reason BOUND_CORRECTIONS is: this release ships
+#: exactly one, and adding `anytime_valid_*` is a later release's act (SCOPE section 6, out of scope in this
+#: contract) -- the vocabulary makes its absence explicit here rather than leaving `estimator` a free string that
+#: could name one nothing here implements.
+BOUND_ESTIMATORS = ("clopper_pearson_fixed_sample",)
+
+#: Which of BOUND_CORRECTIONS this release's mechanism actually performs. Empty, honestly: nothing here corrects a
+#: bound over any multiplicity term (SCOPE section 6's anytime-valid bound and its multiplicity correction are both
+#: out of scope, per CONTRACT's out-of-scope table). `admissible` refuses a `bound_provenance` that claims a term
+#: outside this set, which is what turns the claim into something checked rather than merely recorded.
+CORRECTIONS_PERFORMED: tuple[str, ...] = ()
+
 
 class Incomplete(Exception):
     """A record was missing a field a later claim needs. Raised at write time, because the alternative is finding out
     when the claim is attempted and the data is already collected."""
+
+
+@dataclass(frozen=True)
+class BoundProvenance:
+    """What produced `Candidate.bound`, structured rather than a free string.
+
+    DEFECT this replaces: `bound_kind` was a free string, so three records carrying the same fabricated `bound` of
+    0.99 with `bound_kind` of `lcb`, `point_estimate` and `asserted_by_operator` all certified identically, because
+    `admissible` compared only `bound < floor` and nothing anywhere read the kind. `estimator` and `corrected_over`
+    are each closed vocabularies (BOUND_ESTIMATORS, BOUND_CORRECTIONS) precisely so a value nothing here produces
+    cannot be written, and `admissible` below reads `corrected_over` rather than merely recording it.
+    """
+
+    estimator: str
+    confidence: float
+    corrected_over: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.estimator not in BOUND_ESTIMATORS:
+            raise Incomplete(f"{self.estimator!r} is not one of {BOUND_ESTIMATORS}; an open-ended estimator name "
+                             f"cannot be checked against what this mechanism actually ships")
+        unknown = sorted(set(self.corrected_over) - set(BOUND_CORRECTIONS))
+        if unknown:
+            raise Incomplete(f"corrected_over {self.corrected_over!r} names {unknown}, not in {BOUND_CORRECTIONS}; "
+                             f"an open-ended correction cannot be checked against what this mechanism actually "
+                             f"performs")
 
 
 @dataclass
@@ -107,10 +158,11 @@ class Candidate:
     id: str
     excluded_because: str
     bound: float | None = None
-    #: What KIND of number `bound` is -- a corrected lower bound, a point estimate, something else. Never inferred:
-    #: an earlier version wrote "lcb" for whatever a caller passed, so a log of point estimates claimed to be a log of
-    #: lower bounds and the falsifier passed against them.
-    bound_kind: str = "unstated"
+    #: What produced `bound` -- the estimator, its confidence, and which of BOUND_CORRECTIONS it was corrected
+    #: over. `None` means no bound, the same fact `bound is None` already states; a candidate with a bound and no
+    #: provenance is not representable, because a bound nobody can attribute is exactly the "decorative field"
+    #: defect this replaces `bound_kind` to close.
+    bound_provenance: BoundProvenance | None = None
     cost_usd: float | None = None
     evidence_as_of: str = ""
 
@@ -118,6 +170,10 @@ class Candidate:
         if self.excluded_because not in EXCLUSION_REASONS:
             raise Incomplete(f"{self.excluded_because!r} is not one of {EXCLUSION_REASONS}; an open-ended reason "
                              f"cannot be aggregated over a log")
+        if self.bound_provenance is not None and not isinstance(self.bound_provenance, BoundProvenance):
+            raise Incomplete(f"bound_provenance must be a BoundProvenance or None, not {self.bound_provenance!r}; "
+                             f"a free string cannot state which of {BOUND_CORRECTIONS} the bound was corrected "
+                             f"over, which is the vocabulary bound_kind left decorative")
 
 
 @dataclass
@@ -216,12 +272,25 @@ def _candidate_from_row(row: dict, index: int) -> tuple[Candidate, list[str]]:
     carries the position (`candidates[1].evidence_ref`) because a reader debugging a fifty-candidate row needs to
     know which one grew the field, not just that one did.
     """
-    known = {"id", "excluded_because", "bound", "bound_kind", "cost_usd", "evidence_as_of"}
+    known = {"id", "excluded_because", "bound", "bound_provenance", "cost_usd", "evidence_as_of"}
     ignored = [f"candidates[{index}].{k}" for k in sorted(row) if k not in known]
     for f in fields(Candidate):
         if f.default is MISSING and f.default_factory is MISSING and f.name not in row:
             raise Incomplete(f"candidates[{index}].{f.name} is required and missing from the row")
-    return Candidate(**{k: v for k, v in row.items() if k in known}), ignored
+    kw = {k: v for k, v in row.items() if k in known}
+    if isinstance(kw.get("bound_provenance"), dict):
+        # A logged row carries `bound_provenance` as a plain object (json.dumps flattened the dataclass), not the
+        # BoundProvenance instance `Candidate.__post_init__` requires -- so it is rebuilt here rather than splatted,
+        # the same "required field absent -> named Incomplete" rule `Candidate`'s own fields get, applied one level
+        # down at the position (`candidates[N].bound_provenance.<field>`) a reader debugging it needs.
+        bp = kw["bound_provenance"]
+        for f in fields(BoundProvenance):
+            if f.default is MISSING and f.default_factory is MISSING and f.name not in bp:
+                raise Incomplete(f"candidates[{index}].bound_provenance.{f.name} is required and missing "
+                                 f"from the row")
+        kw["bound_provenance"] = BoundProvenance(estimator=bp["estimator"], confidence=bp["confidence"],
+                                                 corrected_over=tuple(bp.get("corrected_over", ())))
+    return Candidate(**kw), ignored
 
 
 def from_row(row: dict) -> tuple[Decision, list[str]]:
@@ -322,9 +391,20 @@ def admissible(candidate: Candidate, *, floor: float, authorised: bool,
     `evidence_expired` was in the exclusion vocabulary with nothing able to produce it -- so a candidate whose evidence
     had expired could be certified. Like latency it is three-valued: no declared limit means the condition is absent,
     not passed.
+
+    CONTRACT C1: `bound_provenance` is read here too, checked before floor, freshness or anything else derived from
+    the bound's own value -- a claim about how the bound was produced is a property of the bound itself. A
+    provenance naming a correction outside CORRECTIONS_PERFORMED is refused as `unearned_correction` rather than
+    merely unlabelled, which is what makes the vocabulary checked instead of decorative: the earlier `bound_kind`
+    let three records with the identical fabricated `bound` of 0.99 and `bound_kind` of `lcb`, `point_estimate` and
+    `asserted_by_operator` all certify identically, because nothing here read it.
     """
     if candidate.bound is None:
         return False, "no_bound"
+    if candidate.bound_provenance is not None:
+        claimed = set(candidate.bound_provenance.corrected_over) - {"none"}
+        if claimed - set(CORRECTIONS_PERFORMED):
+            return False, "unearned_correction"
     if (max_age_days is not None and evidence_age_days is not None
             and evidence_age_days > max_age_days):
         return False, "evidence_expired"

@@ -31,7 +31,7 @@ import random
 from . import decide as dc
 from . import explore as ex
 from . import observe as ob
-from .record import Candidate, Decision, Log, admissible
+from .record import BoundProvenance, Candidate, Decision, Log, admissible
 
 #: The propensity of an arm nothing was drawn for -- either because no rate was declared (or it was zero) or
 #: because the eligible set held no alternative to draw. `explore.draw` returns this value itself, as a literal,
@@ -44,7 +44,8 @@ DETERMINISTIC_PROPENSITY = 1.0
 
 
 def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
-                  costs: dict | None = None, evidence_as_of: str = "", bound_kind: str = "unstated",
+                  costs: dict | None = None, evidence_as_of: str = "",
+                  bound_provenance: BoundProvenance | None = None,
                   floor: float | None = None, authorised: bool = False,
                   latency_feasible: bool | None = None, available: dict | None = None,
                   evidence_age_days: float | None = None, max_age_days: float | None = None) -> list:
@@ -60,9 +61,11 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
     guarantees the enum is what made the fabrication invisible. Where no floor is supplied the reason is
     `not_evaluated`, which is the true statement.
 
-    `bound_kind` is passed rather than inferred. An earlier version labelled every supplied bound `lcb`, so a caller
-    handing over point estimates produced a log claiming they were corrected lower bounds -- and the falsifier passed
-    against them.
+    `bound_provenance` is passed rather than inferred. An earlier version labelled every supplied bound `lcb`
+    (`bound_kind`, CONTRACT C1), so a caller handing over point estimates produced a log claiming they were
+    corrected lower bounds -- and the falsifier passed against them. `bound_provenance` is structured now
+    (`record.BoundProvenance`), and `record.admissible` refuses one that claims a correction this mechanism did
+    not perform, rather than merely recording an unchecked label.
     """
     bounds = bounds or {}
     costs = costs or {}
@@ -77,7 +80,8 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
             continue
         seen.add(cid)
         cand = Candidate(id=cid, excluded_because="chosen" if cid == chosen else "not_evaluated",
-                         bound=bounds.get(cid), bound_kind=bound_kind if cid in bounds else "unstated",
+                         bound=bounds.get(cid),
+                         bound_provenance=bound_provenance if cid in bounds else None,
                          cost_usd=costs.get(cid), evidence_as_of=evidence_as_of)
         if cid != chosen:
             cand.excluded_because = _why_not(cand, cid, costs=costs, floor=floor, authorised=authorised,
@@ -119,7 +123,7 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
                feature_vector_version: str, policy_version: str, mechanism_version: str,
                agent: str, model: str, endpoint: str, gateway_quote_usd: float | None,
                bounds: dict | None = None, costs: dict | None = None, evidence_as_of: str = "",
-               bound_kind: str = "unstated", floor: float | None = None,
+               bound_provenance: BoundProvenance | None = None, floor: float | None = None,
                latency_feasible: bool | None = None, max_age_days: float | None = None,
                exploration_rate: float | None = None, staleness_limit_days: float | None = None,
                rng: random.Random | None = None,
@@ -146,7 +150,8 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
     # find who else clears the floor -- the same admissibility facts this function already gathers for the
     # record, not a second, separately-computed set.
     candidates = candidate_set(
-        policy, deterministic, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of, bound_kind=bound_kind,
+        policy, deterministic, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of,
+        bound_provenance=bound_provenance,
         floor=floor, authorised=authorised, latency_feasible=latency_feasible, available=available,
         evidence_age_days=evidence_age_days, max_age_days=max_age_days)
 
@@ -166,7 +171,8 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
         # `excluded_because == "chosen"` names the one that was, not the one decide() proposed -- the invariant
         # `Decision.__post_init__` already enforces.
         candidates = candidate_set(
-            policy, chosen, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of, bound_kind=bound_kind,
+            policy, chosen, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of,
+            bound_provenance=bound_provenance,
             floor=floor, authorised=authorised, latency_feasible=latency_feasible, available=available,
             evidence_age_days=evidence_age_days, max_age_days=max_age_days)
         # DEFECT this line prevents (amendment 6): `explore.eligible`'s verdict answers "who may be drawn INTO",
@@ -186,7 +192,11 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
             drawn, floor=floor, authorised=authorised, latency_feasible=latency_feasible,
             evidence_age_days=evidence_age_days, max_age_days=max_age_days)
     else:
-        certified = bool(got["certified"])
+        # `got["validated"]` (CONTRACT C1) -- `decide()`'s key was `certified` and named `policy.certified`, the
+        # non-inferiority status, not SCOPE section 2 admissibility. The rename does not change what value lands
+        # in `record.Decision.certified` here, only what it is honestly called upstream; the value itself is
+        # unchanged from before this entry.
+        certified = bool(got["validated"])
 
     decision = Decision(
         family=policy.family,
