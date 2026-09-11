@@ -729,4 +729,18 @@ class Log:
         # every field in every row" rather than as one more key a caller has to interpret.
         if ignored_keys:
             outcomes["__ignored_keys__"] = ignored_keys
+        # CONTRACT amendment 12 (C4). An outcome naming a request_id no decision in this log carries is a label
+        # that landed on nothing. REPORTED rather than refused, and the difference is what the fact is: a
+        # rewritten label makes every criterion over this log a criterion over the rewrite, which is why the
+        # branch above raises; an orphan makes a label silently ABSENT, which is a gap in the population rather
+        # than a corruption of it -- C11's shape, and C12's above.
+        #
+        # `attach-outcome` refuses this at the door with a message the operator can act on. This is the backstop
+        # for every other writer: a library caller, an older version, a hand edit. Without it, `accept` reports
+        # "no decisions are labelled, so no realised rate exists" over a log holding twenty labels aimed at ids
+        # that do not exist -- blaming a missing measurement for a typo, which is the failure C4 exists to end.
+        known = {row["request_id"] for row in decisions}
+        orphans = sorted(rid for rid in outcomes if not rid.startswith("__") and rid not in known)
+        if orphans:
+            outcomes["__orphan_outcomes__"] = {"count": len(orphans), "request_ids": orphans}
         return decisions, outcomes

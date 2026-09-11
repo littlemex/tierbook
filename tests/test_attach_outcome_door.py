@@ -174,28 +174,34 @@ def test_a_pending_outcome_later_superseded_by_a_real_label_exits_0_both_times(t
 # --- exit 1: the log refuses the outcome, with record.Incomplete's own message, UNMODIFIED -----------------
 
 
-def test_an_out_of_enum_label_state_exits_1_naming_the_tuple_unmodified(tmp_path, capsys):
-    """Amendment 11's case 1, which the table records as already holding: a state outside `LABEL_STATES` is
-    refused at append time by `record.Log.attach_outcome` itself, and the interface says that refusal reaches
-    stderr as `record.Incomplete`'s own message, UNMODIFIED -- not wrapped in a second sentence like `cmd_assign`
-    does for its own `ValueError`s ("refused: {e}"). Asserted as an exact match (module trailing whitespace),
-    not a substring: a verb that prepended "refused: " would still pass an `in` check and would still be a
-    modification the contract explicitly rules out."""
+def test_an_out_of_enum_label_state_exits_2_naming_the_tuple(tmp_path, capsys):
+    """Deliberately changed by CONTRACT amendment 13.1. This asserted exit 1, and the interface stated no code for
+    this case at all -- exit 1 is "the log refuses the outcome", exit 2 is a usage error, and a value outside the
+    enum never reaches the log to be refused. The operator typed something the flag does not accept, which is the
+    class exit 2 already means everywhere else in this CLI, so it fails before the log is opened.
+
+    The tuple must still be named, which is the part of the contract that was never in doubt."""
     log_path = tmp_path / "decisions.jsonl"
     build_log(log_path, decision(request_id="r1"))
     rc = run_cli(["attach-outcome", "--log", str(log_path), "--request-id", "r1", "--label-state", "bogus"])
-    assert rc == 1
+    assert rc == 2
     err = capsys.readouterr().err
-    expected = f"label_state {'bogus'!r} is not one of {rec.LABEL_STATES}"
-    assert err.strip() == expected
+    for state in rec.LABEL_STATES:
+        assert state in err, f"{state!r} is not named in the refusal: {err!r}"
 
 
 @pytest.mark.parametrize("state,label", [("labelled", None), ("missing", True), ("pending", False)])
-def test_a_label_state_label_mismatch_exits_1_with_the_disagreement_message_unmodified(tmp_path, capsys, state, label):
+def test_a_label_state_label_mismatch_exits_1_with_the_disagreement_body_carried_through(tmp_path, capsys, state, label):
     """The second half of amendment 11's case 1: `label_state` says one thing and `label` says another --
     `labelled` with no label, or a non-`labelled` state carrying one. Three of the four illegal combinations
     `test_record.py::test_an_outcome_whose_label_state_disagrees_with_its_label_is_refused` already drives at
-    the `record.Log` level; this drives the same three through the CLI and checks the exact stderr text."""
+    the `record.Log` level; this drives the same three through the CLI and checks the stderr text.
+
+    Deliberately changed by CONTRACT amendment 13.2. This asserted a byte-exact BARE message, on the interface's
+    word "unmodified". Read against `cli.py`, `refused: {e}` is the established form at six existing sites, so the
+    sentence asked one verb to print bare where every sibling prints a marker. What "unmodified" was protecting is
+    the message BODY -- not reworded, not truncated, not replaced by a paraphrase -- and that is what is asserted
+    here, so a future author who rewords it still fails."""
     log_path = tmp_path / "decisions.jsonl"
     build_log(log_path, decision(request_id="r1"))
     argv = ["attach-outcome", "--log", str(log_path), "--request-id", "r1", "--label-state", state]
@@ -204,8 +210,8 @@ def test_a_label_state_label_mismatch_exits_1_with_the_disagreement_message_unmo
     rc = run_cli(argv)
     assert rc == 1
     err = capsys.readouterr().err
-    expected = f"label_state {state!r} and label {label!r} disagree"
-    assert err.strip() == expected
+    body = f"label_state {state!r} and label {label!r} disagree"
+    assert err.strip() == f"refused: {body}"
 
 
 # --- exit 1: amendment 11's two NEW door-side refusals, checked BEFORE the append happens -------------------
@@ -381,3 +387,70 @@ def test_the_door_moves_a_realised_rate_criterion_off_unsupported(tmp_path, caps
         "which is word for word the failure C4's own scope entry exists to end, reproduced by the door built "
         "to end it"
     )
+
+
+# --- amendment 12: the door's backstop, for every writer that is not the door ------------------------------
+
+
+def test_read_reports_an_outcome_naming_a_request_no_decision_carries(tmp_path):
+    """Amendment 12. Amendment 11 justified keeping `Log.read()`'s own refusal by saying the door catches this
+    operator's mistake and the reader catches a log written by anything else. Measured, that held for a changed
+    label and was FALSE here: an outcome for a `request_id` no decision carries passed `read()` in silence and
+    came back keyed to an id nothing matches, so the sentence claimed a backstop for two cases and had one.
+
+    Reported rather than refused, because that is what the fact is. A rewritten label makes every criterion over
+    the log a criterion over the rewrite. An orphan makes a label silently ABSENT -- a gap in the population, not
+    a corruption of it -- which is `__ignored_keys__`'s shape and C11's before it: the reader names what it could
+    not use instead of quietly using less."""
+    log = build_log(tmp_path / "decisions.jsonl", decision(request_id="r1"))
+    log.attach_outcome("r1-typo", label_state="labelled", label=True)
+    decisions, outcomes = log.read()
+    assert len(decisions) == 1
+    got = outcomes["__orphan_outcomes__"]
+    assert got["count"] == 1 and got["request_ids"] == ["r1-typo"]
+
+
+def test_read_says_nothing_about_orphans_when_every_outcome_found_its_decision(tmp_path):
+    """The key is absent rather than zero-valued when nothing is orphaned, the same way `__ignored_keys__` is --
+    but the report layer must still carry it always, which the test below fixes in place. Absent here, so a
+    caller reading the mapping cannot mistake "every label found its decision" for one more bookkeeping key."""
+    log = build_log(tmp_path / "decisions.jsonl", decision(request_id="r1"))
+    log.attach_outcome("r1", label_state="labelled", label=True)
+    _decisions, outcomes = log.read()
+    assert "__orphan_outcomes__" not in outcomes
+
+
+def test_the_bookkeeping_keys_are_not_themselves_counted_as_orphans(tmp_path):
+    """The orphan check walks the outcomes mapping, which is also where `read()` files `__observations__`,
+    `__bad_lines__`, `__unreadable_rows__` and `__ignored_keys__`. A check that did not skip them would report
+    the reader's own bookkeeping as labels that landed on nothing -- and would do it on every log carrying a
+    truncated line, which is the log an operator is already trying to understand."""
+    path = tmp_path / "decisions.jsonl"
+    log = build_log(path, decision(request_id="r1"))
+    log.attach_outcome("r1", label_state="labelled", label=True)
+    with path.open("a") as fh:
+        fh.write('{"truncated\n')
+    _decisions, outcomes = log.read()
+    assert outcomes["__bad_lines__"]["count"] == 1
+    assert "__orphan_outcomes__" not in outcomes
+
+
+def test_the_accept_report_carries_orphan_outcomes_always(tmp_path, capsys):
+    """A realised rate can be missing from a log that VISIBLY contains labels, and this is the only thing in the
+    report that says why. Present even when empty, for `ignored_keys`'s own reason: a key appearing only when
+    something went wrong leaves a reader unable to tell "every label found its decision" from "this version did
+    not look"."""
+    path = tmp_path / "decisions.jsonl"
+    log = build_log(path, decision(request_id="r1"))
+    log.attach_outcome("r1-typo", label_state="labelled", label=True)
+    rc = run_cli(["accept", "--log", str(path), "--floor", "0.80"])
+    assert rc in (0, 1)
+    report = json.loads(capsys.readouterr().out)
+    assert report["orphan_outcomes"]["request_ids"] == ["r1-typo"]
+
+    clean = tmp_path / "clean.jsonl"
+    log2 = build_log(clean, decision(request_id="r1"))
+    log2.attach_outcome("r1", label_state="labelled", label=True)
+    run_cli(["accept", "--log", str(clean), "--floor", "0.80"])
+    report2 = json.loads(capsys.readouterr().out)
+    assert report2["orphan_outcomes"] == {}

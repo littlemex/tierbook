@@ -624,7 +624,13 @@ def cmd_accept(args) -> int:
           # appears only when something went wrong leaves a reader unable to tell "this reader
           # understood everything" from "this version of the tool did not look". It does NOT make a
           # criterion unsupported -- nothing was lost from the population, unlike C11's two classes.
-          "ignored_keys": dict(outcomes.get("__ignored_keys__") or {})}
+          "ignored_keys": dict(outcomes.get("__ignored_keys__") or {}),
+          # CONTRACT amendment 12 (C4). Always present for the same reason `ignored_keys` is: a key that appears
+          # only when something went wrong leaves a reader unable to tell "every label found its decision" from
+          # "this version did not look". Labels aimed at ids no decision carries are why a realised rate can be
+          # missing from a log that visibly contains labels, and a report that omitted them would attribute the
+          # gap to a measurement nobody took.
+          "orphan_outcomes": dict(outcomes.get("__orphan_outcomes__") or {})}
     print(json.dumps(out, indent=2))
     if args.out:
         Path(args.out).write_text(json.dumps(out, indent=1))
