@@ -290,6 +290,24 @@ def test_a_disagreeing_caller_supplied_policy_version_is_refused_naming_both_val
     assert p.policy_digest in msg
 
 
+def test_a_policy_carrying_no_digest_refuses_a_supplied_version_as_unconfirmable_not_as_a_mismatch():
+    """CONTRACT amendment 9. `decide.parameter` has TWO refusals and they are not interchangeable: a name the
+    artifact never recorded "cannot confirm" a supplied value, while a name recorded differently "does not match" it.
+    An artifact carrying no digest is in the first case, and reporting it as `does not match ''` states an absence as
+    though it were a rival claim -- the over-statement this release spent five amendments removing from `certified`,
+    one layer out. Only a policy from `compile_policy` carries a digest, so a hand-built one reaching this path is
+    the normal way to arrive here rather than a contrived state."""
+    bare = dc.Policy(family="f", rules=(), default=("box",), domain={}, validated=True, note="never compiled")
+    assert bare.policy_digest == ""
+    with pytest.raises(ValueError) as exc:
+        _route(_obs(inflight=2.0, metered_authorised=True), bare, policy_version="a-hand-typed-string")
+    msg = str(exc.value)
+    assert "a-hand-typed-string" in msg
+    assert "no digest" in msg and "cannot confirm" in msg
+    # And it must NOT read as a comparison against a value: an empty string is not the other side of a mismatch.
+    assert "does not match" not in msg
+
+
 # --- --policy-version loses its "unversioned" default ----------------------------------------------------------
 
 

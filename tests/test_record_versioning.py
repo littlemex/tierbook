@@ -85,10 +85,9 @@ def real_v010_row() -> dict:
 # --- the version number itself -----------------------------------------------------------------------
 
 
-def test_schema_version_is_2():
-    """Catches C1 shipping with the wrong constant -- every other test in this file is keyed against it, so a wrong
-    value here would make them all pass or fail for the wrong reason."""
-    assert rec.SCHEMA_VERSION == 2
+# The version lock that lived here asserted 2. C2 bumps the constant to 3 for `policy_digest`, and the lock moved
+# with the entry that changed it: `test_policy_provenance.py::test_schema_version_becomes_3`. One lock, beside the
+# reason the number is what it is.
 
 
 # --- stamped by the writer, refused from a caller -----------------------------------------------------
