@@ -45,7 +45,7 @@ def _minimal(**over) -> dict:
                     "price_per_mtok": {"fresh_in": 1.0, "cached_in": 0.1, "out": 5.0}},
         },
         "families": {"f": {"reference": "ref", "floor": 0.80, "label_source": "executable_acceptance", "max_label_latency_s": 3600.0, "label_independent_of_candidate": True,
-                            "staleness_limit_days": 14.0}},
+                            "staleness_limit_days": 14.0, "tenant_scope": "single"}},
         "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
     }
     base.update(over)

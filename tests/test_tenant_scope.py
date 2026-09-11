@@ -45,10 +45,18 @@ RETAIL = "tool-agent-user-retail"         # ships with no exploration_rate, labe
 
 
 def _base_ledger() -> dict:
-    """A deep copy of the real shipped ledger. Neither family carries `tenant_scope` yet -- it predates C3 --
-    so every fixture below adds it explicitly to whichever family must be valid, and omits it (or sets it)
-    only on the family actually under test."""
-    return copy.deepcopy(json.loads(LEDGER_PATH.read_text()))
+    """A deep copy of the real shipped ledger, with `tenant_scope` REMOVED from every family.
+
+    Removing it rather than assuming it is absent is the point. This fixture first read the shipped ledger and
+    relied on neither family carrying the field, which was true of the tree it was written against and stopped
+    being true the moment C3 added the field to the shipped example -- so the omission tests below silently
+    stopped testing an omission and started testing a valid file. A fixture that depends on a shipped file NOT
+    containing something is a fixture that stops testing when the file gains it, and says nothing when it does.
+    """
+    ledger = copy.deepcopy(json.loads(LEDGER_PATH.read_text()))
+    for fam in ledger["families"].values():
+        fam.pop("tenant_scope", None)
+    return ledger
 
 
 def _set_tenant_scope(ledger: dict, family: str, value: str) -> None:
@@ -186,3 +194,34 @@ def test_pooled_with_exploration_rate_loads(tmp_path):
     cfg = _load(tmp_path, ledger)
     assert cfg.families[AGENTIC].tenant_scope == "pooled"
     assert cfg.families[AGENTIC].exploration_rate == 0.05
+
+
+def test_a_scope_outside_the_three_is_refused_naming_the_value_and_the_legal_ones(tmp_path):
+    """Catches the enum check being absent, which no other test here reaches: removing it left all 1086 tests
+    green. Contract amendment 1 settled the wording against `label_source`'s existing shape -- the family, the
+    field, the value given, and the legal values -- because that is the local idiom for an out-of-enum refusal.
+    """
+    ledger = _base_ledger()
+    _set_tenant_scope(ledger, RETAIL, "single")
+    _set_tenant_scope(ledger, AGENTIC, "per-tenant")   # a hyphen, which is how this is actually mistyped
+    with pytest.raises(ConfigError) as excinfo:
+        _load(tmp_path, ledger)
+    msg = str(excinfo.value)
+    assert AGENTIC in msg
+    assert "tenant_scope" in msg
+    assert "per-tenant" in msg, "the refusal must quote the value given, or an operator cannot see their typo"
+    for legal in ("single", "pooled", "per_tenant"):
+        assert legal in msg, f"the refusal must list {legal!r} among the legal values"
+
+
+def test_the_out_of_enum_refusal_does_not_repeat_that_single_is_legitimate(tmp_path):
+    """Amendment 1's other half, and it is a real distinction rather than a preference. Two refusals, two
+    audiences: an operator who omitted the field may not know whether declaring the trivial answer is allowed
+    at all, and one who mistyped a value already knows the field exists and needs the list -- which already
+    shows `single` is legal. Repeating the sentence there makes the longer message the common case."""
+    ledger = _base_ledger()
+    _set_tenant_scope(ledger, RETAIL, "single")
+    _set_tenant_scope(ledger, AGENTIC, "per-tenant")
+    with pytest.raises(ConfigError) as excinfo:
+        _load(tmp_path, ledger)
+    assert "is legitimate" not in str(excinfo.value)

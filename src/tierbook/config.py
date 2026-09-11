@@ -507,8 +507,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
                 f"family {fam!r}.tenant_scope is {tenant_scope!r}, which is not one of {TENANT_SCOPES}. SCOPE "
                 "section 6's multiplicity family is candidates x families x tenants x the selection process, and "
                 "section 7 calls pooling across tenants a declared policy input, not an emergency measure -- so "
-                "this field must say which of the three the family is. Declaring 'single' is legitimate: what "
-                "is refused is silence, not multi-tenancy."
+                "this field must say which of the three the family is."
             )
             continue
         # v0.3.0's C3, R11: the rate exploration draws with and section 6's selection-process term are coupled,
