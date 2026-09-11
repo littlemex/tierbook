@@ -274,3 +274,24 @@ distinction that made it invisible before.
 
 A v0.2.0 artifact has no `candidates` key. `from_dict` refuses it rather than falling back to the rules, because
 falling back is what made the omission silent.
+
+## Amendment 1 — C3's out-of-enum refusal, which the interface implied and did not state
+
+C3's test author reported it rather than pinning a message the contract had not committed to, which is the right call:
+the interface says `tenant_scope` is "one of `single`, `pooled`, `per_tenant`", which implies an enum check, and
+specifies the wording of only the omission and the coupling refusals.
+
+The local idiom already answers it. `load_config`'s existing out-of-enum refusal for `label_source` reads:
+
+```
+family 'agentic-coding'.label_source is 'not_a_real_kind', which is not one of [...]
+```
+
+**`tenant_scope` follows that shape**: the family, the field, the value given, and the legal values. It does **not**
+repeat the omission refusal's explanation that `single` is legitimate — an operator who typed a wrong value already
+knows the field exists and needs the list, whereas an operator who omitted it needs to be told the easy answer is
+allowed. Two refusals, two audiences, and conflating them would make the longer message the common case.
+
+No test is required for it by this amendment beyond what the enum check naturally gets: the reachability requirement in
+C1's vocabulary test covers "every legal value is reachable", and the three-values test C3 already commissions covers
+the positive side. Stating the wording is what was missing.
