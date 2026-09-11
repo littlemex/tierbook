@@ -646,3 +646,28 @@ edit. Removing the reader's check because the door now has one would trust every
 This is the class rather than the instance, and that is deliberate: case 3 is not in C4's sentence and shares case 2's
 shape, so fixing one and leaving the other would leave the door's contract meaning "some of your mistakes are caught".
 
+## Amendment 12 (C4): amendment 11's own backstop does not cover the case amendment 11 added
+
+Amendment 11 put a refusal at the door for two mistakes and justified leaving `Log.read()`'s check in place with this
+sentence: "the door refuses **this operator's** mistake with a message they can act on, and the reader refuses a log
+written by **anything else** — a second implementation, an older version, a hand edit."
+
+Measured: that is true of case 2 and **false of case 3**. `Log.read()` refuses a label that changes. An outcome for a
+`request_id` the log does not contain passes `read()` silently and comes back as an entry in the outcomes map keyed to
+an id no decision carries. So the door I added has a backstop for one of the two mistakes it catches, and I wrote the
+sentence claiming both. Same defect class as amendment 5's closing paragraph and amendment 9's one-of-two refusals:
+prose written from the mechanism's intent rather than run against it.
+
+**`Log.read()` reports outcomes that matched no decision.** Reporting rather than refusing, and the difference is what
+the fact is: a rewritten label makes every criterion over the log wrong, which is why it is refused; an orphan outcome
+makes a label *silently absent*, which is a gap in the population rather than a corruption of it. That is C11's shape
+from the previous release and C12's before it — the reader names what it could not use instead of quietly using less.
+
+It costs nothing to compute: `read()` already joins outcomes to decisions by `request_id`, so it knows which ones
+matched nothing at the moment it finishes the join.
+
+And it is what closes C4 rather than half-closing it. An operator who typos twenty request-ids now gets exit 1 twenty
+times, which is the door working. A library caller, an older version or a hand-edited log gets silence — and `accept`
+reports "no decisions are labelled, so no realised rate exists", attributing a typo to a missing measurement. That
+sentence is the exact failure C4's scope entry names, surviving inside the entry built to end it.
+
