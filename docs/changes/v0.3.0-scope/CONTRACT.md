@@ -378,3 +378,57 @@ own word "online", not a count of references.
 first before amendment 2 was written. Theirs is better and is adopted: "unsupported" reads as "a correction this
 software does not support", and the defect is that the claim was not earned by the work. Amendment 2's naming is
 withdrawn on this point.
+
+## Amendment 4 — amendment 2.4 made every historical record unreadable, and two corrections to my own claims
+
+**A4.1 — the pairing rule is about construction, not about reading, and I wrote it as both.** Amendment 2.4 said a
+numeric `bound` with no `bound_provenance` is refused. Applied in `_candidate_from_row` as well as in the constructor,
+that makes every row this project has ever written unreadable. Verified on the real artifact:
+
+```
+a real v0.1.0 row carries: ['bound', 'bound_kind', 'cost_usd', 'evidence_as_of', 'excluded_because', 'id']
+REFUSED: Incomplete  bound=0.9 has no bound_provenance
+```
+
+That contradicts v0.2.0's C1 in its entirety — the entry whose purpose is that a log survives its own evolution, and
+whose amendment 1 established that **the version decides**. I wrote a rule that refuses the past while adding a
+vocabulary meant to describe the future.
+
+**Reading is not certifying, and the two halves separate cleanly.** `BOUND_ESTIMATORS` gains `unrecorded`, and
+`_candidate_from_row` supplies `BoundProvenance(estimator="unrecorded", confidence=None, corrected_over=())` for a row
+below `schema_version` 3. The row reads. It says truthfully that the bound's provenance was never recorded, which is a
+different statement from the record being unreadable.
+
+And `admissible` **refuses** a candidate whose provenance is `unrecorded`, with its own reason
+**`unrecorded_provenance`** — distinct from `unearned_correction`, which is a claim that was made and not earned, where
+this is no claim at all. So a historical log stays readable and a historical bound stays unusable for a *new*
+certification, which are both C1's purposes rather than a compromise between them. A historical record's own
+`certified` field is untouched: it says what it said, and the falsifier reading it is a separate question from routing
+on it today.
+
+The constructor's pairing rule stands unchanged for **new** candidates: `serve.candidate_set` and `cli.cmd_assign` may
+not build a bound with no provenance, which is where the defect actually lived.
+
+**A4.2 — I attributed the phase-5 failure to the wrong criterion.** Amendment 3 said the live run flagged this as a
+`no_false_certification` failure. The code author checked and reported that both `docs/verify/v0.1.0-accept.json` and
+`docs/verify/v0.2.0-accept.json` show that criterion passing. Verified here: the v0.2.0 run's only failure is
+**`default_is_not_a_hiding_place`**, and `no_false_certification` passes in both.
+
+Amendment 3's argument does not depend on it — the two branches genuinely fill one field from two judgments, which is
+readable in the code — but the citation was wrong and the author was right to leave it out of a comment rather than
+assert it. Corrected here rather than quietly dropped, because a wrong citation in a contract is the class of defect
+this release exists to fix.
+
+**A4.3 — three tests encode the defect, which is the strongest evidence C1 is real.** All in `tests/test_serve.py`,
+one shared root cause: the helper never supplies `floor` to `route_once`, so each assertion depended on `certified`
+reflecting `policy.validated` regardless of any bound-against-floor check.
+
+| test | asserted | under C1 |
+|---|---|---|
+| `test_a_free_seat_goes_to_the_reserved_candidate_and_is_recorded` | `certified is True` with **no floor given at all** | `False` |
+| `test_a_certified_decision_whose_chosen_candidate_is_below_the_floor_is_caught_end_to_end` | its own docstring: "the policy says certified, the bound says otherwise, and the offline checker catches it" | nothing to catch — the online path no longer certifies it |
+| `test_the_loop_writes_a_log_the_acceptance_checker_reads` | `unlabelled_certified == 2` | `0` |
+
+The second is the sharpest: a test whose docstring describes the conflation as the *intended* behaviour, written when
+that was the design. It changes deliberately as a wire change, and the falsifier it exercised is now catching nothing
+because the defect it was built to catch cannot occur — which is the outcome, not a regression.
