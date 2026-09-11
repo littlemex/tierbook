@@ -573,3 +573,49 @@ mechanism now derives a value. C2's whole sentence is that a value the mechanism
 supplies, so the adaptation is to stamp the fixture's policy with its own real digest and stop supplying the label.
 A fixture that keeps supplying one is asserting the state this entry removes.
 
+## Amendment 10 (C6): the set carries ids and no number, because R1 rejected the number
+
+C6's interface says `candidates_for(tiers, family) -> dict[str, float | None]`, "every candidate with an outcome for
+the family, mapped to its bound or to `None`". Implemented literally, that bound is
+`clopper_pearson_lower(attempted, solved, 0.05)` — **the fixed-sample single-test absolute bound this contract's own
+rejected-alternatives table turns down under R1**, in R1's own words: SCOPE section 6 disqualifies it, and shipping it
+"would relocate the defect rather than close it — a caller's honest guess becomes the compiler's miscalibrated
+assertion, which is worse because it carries the compiler's authority."
+
+So the interface asked for the alternative the table rejected, and the code author implemented what the interface said.
+That is the contract's defect, not the implementation's, and it is the reason the table records reasons: without R1's
+reason written down, the number would have shipped with the compiler's authority behind it.
+
+**Two measurements decided it rather than taste.**
+
+| | |
+|---|---|
+| At 20 of 20, the bound is **0.8609** | which is exactly `0.05 ** (1/20)`, C5's own **ceiling**. At the top of the range the number is a property of how many items were run, not of the candidate it is filed under. |
+| For `tool-agent-user-retail` (floor 0.92), **no** candidate clears | 0.7174, 0.8609, 0.7839 against a floor above the ceiling. C5's fact arriving through C6's door, as a number the artifact asserts. |
+
+And nothing read it. `serve.candidate_set` takes the per-request bound from the caller's `bounds`, so the artifact's
+value was consulted only for which ids belong in the set — making it **the fourth value this codebase records and
+never reads**, beside `bound_kind` and the two `"warning"` strings this same release removes. R16 rejected shipping the
+ceiling as a third one. Shipping a fourth through a different entry is the same defect with a different label.
+
+**`candidates_for` returns `tuple[str, ...]`**: the ids, sorted. `compile_policy` writes them as a list;
+`Policy.candidates` is a tuple defaulting to empty; `from_dict` still refuses an artifact with no `candidates` key.
+Membership is the whole claim, and it is what `serve.candidate_set` needed — `no_bound` is derived at decision time
+from the caller's `bounds`, exactly as before.
+
+**Amendment 8's fold-back disappears with it.** `candidates_for` reads each tier's own recorded outcome and never
+calls `assign_family`, so a tier `assign_family` excluded is in the set for the same reason every other measured tier
+is. There is no second pass putting back what a first pass dropped, which is what amendment 8 asked for and did not
+get in a form that terminated: the fold-back was a watcher over the omission, and this is a construction the omission
+cannot occur in.
+
+### And the refusal is not gated on the artifact carrying rules
+
+`from_dict`'s first implementation refused only an artifact that carried `rules` and no `candidates` key, to spare
+fixtures focused on other entries. A **rules-less** artifact is the sharper case, not the exempt one: it is precisely
+what the shipped ledger produced in the incident C6 exists to close — the compiler certified nothing on a 20-item
+cohort, `rules` was empty, the set collapsed to one member, and 400 consecutive draws returned `no_eligible_arm`.
+Exempting that shape reads the incident's own artifact happily with an empty candidate set, which is the defect
+wearing the fix's clothes. The refusal is unconditional, and the nine fixtures it broke carry the key a real artifact
+carries.
+
