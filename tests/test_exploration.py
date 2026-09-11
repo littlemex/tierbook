@@ -505,7 +505,13 @@ def test_from_row_reads_no_mechanism_and_empty_eligible_set_for_a_real_v010_line
     assert d.schema_version == 1
     assert d.exploration_reason == "no_mechanism"
     assert d.eligible_set == []
-    assert ignored == []
+    # C1 replaced `bound_kind` with `bound_provenance`, so a real v0.1.0 line carries one field this reader no
+    # longer models, and reporting it is C12's contracted behaviour rather than a regression. It is deliberately
+    # NOT translated into a provenance: `bound_kind` was a free string, and the defect C1 closed was three rows
+    # with the same fabricated bound and three different `bound_kind` values all certifying identically. Turning
+    # such a string into a recorded estimator would launder an unchecked claim into an attributable one, which is
+    # worse than reading the bound as `unrecorded` and saying so.
+    assert ignored == ["candidates[0].bound_kind", "candidates[1].bound_kind"]
 
 
 def test_from_row_reads_no_mechanism_and_empty_eligible_set_for_a_hand_built_v1_row():

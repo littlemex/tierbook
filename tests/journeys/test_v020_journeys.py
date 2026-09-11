@@ -350,7 +350,10 @@ def test_p2_old_decisions_log_gets_a_full_accept_report_not_a_crash(tmp_path: Pa
     out = json.loads(r.stdout)
     assert out["summary"]["of"] == 9
     verdicts = {v["criterion"]: v for v in out["verdicts"]}
-    assert verdicts["no_false_certification"]["verdict"] == "pass"
+    # Amendment 5: over a log whose bounds carry no recorded provenance the criterion cannot check certification,
+    # and `unsupported` is still a full report -- which is this journey's subject. A `pass` here would be the
+    # criterion claiming a check it did not perform.
+    assert verdicts["no_false_certification"]["verdict"] == "unsupported"
     assert verdicts["default_is_not_a_hiding_place"]["verdict"] == "fail"
     assert "operator-supplied and unchecked" in out["floor_provenance"]
 

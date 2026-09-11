@@ -59,7 +59,7 @@ def route(o, pol=None, **kw):
     base = dict(policy=pol or policy(), observation=o, request_id="r1", feature_vector_version="fv1",
                 policy_version="p1", mechanism_version="0.1.0", agent="opencode", model="m",
                 endpoint="http://e", gateway_quote_usd=0.004, bounds=BOUNDS, costs=COSTS,
-                evidence_as_of="2026-09-01",
+                evidence_as_of="2026-09-01", floor=0.80,
                 bound_provenance=rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95))
     base.update(kw)
     return sv.route_once(**base)
@@ -187,11 +187,35 @@ def test_the_loop_writes_a_log_the_acceptance_checker_reads(tmp_path):
     assert got["floor_compliance"].numbers["unlabelled_certified"] == 2
 
 
-def test_a_certified_decision_whose_chosen_candidate_is_below_the_floor_is_caught_end_to_end(tmp_path):
-    """The falsifier, through the real loop: the policy says certified, the bound says otherwise, and the checker
-    reads the record rather than the policy's claim."""
+def test_the_loop_cannot_write_a_certified_decision_below_the_floor(tmp_path):
+    """Deliberately changed by C1 amendment 3, and the change is the evidence. This used to drive a below-floor
+    bound through `route_once` and catch the resulting record with the falsifier -- which worked because
+    `route_once` set `certified` from `policy.validated` and never compared the bound to the floor. Now the
+    decision and the falsifier share one predicate by construction, so the loop refuses to produce the record at
+    all. What the falsifier catches is asserted on its own below, against a row that reached the log by some other
+    writer, which is the only way that row can now exist."""
     log = rec.Log(tmp_path / "log.jsonl")
-    route(obs(inflight=2.0, metered_authorised=True), request_id="r1", log=log, bounds={"box": 0.10, "api": 0.05})
+    _, d = route(obs(inflight=2.0, metered_authorised=True), request_id="r1", log=log,
+                 bounds={"box": 0.10, "api": 0.05})
+    assert d.certified is False
+    decisions, _ = log.read()
+    assert ac.no_false_certification(decisions, floor=0.80, latency_feasible=True).verdict != ac.FAIL
+
+
+def test_the_falsifier_catches_a_certified_row_below_the_floor_from_any_writer(tmp_path):
+    """The falsifier's own subject, separated from the loop: a record claiming certification for a candidate whose
+    bound is under the floor is caught by reading the record, not by trusting whoever wrote it. `Decision` accepts
+    this combination on purpose -- refusing it at construction would move the check into the writer and leave
+    nothing able to audit a log written by an older mechanism version or a second implementation."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    prov = rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95)
+    log.append(rec.Decision(
+        family="agentic-coding", request_id="r1", feature_vector_version="fv1", state_ref="obs:a",
+        candidates=[rec.Candidate(id="box", excluded_because="chosen", bound=0.10, cost_usd=0.004,
+                                  evidence_as_of="2026-09-01", bound_provenance=prov)],
+        chosen="box", selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
+        mechanism_version="0.1.0", agent="opencode", model="m", endpoint="http://e", gateway_quote_usd=0.004,
+        gateway_authorised=True, decided_at=1000.0, exploration_reason="no_mechanism", eligible_set=[]))
     decisions, _ = log.read()
     v = ac.no_false_certification(decisions, floor=0.80, latency_feasible=True)
     assert v.verdict == ac.FAIL and "not admissible" in v.detail

@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .record import _UNVERIFIABLE_PREFIX as UNVERIFIABLE_PREFIX
 from .record import check_certification, from_row
 
 PASS, FAIL, UNSUPPORTED = "pass", "fail", "unsupported"
@@ -76,19 +77,42 @@ def no_false_certification(decisions: list, *, floor: float, latency_feasible: b
     if not decisions:
         return Verdict("no_false_certification", UNSUPPORTED,
                        "the log holds no decisions, so there is nothing to check against the definition")
-    bad = []
+    bad: list[str] = []
+    unverifiable: list[str] = []
+    certified_rows = 0
     for row in decisions:
         d, _ignored = from_row(row)
+        certified_rows += bool(d.certified)
         for v in check_certification(d, floor=floor, latency_feasible=latency_feasible, max_age_days=max_age_days):
-            if "hiding place" not in v:
-                bad.append(f"{d.request_id}: {v}")
+            if "hiding place" in v:
+                continue
+            # Amendment 5: a finding that cannot be CHECKED is not a violation. Before this split, every
+            # certified decision written before C1 recorded a bound's provenance failed here -- not only the
+            # wrong ones -- and section 12 reads this criterion's failure as the mechanism being broken, so a
+            # correct historical log accused the mechanism. C11's rule, applied to a second way a population can
+            # be incomplete: compute over what can be checked and say how much could not.
+            (unverifiable if v.startswith(UNVERIFIABLE_PREFIX) else bad).append(f"{d.request_id}: {v}")
     if bad:
         return Verdict("no_false_certification", FAIL,
                        "the mechanism is broken rather than mistuned: " + "; ".join(bad[:5]),
-                       {"decisions": len(decisions), "violations": len(bad)})
-    return Verdict("no_false_certification", PASS,
-                   "every certified assignment's candidate was admissible under section 2",
-                   {"decisions": len(decisions), "certified": sum(1 for r in decisions if r["certified"])})
+                       {"decisions": len(decisions), "violations": len(bad),
+                        "unverifiable": len(unverifiable)})
+    if unverifiable and len(unverifiable) >= certified_rows:
+        # Nothing certified here can be checked, so there is no population to compute over. A pass would claim a
+        # verification that did not happen, and a failure would speak from absence.
+        return Verdict("no_false_certification", UNSUPPORTED,
+                       f"{len(unverifiable)} certified decision(s) carry a bound whose provenance was never "
+                       f"recorded, so whether each cleared its floor cannot be established from the log. This "
+                       f"needs decisions written by a mechanism that records what produced a bound",
+                       {"decisions": len(decisions), "unverifiable": len(unverifiable),
+                        "certified": certified_rows})
+    detail = "every certified assignment's candidate was admissible under section 2"
+    if unverifiable:
+        detail += (f" -- computed over the {certified_rows - len(unverifiable)} certified decision(s) that could "
+                   f"be checked; {len(unverifiable)} carry no recorded bound provenance")
+    return Verdict("no_false_certification", PASS, detail,
+                   {"decisions": len(decisions), "certified": certified_rows,
+                    "unverifiable": len(unverifiable)})
 
 
 def default_is_not_a_hiding_place(decisions: list, outcomes: dict | None = None, *, floor: float,

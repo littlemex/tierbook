@@ -125,7 +125,13 @@ def test_a_real_v010_line_reads_as_version_1():
     d, ignored = rec.from_row(real_v010_row())
     assert d.schema_version == 1
     assert d.request_id == "r1"
-    assert ignored == []
+    # C1 replaced `bound_kind` with `bound_provenance`, so a real v0.1.0 line carries one field this reader no
+    # longer models, and reporting it is C12's contracted behaviour rather than a regression. It is deliberately
+    # NOT translated into a provenance: `bound_kind` was a free string, and the defect C1 closed was three rows
+    # with the same fabricated bound and three different `bound_kind` values all certifying identically. Turning
+    # such a string into a recorded estimator would launder an unchecked claim into an attributable one, which is
+    # worse than reading the bound as `unrecorded` and saying so.
+    assert ignored == ["candidates[0].bound_kind", "candidates[1].bound_kind"]
 
 
 def test_a_fully_known_v020_row_ignores_nothing():
@@ -189,7 +195,9 @@ def test_the_stop_condition_adding_a_field_to_a_real_v010_line_does_not_raise():
     mutated = dict(real_v010_row())
     mutated["a_brand_new_field"] = "anything"
     d, ignored = rec.from_row(mutated)
-    assert ignored == ["a_brand_new_field"]
+    # The new field and the two v0.1.0-only candidate fields together: the reader survives an unknown key and
+    # names every field it did not model, which is what makes "survives" checkable rather than asserted.
+    assert ignored == ["a_brand_new_field", "candidates[0].bound_kind", "candidates[1].bound_kind"]
     assert d.schema_version == 1
 
 
@@ -221,7 +229,13 @@ def test_accept_reads_a_v010_row_without_a_schema_version_key():
     criterion is evaluated."""
     rows = [real_v010_row()]
     v = ac.no_false_certification(rows, floor=0.80, latency_feasible=True)
-    assert v.verdict == ac.PASS
+    # Amendment 5, deliberately changed: this asserted PASS. A pass is what the criterion cannot earn over a log
+    # whose bounds carry no recorded provenance -- and this row is a real v0.1.0 line, so its bound has none.
+    # UNSUPPORTED names the missing measurement instead, which is the verdict this checker has had since v0.1.0
+    # for exactly the case where it cannot check. The synthetic rows above still read PASS, because `cand()`
+    # records a provenance the way a v0.2.0 writer does.
+    assert v.verdict == ac.UNSUPPORTED
+    assert "provenance" in v.detail
 
 
 def test_default_is_not_a_hiding_place_also_survives_an_unknown_key():

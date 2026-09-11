@@ -221,10 +221,21 @@ def test_every_hiding_place_violation_is_reported_not_just_the_first():
     assert len(bad) == 2
 
 
-def test_a_bound_kind_is_never_inferred():
+def test_a_bound_with_no_attribution_is_not_representable():
     """An earlier version wrote 'lcb' for whatever a caller passed, so a log of point estimates claimed to be a log of
-    corrected lower bounds and the falsifier passed against them."""
-    assert rec.Candidate(id="x", excluded_because="chosen", bound=0.9).bound_kind == "unstated"
+    corrected lower bounds and the falsifier passed against them.
+
+    Deliberately changed by v0.3.0 C1 and amendment 3. This asserted that the unattributed bound was representable
+    and merely labelled `bound_kind == "unstated"`, and a sentinel is a field a writer can leave at its default
+    while still logging the number -- which is how the point estimates got in. Refusing the construction removes
+    the state instead of naming it, and the assertion moves with the mechanism."""
+    with pytest.raises(rec.Incomplete, match="has no bound_provenance"):
+        rec.Candidate(id="x", excluded_because="chosen", bound=0.9)
+    # And the reverse, so the pair cannot be satisfied by dropping the number and keeping the claim.
+    with pytest.raises(rec.Incomplete, match="bound_provenance"):
+        rec.Candidate(id="x", excluded_because="chosen",
+                      bound_provenance=rec.BoundProvenance(estimator="clopper_pearson_fixed_sample",
+                                                           confidence=0.95))
 
 
 def test_a_label_that_changes_is_refused_rather_than_the_later_line_winning(tmp_path):

@@ -490,6 +490,12 @@ def _admissible_at_decision(candidate: Candidate, *, floor: float, authorised: b
                       evidence_age_days=age, max_age_days=max_age_days)
 
 
+#: How an unverifiable finding is marked in `check_certification`'s list, so `accept` can separate the two without
+#: a second return value and without parsing prose. Amendment 5: a finding that cannot be checked is not a
+#: violation, and a falsifier whose silence is read as evidence must not speak from absence.
+_UNVERIFIABLE_PREFIX = "UNVERIFIABLE: "
+
+
 def check_certification(decision: Decision, *, floor: float, latency_feasible: bool | None,
                         max_age_days: float | None = None) -> list:
     """Section 12's falsifier, computed rather than asserted.
@@ -502,13 +508,25 @@ def check_certification(decision: Decision, *, floor: float, latency_feasible: b
     own `evidence_as_of` against `decision.decided_at` by `_admissible_at_decision`, which is what a scalar
     covering every candidate could never be right about. See that function for the measured defect this closes.
     """
-    out = []
+    out: list[str] = []
+    unverifiable: list[str] = []
     kw = dict(floor=floor, authorised=decision.gateway_authorised, latency_feasible=latency_feasible,
               max_age_days=max_age_days, decided_at=decision.decided_at)
     chosen = next(c for c in decision.candidates if c.id == decision.chosen)
     ok, why = _admissible_at_decision(chosen, **kw)
     if decision.certified and not ok:
-        out.append(f"certified but the chosen candidate {chosen.id!r} was not admissible: {why}")
+        if why == "unrecorded_provenance":
+            # Amendment 5. A row whose bound's provenance was never recorded cannot be AUDITED, and that is not
+            # the same statement as "this was not admissible". Reporting it as a violation made every pre-C1
+            # certified decision fail the falsifier on replay -- not only the wrong ones -- and SCOPE section 12
+            # reads that failure as the mechanism being broken, so a correct historical log accused the mechanism.
+            # `admissible` still refuses the same candidate for a NEW decision, where a bound with no recorded
+            # provenance cannot support a claim; only what an audit concludes from that refusal changes here.
+            unverifiable.append(f"certified and unverifiable: the bound of {chosen.id!r} carries no recorded "
+                                f"provenance, so whether it cleared the floor cannot be established from this "
+                                f"record")
+        else:
+            out.append(f"certified but the chosen candidate {chosen.id!r} was not admissible: {why}")
     if not decision.certified:
         # The chosen candidate is IN this scan. An uncertified decision whose own chosen candidate was admissible is
         # the purest hiding place -- the mechanism declined to certify an assignment it could have -- and an earlier
@@ -518,7 +536,7 @@ def check_certification(decision: Decision, *, floor: float, latency_feasible: b
             was, _ = _admissible_at_decision(c, **kw)
             if was:
                 out.append(f"uncertified while {c.id!r} was admissible, so the default was a hiding place")
-    return out
+    return out + [_UNVERIFIABLE_PREFIX + u for u in unverifiable]
 
 
 def classify_label(decided_at: float, now: float, max_label_latency_s: float | None, label: bool | None) -> str:

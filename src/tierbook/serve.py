@@ -196,8 +196,15 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
     # `candidate.bound < floor` unconditionally, and `None` would make that comparison a `TypeError` rather
     # than a refusal. With no floor declared there is no basis to say the bound cleared it, so nothing can be
     # certified -- the same "not_evaluated" honesty `_why_not` already gives the non-chosen candidates above.
+    # Amendment 6: a CONJUNCTION, not a replacement. Amendment 3 read `certified` from `admissible` alone, which
+    # traded one one-sided reading for another: `policy.validated` is whether this policy's rules ever cleared
+    # non-inferiority on a held-out fold, and a decision taken by rules that never did cannot claim the floor
+    # however good the candidate's own bound looks. Admissibility is a property of the CANDIDATE; validation is a
+    # property of the RULES that reached it; certification needs both, and dropping either is the same defect
+    # from a different side.
     drawn = next(c for c in candidates if c.id == chosen)
     certified = (False if floor is None else
+                bool(got["validated"]) and
                 admissible(drawn, floor=floor, authorised=authorised, latency_feasible=latency_feasible,
                           evidence_age_days=evidence_age_days, max_age_days=max_age_days)[0])
 
