@@ -551,3 +551,25 @@ excluded is named with the reason it was excluded and no bound — the same trea
 ledger cannot bound. Deriving from `ranked` and adding a check that the two agree was rejected: it is a watcher over
 the omission rather than a construction in which the omission cannot occur.
 
+## Amendment 9 (C2): an artifact that recorded no digest is not an artifact that recorded a different one
+
+C2's interface says a caller-supplied `policy_version` that disagrees with the artifact's digest is refused naming
+both, "by `decide.parameter`'s established rule". Read against the code, that rule has **two** refusals and the
+interface named one.
+
+`parameter` refuses a supplied value for a name the artifact never recorded with a *different* message — "an artifact
+that did not record the parameter cannot confirm one" — precisely because an absence is not a competing value. The
+first implementation of `_confirmed_policy_version` collapsed both cases into `does not match ''`, which reports the
+absence of a digest as a rival claim to the caller's. That is the same shape of over-statement C1 spent five
+amendments removing from `certified`, one layer out.
+
+So `_confirmed_policy_version` refuses an absent digest on its own terms, and says where a digest comes from: a policy
+from `compile_policy` carries one, a policy built by hand has nothing to check against. Both refusals stay refusals —
+the fix is what the message claims, not whether it fires.
+
+**This is what makes the 21 broken `route_once` tests a wire change rather than breakage.** They hand-build
+`decide.Policy(...)`, which carries no digest, and pass `policy_version="p1"` — a fabricated label standing where the
+mechanism now derives a value. C2's whole sentence is that a value the mechanism can derive is not a value a caller
+supplies, so the adaptation is to stamp the fixture's policy with its own real digest and stop supplying the label.
+A fixture that keeps supplying one is asserting the state this entry removes.
+
