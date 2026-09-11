@@ -117,8 +117,7 @@ def test_candidates_for_carries_ids_and_no_number():
     Two measurements decided it rather than taste. At 20 of 20 the bound was 0.8609 -- exactly `0.05 ** (1/20)`,
     the cohort's own ceiling -- so at the top of the range the number was a property of how many items were run
     and not of the candidate it was filed under. And nothing read it: the per-request bound is the caller's, so
-    it would have been the fourth number this codebase records and never reads, beside `bound_kind` and the two
-    `"warning"` strings this same release removes.
+    it would have been a second number this codebase records and never reads, beside `bound_kind`.
 
     What survives is the type check, which is why this is one test and not a deletion: a value of any other
     shape would still make a downstream membership check pass or crash on what it happened to compare against."""

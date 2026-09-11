@@ -57,12 +57,20 @@ section 4 for why the agent is a conditioning variable here and a selectable one
 3. any latency constraint the operator has set is feasible at current occupancy — and where none is set,
    this condition is simply absent rather than invented, and
 4. the evidence the bound was computed from is no older than the family's declared limit — and where no limit
-   is declared, this condition is absent rather than invented, exactly as in 3.
+   is declared, this condition is absent rather than invented, exactly as in 3, and
+5. the bound carries a recorded provenance naming what produced it, at a significance, and claiming no correction
+   this mechanism did not perform. A bound nobody can attribute cannot support a claim about this request, and a
+   bound claiming a correction that was never applied claims more than a bound with no correction at all.
 
 Clause 4 was implemented before it was written here, and the omission cost something, so it is worth naming rather
 than quietly adding: this document listed three conditions while the code enforced four, and a worker implementing
 exploration read "the rest of admissibility" as everything except freshness — because this section is what
-"admissibility" means. Under this document's own premise that the environment moves, a bound computed on evidence
+"admissibility" means.
+
+**And clause 5 is the same omission, committed a second time by the same author.** It shipped enforced in code and
+absent from this list, in a release whose whole subject is a mechanism claiming more than it holds — while the
+paragraph above already named what that costs. It is written here now, and the count in section 12's falsifier row is
+written from this list rather than from memory. Under this document's own premise that the environment moves, a bound computed on evidence
 from an arbitrarily old environment does not support a claim about now, so an unbounded evidence age makes the floor
 claim in the next paragraph meaningless. The condition belongs here.
 
@@ -300,7 +308,7 @@ question about the evidence budget rather than about traffic (see "floor reachab
 | floor compliance | realised success rate on routed traffic, per family, against that family's floor | it falls below the floor beyond sampling error at significance `s` |
 | floor reachability | the family's declared floor against `alpha ** (1/n)`, the ceiling a lower confidence bound at significance `alpha` can ever reach on the cohort size `n` the evidence for that family actually has | the declared floor exceeds that ceiling, naming both numbers and the cohort size the floor would need instead |
 | bound calibration | the confidence procedure on pre-registered resampling or simulation where the estimand is known | a pre-declared test rejects the claimed coverage at significance `s` |
-| no false certification | over the log, against section 2's three-part definition | any decision marked certified whose candidate was not admissible |
+| no false certification | over the log, against section 2's five clauses | any decision marked certified whose candidate was not admissible |
 | default is not a hiding place | over the log | an uncertified assignment was made while an admissible candidate existed, or the uncertified share exceeds its stated tolerance |
 | SLO | realised `P(latency > L)` per traffic class | it exceeds the stated tolerance |
 | spend regret | **estimated** by section 9's declared off-policy method, with an interval | the interval's lower edge exceeds the stated tolerance |

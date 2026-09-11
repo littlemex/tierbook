@@ -13,7 +13,7 @@ estimation, or a declared design -- and every one of those needs the propensity 
 be reconstructed afterwards from a deterministic policy, because a deterministic policy's propensity is 1 for what it
 chose and the counterfactual arm has no data at all. That is the definition of unidentified.
 
-`certified` is checked against the three-part admissibility definition rather than copied from the decision. Section 12's
+`certified` is checked against SCOPE section 2's admissibility clauses rather than copied from the decision. Section 12's
 falsifier is a certified assignment whose candidate was not admissible, so a record that merely echoed the decision's
 own claim could never expose it.
 
@@ -80,10 +80,8 @@ EXCLUSION_REASONS = (
     # prevent.
     "not_evaluated",
     # CONTRACT C1: its `bound_provenance.corrected_over` names a term of BOUND_CORRECTIONS this release's mechanism
-    # never applies. Before this reason existed, three records carrying a fabricated `bound` of 0.99 with
-    # `bound_kind` of `lcb`, `point_estimate` and `asserted_by_operator` all certified identically, because
-    # `admissible` compared only `bound < floor` and nothing anywhere read the kind. This is what makes an
-    # overclaimed correction refused rather than merely unlabelled.
+    # never applies, so an overclaimed correction is refused rather than merely unlabelled. `BoundProvenance`'s
+    # docstring holds the defect this closes and is the one place it is told.
     "unearned_correction",
     # Amendment 4.1, and distinct from the line above: that one is a claim made and not earned, this one is no claim
     # at all. A row written before `bound_provenance` existed reads with an `unrecorded` estimator so the log stays
@@ -165,6 +163,23 @@ class BoundProvenance:
         if self.estimator == "unrecorded" and self.corrected_over:
             raise Incomplete("an unrecorded provenance cannot also claim a correction: there is no record of what "
                              "produced the bound, so there is no record of what it was corrected over either")
+        # `confidence` is paired with `estimator` in both directions, for the same reason `bound` is paired with
+        # `bound_provenance` and `unrecorded` is paired with `corrected_over` above: a field nothing forces to
+        # agree with its neighbour is a field a writer can leave at whatever it likes.
+        #
+        # A named estimator with no confidence is a bound at an unstated significance --
+        # `clopper_pearson_fixed_sample` at 0.05 and the same estimator at 0.20 are different claims wearing one
+        # name, which is `bound_kind`'s defect surviving inside the vocabulary built to end it. And an
+        # `unrecorded` estimator cannot carry one: a significance is a property of a procedure, and there is no
+        # recorded procedure to have had it.
+        if self.estimator == "unrecorded" and self.confidence is not None:
+            raise Incomplete(f"an unrecorded provenance cannot carry a confidence of {self.confidence!r}: a "
+                             f"significance is a property of the procedure that produced the bound, and there is "
+                             f"no record of one")
+        if self.estimator != "unrecorded" and self.confidence is None:
+            raise Incomplete(f"{self.estimator!r} with no confidence is a bound at an unstated significance; the "
+                             f"same estimator at two significances is two different claims, so the significance "
+                             f"is part of what produced the bound rather than a note beside it")
         if self.estimator not in BOUND_ESTIMATORS:
             raise Incomplete(f"{self.estimator!r} is not one of {BOUND_ESTIMATORS}; an open-ended estimator name "
                              f"cannot be checked against what this mechanism actually ships")
@@ -451,7 +466,7 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
 def admissible(candidate: Candidate, *, floor: float, authorised: bool,
                latency_feasible: bool | None, evidence_age_days: float | None = None,
                max_age_days: float | None = None) -> tuple[bool, str]:
-    """SCOPE section 2's three-part definition, as code, so `certified` can be checked rather than trusted.
+    """SCOPE section 2's five clauses, as code, so `certified` can be checked rather than trusted.
 
     The latency part is deliberately three-valued: where the operator set no latency constraint the condition is
     ABSENT rather than satisfied, and an implementation that read a missing constraint as a passed one would report a
@@ -465,9 +480,8 @@ def admissible(candidate: Candidate, *, floor: float, authorised: bool,
     CONTRACT C1: `bound_provenance` is read here too, checked before floor, freshness or anything else derived from
     the bound's own value -- a claim about how the bound was produced is a property of the bound itself. A
     provenance naming a correction outside CORRECTIONS_PERFORMED is refused as `unearned_correction` rather than
-    merely unlabelled, which is what makes the vocabulary checked instead of decorative: the earlier `bound_kind`
-    let three records with the identical fabricated `bound` of 0.99 and `bound_kind` of `lcb`, `point_estimate` and
-    `asserted_by_operator` all certify identically, because nothing here read it. `candidate.bound_provenance` is
+    merely unlabelled, which is what makes the vocabulary checked instead of decorative rather than checked here for
+    its own sake -- `BoundProvenance`'s docstring holds the defect that argument rests on. `candidate.bound_provenance` is
     read directly, not guarded by a second `is not None` check: `Candidate.__post_init__` already refuses a
     non-`None` `bound` paired with a `None` `bound_provenance`, so having passed the `no_bound` return above, the
     provenance is guaranteed present.

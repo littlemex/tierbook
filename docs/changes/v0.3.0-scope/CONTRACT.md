@@ -595,7 +595,7 @@ reason written down, the number would have shipped with the compiler's authority
 
 And nothing read it. `serve.candidate_set` takes the per-request bound from the caller's `bounds`, so the artifact's
 value was consulted only for which ids belong in the set — making it **the fourth value this codebase records and
-never reads**, beside `bound_kind` and the two `"warning"` strings this same release removes. R16 rejected shipping the
+never reads**, beside `bound_kind`. R16 rejected shipping the
 ceiling as a third one. Shipping a fourth through a different entry is the same defect with a different label.
 
 **`candidates_for` returns `tuple[str, ...]`**: the ids, sorted. `compile_policy` writes them as a list;

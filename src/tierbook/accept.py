@@ -73,7 +73,7 @@ class Verdict:
 
 def no_false_certification(decisions: list, *, floor: float, latency_feasible: bool | None,
                            max_age_days: float | None = None) -> Verdict:
-    """Section 12's falsifier. Every certified decision, against section 2's four-part definition.
+    """Section 12's falsifier. Every certified decision, against section 2's five clauses.
 
     `max_age_days` gained here (amendment 7, C6): before this entry, this function called
     `record.check_certification` with freshness absent since v0.1.0 -- the release in which `record.admissible`

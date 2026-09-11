@@ -287,3 +287,21 @@ def test_the_observation_a_decision_points_at_is_stored(tmp_path):
     decisions, outcomes = log.read()
     assert outcomes["__observations__"]["obs:abc"]["state"]["inflight:box"] == 2.0
     assert decisions[0]["state_ref"] in outcomes["__observations__"]
+
+
+def test_a_confidence_is_paired_with_its_estimator_in_both_directions():
+    """Found in phase 4 as a value written into every candidate's provenance and read by nothing.
+
+    The pairing is the same move C1 already makes twice -- `bound` with `bound_provenance`, and `unrecorded` with
+    `corrected_over` -- applied to the third field, which had been left free. A named estimator with no confidence
+    is a bound at an unstated significance, and `clopper_pearson_fixed_sample` at 0.05 and the same estimator at
+    0.20 are two different claims wearing one name: `bound_kind`'s exact defect, surviving inside the vocabulary
+    built to end it. An `unrecorded` estimator cannot carry one either, because a significance is a property of a
+    procedure and there is no recorded procedure to have had it."""
+    with pytest.raises(rec.Incomplete, match="unstated significance"):
+        rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=None)
+    with pytest.raises(rec.Incomplete, match="no record of one"):
+        rec.BoundProvenance(estimator="unrecorded", confidence=0.95)
+    # Both legitimate pairings still construct, so the guard refuses the unpaired states and not the field.
+    assert rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95).confidence == 0.95
+    assert rec.BoundProvenance(estimator="unrecorded", confidence=None).confidence is None

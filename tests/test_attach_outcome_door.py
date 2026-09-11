@@ -454,3 +454,22 @@ def test_the_accept_report_carries_orphan_outcomes_always(tmp_path, capsys):
     run_cli(["accept", "--log", str(clean), "--floor", "0.80"])
     report2 = json.loads(capsys.readouterr().out)
     assert report2["orphan_outcomes"] == {}
+
+
+def test_the_module_docstrings_verb_list_matches_help(capsys):
+    """Found in phase 4: `cli.py`'s header said "deliberately four verbs" and listed eight, omitting `observe`,
+    `assign` and `accept`, and C4 added a ninth line to that list without touching the claim. `--help` showed
+    twelve.
+
+    The count is gone and the list is checked here rather than kept by hand, because a hand-kept list beside the
+    thing it lists drifts on the next entry -- which is what happened twice already. A verb added to `main` and
+    not to the docstring now fails, and so does the reverse."""
+    import re
+    doc = (cli.__doc__ or "").splitlines()
+    listed = {m.group(1) for m in (re.match(r"    tierbook ([a-z-]+)", ln) for ln in doc) if m}
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    shown = re.search(r"\{([a-z,\-]+)\}", capsys.readouterr().out)
+    assert shown, "argparse stopped printing the subcommand list, so this check is no longer checking anything"
+    real = set(shown.group(1).split(","))
+    assert listed == real, f"docstring lists {sorted(listed - real)} that do not exist and omits {sorted(real - listed)}"

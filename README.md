@@ -301,7 +301,7 @@ binomial tail and passes only when an exact lower confidence bound clears the fl
 `unsupported`, with the rate and the bound printed. There is no chosen sample size in it -- an earlier version had one
 and it was the wrong shape of answer.
 
-**Most acceptance criteria come back `unsupported`, and that is the honest output.** How many of section 12's nine are
+**Most acceptance criteria come back `unsupported`, and that is the honest output.** How many of section 12's ten are
 evaluable is a property of the log rather than of the release, so the report says which and why instead of the README
 naming a number that goes stale. Each criterion states its own requirement: certification checks need only decisions,
 the realised-rate checks need attached labels, the latency check needs recorded latencies, and spend regret needs an

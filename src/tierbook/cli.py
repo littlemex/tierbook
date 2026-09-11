@@ -1,4 +1,12 @@
-"""The command line, which is deliberately four verbs.
+"""The command line. Two groups of verbs, and the split is the point.
+
+Offline, run when the ledger changes: `validate`, `explain`, `compile`, `discover`, `preflight`, `export-vsr`,
+`logs`. Per request or per log, run while traffic is served: `observe`, `assign`, `attach-outcome`, `accept`.
+`route` reads a compiled table and belongs to both -- it is what `assign` does without recording anything.
+
+The header used to say "deliberately four verbs" and listed eight, which had not been true for two releases. The
+count is gone rather than corrected: a number in a docstring beside the list it counts is a second home for a fact
+`--help` already answers, and this release is about not recording what nothing keeps true.
 
     tierbook validate    are these records well formed, and what is missing from them
     tierbook explain     what does the ledger say about a family, and what would each margin choose
@@ -8,7 +16,10 @@
     tierbook preflight   ask each configured endpoint whether it will accept what a measurement needs
     tierbook export-vsr  turn a compiled table into a router configuration
     tierbook logs        what a log file can and cannot support as a benchmark
+    tierbook observe     read the state a decision is conditioned on, and say what could not be read
+    tierbook assign      route one request against a compiled policy and record the decision
     tierbook attach-outcome  attach an observed outcome (label, tokens, latency) to a decision already logged
+    tierbook accept      the acceptance criteria over a log, each with its own verdict and why
 
 There is no `serve`. A component that decides where money goes should not also be the thing holding the
 socket: the online decision is a dictionary lookup, and the caller already has a process.

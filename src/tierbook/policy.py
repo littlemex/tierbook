@@ -450,8 +450,8 @@ def candidates_for(tiers: dict[str, Tier], family: str) -> tuple[str, ...]:
     measurements say why it must not ship. At 20 of 20 the bound is 0.8609, which is exactly `alpha ** (1/20)`,
     the cohort's own ceiling -- so at the top of the range the number is a property of how many items were run
     and not of the candidate it is filed under. And no reader consulted it: the per-request bound is the
-    caller's, so the value would have been the fourth number this codebase records and never reads, beside
-    `bound_kind` and the two `"warning"` strings the same release is removing.
+    caller's, so the value would have been a second number this codebase records and never reads, beside
+    `bound_kind`.
 
     `serve.candidate_set` used to build its set from `policy.rules`, so a candidate with no rule was absent
     from the set entirely: invisible to exploration, never labelled, its evidence never refreshed. This is
