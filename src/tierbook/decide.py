@@ -39,6 +39,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Type-only: a runtime import here would close a cycle (`policy` -> `accept` -> `record` -> `observe` ->
+    # `decide`). `compile_policy` below imports `candidates_for` locally, at call time, once every module in
+    # that chain has already finished loading.
+    from .policy import Tier
 
 #: State variables a guard may read. Closed on purpose: a guard over a variable nobody collects is a guard that
 #: cannot be evaluated, and discovering that at request time is worse than refusing to compile it.
@@ -236,6 +243,15 @@ class Policy:
     #: so a record names the artifact `compile_policy` actually produced, not a hash of whatever the record's
     #: own reader would derive from it later.
     policy_digest: str = ""
+    #: CONTRACT v0.3.0 C6, as amended by amendment 10: the ids of every candidate the ledger records an outcome
+    #: for this family. MEMBERSHIP and no number -- a bound recorded here would be the fixed-sample single-test
+    #: quantity R1 rejects, and nothing would read it. Stamped by `compile_policy`, never supplied by a direct
+    #: `Policy(...)` call -- an empty set is the honest reading for a hand-built policy with no ledger behind it,
+    #: the same default-for-an-incomplete-object treatment `policy_digest` above already gets. `serve.candidate_set`
+    #: reads this instead of deriving from `rules`/`default`: a candidate with no rule used to be absent from the
+    #: set entirely -- invisible to exploration, never labelled, its evidence never refreshed -- and a set built
+    #: from what a rule happens to name cannot end that.
+    candidates: tuple = ()
 
     @property
     def overlaps(self) -> list[str]:
@@ -379,6 +395,9 @@ def as_dict(policy: Policy) -> dict:
         "provenance": policy.provenance,
         "parameters": policy.parameters,
         "policy_digest": policy.policy_digest,
+        # CONTRACT v0.3.0 C6: written unconditionally, including `{}`, so a round trip through `as_dict` ->
+        # `from_dict` always carries the key -- the same reason `parameters` is written even when empty.
+        "candidates": list(policy.candidates),
         "unmeasured_guards": policy.gaps,
         "can_ever_fire": policy.can_ever_fire,
         "rule_overlaps": policy.overlaps,
@@ -426,6 +445,24 @@ def from_dict(d: dict) -> Policy:
             "'certified' into 'validated' here would relabel the first judgment as if it had always been named "
             "correctly. Recompile it: the artifact is not the source, and re-deriving it under the current schema "
             "is what produces 'validated' honestly")
+    # CONTRACT v0.3.0 C6: an artifact with no 'candidates' key was compiled by a version that built the candidate
+    # set from `rules`/`default` rather than from the ledger's own outcomes. Refused rather than read as an empty
+    # set: falling back silently is what made a candidate with no rule invisible in the first place, and `as_dict`
+    # above writes this key unconditionally, so nothing this reader ever wrote itself can trigger this on a round
+    # trip.
+    #
+    # NOT gated on the artifact carrying rules. A RULES-LESS artifact is the sharper case, not the exempt one: it
+    # is exactly what the shipped ledger produced in the incident C6 exists to close -- the compiler certified
+    # nothing on a 20-item cohort, so `rules` was empty, the set collapsed to one member and 400 consecutive
+    # draws returned `no_eligible_arm`. Exempting that shape would read the incident's own artifact happily with
+    # an empty candidate set, which is the defect wearing the fix's clothes.
+    if "candidates" not in d:
+        raise ValueError(
+            "this policy was written by a version that recorded rules with no 'candidates' key, so it cannot be "
+            "loaded: the candidate set used to be derived from 'rules' and 'default', which is exactly the "
+            "omission CONTRACT C6 exists to end -- falling back to it here would make the same candidate "
+            "invisible again through a different door. Recompile it: the artifact is not the source, and "
+            "re-deriving it from the ledger is cheaper than trusting an incomplete set")
     rules = []
     for r in d.get("rules", []):
         if "guards" not in r:
@@ -441,7 +478,11 @@ def from_dict(d: dict) -> Policy:
                   # Absent in every artifact from before this entry (v0.2.0 and earlier): "" is the true
                   # statement that no digest was ever computed for it, not a guess at what compile_policy would
                   # have produced had this field existed then.
-                  policy_digest=d.get("policy_digest", ""))
+                  policy_digest=d.get("policy_digest", ""),
+                  # CONTRACT v0.3.0 C6: absent only when `rules` is also empty (the guard above already refuses
+                  # the non-degenerate case); `{}` there is the honest reading of a policy that never named a
+                  # ledger-derived candidate set, the same as a hand-built `Policy()`'s own default.
+                  candidates=tuple(d["candidates"]))
 
 
 def parameter(policy: Policy, name: str, supplied: float | None = None) -> float | None:
@@ -497,8 +538,15 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
                    service_curve: list | None = None, latency_p95_slo_s: float | None = None,
                    max_evidence_age_days: float | None = None, floor: float | None = None,
                    staleness_limit_days: float | None = None,
-                   exploration_rate: float | None = None) -> Policy:
+                   exploration_rate: float | None = None,
+                   tiers: "dict[str, Tier] | None" = None) -> Policy:
     """Derive the policy from one compiled family entry. Every threshold is a measurement or a named gap.
+
+    `tiers` (CONTRACT v0.3.0 C6): the ledger this family was compiled from, so `policy.candidates_for` can name
+    every candidate it records an outcome for -- the replacement for a candidate set built from `rules`/
+    `default`, which left a candidate with no rule invisible. `None` (a caller with no ledger to hand over, the
+    shape every test that predates this entry uses) reads as `{}`: an honest "no ledger-derived set", not a
+    guess at what one would have contained.
 
     The shape falls out of the accounting rather than being chosen. A reserved candidate is free at the margin
     **while it has capacity**, so the assignment has exactly one derived boundary: the occupancy at which that
@@ -530,10 +578,23 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     # declaration from, only what its caller hands it.
     params = {"floor": floor, "max_evidence_age_days": max_evidence_age_days,
              "staleness_limit_days": staleness_limit_days, "exploration_rate": exploration_rate}
+    # CONTRACT v0.3.0 C6: computed once, before any branch below, because the ledger's own outcomes do not
+    # depend on whether THIS compile validated an assignment -- a candidate not chosen here is exactly the kind
+    # of candidate the set exists to keep visible. Imported locally rather than at module scope, to avoid
+    # closing an import cycle (`policy` -> `accept` -> `record` -> `observe` -> `decide`).
+    from .policy import candidates_for
+
+    # Amendment 8 (C6) needs no fold-back here. `assign_family` can `continue` a tier into its own `excluded`
+    # map -- a stated `latency_slo_p95_ms` or `min_completion_probability` guard -- before it ever reaches
+    # `ranked`, and a set derived from `ranked` would drop it. `candidates_for` reads each tier's own recorded
+    # outcome and never calls `assign_family`, so an excluded tier is in this set for the same reason every
+    # other measured tier is. That is the construction the omission cannot occur in, rather than a second pass
+    # that puts back what the first pass dropped.
+    candidates = candidates_for(tiers or {}, family)
     if not chosen or not validated:
         why = (entry.get("validation") or {}).get("reason") or "no held-out fold supports this assignment"
         return _compiled(Policy(family, (), default, domain={}, validated=False, provenance=prov,
-                                parameters=params,
+                                parameters=params, candidates=candidates,
                                 note=f"no rule: nothing was validated for this family ({why}), so every "
                                      "request takes the declared default"))
 
@@ -553,6 +614,7 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
                                               "validated, and no candidate in this assignment is reserved, so "
                                               "the choice does not turn on occupancy"),),
                                 default, domain={}, validated=True, provenance=prov, parameters=params,
+                                candidates=candidates,
                                 note="unconditional in occupancy: nothing here is capacity-bound"))
 
     if len(reserved) > 1:
@@ -561,7 +623,7 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
         # unguarded legs ran with no capacity semantics at all. A degenerate output is a correct output here:
         # refusing to compile is better than emitting an assignment whose occupancy nobody can evaluate.
         return _compiled(Policy(family, (), default, domain={}, validated=False, provenance=prov,
-                                parameters=params,
+                                parameters=params, candidates=candidates,
                                 note=("no rule: this assignment contains reserved candidates "
                                       f"{sorted(reserved)} and only one can be capacity-guarded. One occupancy "
                                       "figure cannot describe several of them, and firing the assignment anyway "
@@ -614,7 +676,7 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     if max_evidence_age_days is not None:
         domain["evidence_age_days"] = [0, max_evidence_age_days]
     return _compiled(Policy(family, tuple(rules), default, domain=domain, validated=True, provenance=prov,
-                            parameters=params,
+                            parameters=params, candidates=candidates,
                             note=("the boundary between the reserved candidate and what follows it is the "
                                   "occupancy at which it stops meeting the declared latency constraint. That is "
                                   "the only derived threshold here, and it is "

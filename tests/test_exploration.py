@@ -1069,6 +1069,11 @@ def _rt_policy(validated=True, domain=None):
         domain=domain or {"inflight:box": (0.0, 128.0)},
         validated=validated,
         note="a fixture",
+        # CONTRACT v0.3.0 C6: `serve.candidate_set` derives the candidate set from `policy.candidates` rather
+        # than from `policy.rules`/`policy.default` -- same ids and values `_rt_route`'s own `bounds={"box":
+        # 0.90, "api": 0.70}` already uses, so this is the same fact recorded in the place the set is now read
+        # from, not a new one.
+        candidates=("api", "box"), # C6/amendment 10: ids only, no bound
     )
     # CONTRACT C2: stamped the way `compile_policy` stamps it, so `route_once`'s digest confirmation
     # (`policy_version` default reads `policy.policy_digest`) has one to read.

@@ -223,6 +223,10 @@ def cmd_compile(args) -> int:
                                  metered_ids={t for t in tiers} - self_hosted,
                                  default=(families[fam],),
                                  default_declared_by=("--config" if cfg else "--family FAMILY=REFERENCE"),
+                                 # CONTRACT v0.3.0 C6: the ledger itself, so `compile_policy` can name every
+                                 # candidate it records an outcome for rather than only the arm this compile
+                                 # chose.
+                                 tiers=tiers,
                                  service_curve=(runs or None),
                                  latency_p95_slo_s=(args.capacity_p95_slo_s
                                                     or ((o.latency_slo_p95_ms / 1000.0)

@@ -43,6 +43,11 @@ def policy(validated=True, domain=None):
         domain=domain or {"inflight:box": (0.0, 128.0)},
         validated=validated,
         note="a fixture",
+        # CONTRACT v0.3.0 C6: `serve.candidate_set` now derives the candidate set from `policy.candidates`
+        # rather than from `policy.rules`/`policy.default`, so a hand-built policy has to name the ledger's own
+        # set itself. Same ids and same values as `BOUNDS` above -- this is not a new fact the fixture did not
+        # already carry, only a new place it also has to be written for the set to keep naming "box" and "api".
+        candidates=tuple(BOUNDS), # C6/amendment 10: ids only, no bound
     )
     # CONTRACT C2: a policy built by hand carries no digest until stamped -- the same stamp `compile_policy`
     # applies -- so `route_once` (whose `policy_version` default now reads the policy's own digest) has one to

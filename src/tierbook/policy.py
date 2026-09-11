@@ -438,6 +438,45 @@ def registry_version(tiers: dict[str, Tier]) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
+
+def candidates_for(tiers: dict[str, Tier], family: str) -> tuple[str, ...]:
+    """Every candidate the ledger records an outcome for `family`, by id, sorted (CONTRACT v0.3.0 C6 as
+    amended by amendment 10).
+
+    Membership, and no number. An earlier form mapped each id to an absolute Clopper-Pearson lower bound over
+    the candidate's own solved/attempted, and that is the alternative the contract's rejected-alternatives table
+    turns down under R1: the bound available without a dependency is fixed-sample and single-test, which SCOPE
+    section 6 disqualifies in those words, and recording it here attaches the compiler's authority to it. Two
+    measurements say why it must not ship. At 20 of 20 the bound is 0.8609, which is exactly `alpha ** (1/20)`,
+    the cohort's own ceiling -- so at the top of the range the number is a property of how many items were run
+    and not of the candidate it is filed under. And no reader consulted it: the per-request bound is the
+    caller's, so the value would have been the fourth number this codebase records and never reads, beside
+    `bound_kind` and the two `"warning"` strings the same release is removing.
+
+    `serve.candidate_set` used to build its set from `policy.rules`, so a candidate with no rule was absent
+    from the set entirely: invisible to exploration, never labelled, its evidence never refreshed. This is
+    the ledger-derived replacement `compile_policy` writes into the artifact as `candidates`, and
+    `serve.candidate_set` reads instead of deriving from the rules.
+
+    Amendment 8 (C6): the interface's first plan was to derive this from `assign_family`'s `ranked`, which was
+    checked to cover every candidate with an outcome for both families the shipped ledger declares -- true
+    today, and not guaranteed to stay true. `assign_family` builds `arrangements` inside a loop that can
+    `continue` a tier straight into its own `excluded` map -- on a declared `latency_slo_p95_ms` above the
+    tier's recorded p95, or on `min_completion_probability` -- before the tier ever reaches `arrangements` or
+    `ranked`. A set built from `ranked` would silently drop that tier: the exact invisibility this entry
+    exists to end, reintroduced one layer in. So this reads every tier's own recorded outcome directly and
+    never calls `assign_family` at all -- a construction the omission cannot occur in, rather than a second
+    read of `ranked` with a check that the two agree. `compile_policy` is where `assign_family`'s own
+    exclusions are folded back over this dict, once it has both.
+
+    A tier the ledger carries no outcome for `family` at all is absent. "The ledger has never measured this
+    candidate for this family" is the one fact this set is about, and it is the fact `serve.candidate_set`
+    needs: whether a candidate belongs in the recorded set at all. Whether a bound exists for it on a given
+    request is a separate question the caller's `bounds` answers, and `no_bound` is derived there.
+    """
+    return tuple(sorted(tid for tid, t in tiers.items() if t.outcome(family) is not None))
+
+
 # --- arrangements, which are what is actually bought --------------------------------------------
 
 
