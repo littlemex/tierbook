@@ -432,3 +432,43 @@ reflecting `policy.validated` regardless of any bound-against-floor check.
 The second is the sharpest: a test whose docstring describes the conflation as the *intended* behaviour, written when
 that was the design. It changes deliberately as a wire change, and the falsifier it exercised is now catching nothing
 because the defect it was built to catch cannot occur — which is the outcome, not a regression.
+
+## Amendment 5 — amendment 4.1 made every historical certification report the mechanism as broken
+
+Surfaced by the integrator's own fixture pass, not by either C1 author, and it is a defect in amendment 4.1 rather than
+in anyone's code. Reproduced on the real artifact:
+
+```
+the historical decision recorded certified = True
+check_certification says: ["certified but the chosen candidate 'box' was not admissible: unrecorded_provenance"]
+no_false_certification: FAIL -- "the mechanism is broken rather than mistuned"
+```
+
+Amendment 4.1 fixed "a historical row is readable" and created "a historical row's certification is unauditable".
+Every pre-C1 certified decision now fails the falsifier on replay — **not only the ones that were wrong** — and SCOPE
+section 12 reads that criterion's failure as evidence the mechanism is broken. So a correct historical log now
+accuses the mechanism.
+
+**The distinction is the same one I have now drawn three times in this release and did not carry far enough.** Reading
+is not certifying — amendment 4.1. Certifying a *new* decision is not auditing an *old* one — this amendment. For a
+row whose bound's provenance was never recorded, the honest verdict is not "this was not admissible"; it is **"this
+cannot be verified"**, and `accept` has had a third verdict for exactly that situation since v0.1.0.
+
+**`record.check_certification` distinguishes not-admissible from not-checkable.** A candidate refused for
+`unrecorded_provenance` yields an *unverifiable* finding rather than a violation, reported separately.
+
+**`accept.no_false_certification` returns `UNSUPPORTED`** when every certified decision it holds is unverifiable, and
+when the population is mixed it computes over the verifiable ones and its detail names how many it could not check —
+which is C11's rule from the previous release, applied to a second way a population can be incomplete. It never
+reports `FAIL` on a row it cannot check, because a falsifier whose silence is read as evidence must not speak from
+absence.
+
+`admissible` is unchanged: refusing `unrecorded_provenance` is correct for a **new** routing decision, where a bound
+with no recorded provenance cannot support a claim about this request. What changes is only what an audit of an old
+record concludes from the same refusal.
+
+**Two tests are reclassified by this.** The fixture pass filed
+`test_record_versioning.py::test_accept_reads_a_v010_row_without_a_schema_version_key` and
+`journeys::test_p2_old_decisions_log_gets_a_full_accept_report_not_a_crash` as obsolete-bordering-on-encodes-the-defect,
+and was right to hesitate: they are neither. They assert the correct behaviour and amendment 4.1 broke it. They stay
+as they are and this amendment makes them pass again.
