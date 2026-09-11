@@ -472,3 +472,60 @@ record concludes from the same refusal.
 `journeys::test_p2_old_decisions_log_gets_a_full_accept_report_not_a_crash` as obsolete-bordering-on-encodes-the-defect,
 and was right to hesitate: they are neither. They assert the correct behaviour and amendment 4.1 broke it. They stay
 as they are and this amendment makes them pass again.
+
+## Amendment 6 (C1): certification is a conjunction, and amendment 5 mis-stated its own consequence
+
+Two corrections, both found at integration, both to amendments I wrote earlier in this release.
+
+### 6.1 `certified` needs the rules to be validated AND the candidate to be admissible
+
+Amendment 3 replaced `certified = bool(got["validated"])` with `certified = admissible(drawn, ...)`, and **that traded
+one one-sided reading for another.** `policy.validated` records whether this policy's rules ever cleared
+non-inferiority on a held-out fold. Admissibility is a property of the **candidate**; validation is a property of the
+**rules that reached it**. A decision taken by rules that never cleared non-inferiority cannot claim the floor however
+good the candidate's own bound looks, and a decision by validated rules cannot claim it for a candidate under the
+floor. Certification needs both, so `route_once` computes the conjunction.
+
+Caught by `test_serve.py::test_an_uncertified_policy_never_certifies_however_the_state_looks` — a test that had been
+passing for the wrong reason and started failing for the right one the moment the fixture declared a floor. It is the
+phase-3 case where a test fails and the contract, not either worker, is what was wrong.
+
+### 6.2 Amendment 5's closing claim about two tests was false
+
+Amendment 5 says those two tests "stay as they are and this amendment makes them pass again." They do not. Their
+assertion was `verdict == PASS`, and the verdict amendment 5 produces over a log with no recorded provenance is
+`UNSUPPORTED` — which is amendment 5's entire point. **Both are changed deliberately, as wire changes**, and the
+reason is written beside each assertion: a `pass` there would be the criterion claiming a check it did not perform.
+
+I wrote the amendment from the mechanism's intent and did not run it against the two tests it named. That is the
+same defect class as a comment describing behaviour the code does not have, one level up.
+
+### 6.3 The route fixture never declared a floor
+
+`test_serve.py`'s shared `route()` helper omitted `floor`, so every test in that file exercised the `floor is None`
+path without saying so, and three of them asserted `certified is True` against a certification nothing had a basis
+to grant. `floor=0.80` is added to the helper — a fixture adaptation, not a changed assertion.
+
+The consequence is worth stating: with the floor declared, **`route_once` can no longer produce a falsely-certified
+record at all**, because the decision and the falsifier now share one predicate. So
+`test_a_certified_decision_whose_chosen_candidate_is_below_the_floor_is_caught_end_to_end` was split in two — one
+test asserting the loop refuses to write the record, one asserting the falsifier still catches such a row from any
+other writer. The second is not redundant: `Decision` accepts the combination on purpose, because refusing it at
+construction would move the check into the writer and leave nothing able to audit a log written by an older
+mechanism version or a second implementation.
+
+## Amendment 7 (C1): a v0.1.0 `bound_kind` is reported, never translated
+
+A real v0.1.0 candidate carries `bound_kind`, which C1 replaces with `bound_provenance`. The reader reports it in
+`ignored` (C12's contracted behaviour from the previous release) and **deliberately does not translate it into a
+provenance.**
+
+Translating `bound_kind: "lcb"` into `estimator: "clopper_pearson_fixed_sample"` looks like preserving information
+and is the opposite. The defect C1 exists to close is that `bound_kind` was a free string: three records with the
+identical fabricated `bound` of 0.99 and `bound_kind` of `lcb`, `point_estimate` and `asserted_by_operator` all
+certified identically, because nothing read it. Turning such a string into a recorded estimator would launder an
+unchecked claim into an attributable one — strictly worse than reading the bound as `unrecorded` and saying so, which
+is what amendments 4.1 and 5 already make safe.
+
+Three tests asserting `ignored == []` against the real fixture are updated to name the two keys. Their subject was
+never that nothing is ignored; it was that the reader survives a field it does not model and says which one.
