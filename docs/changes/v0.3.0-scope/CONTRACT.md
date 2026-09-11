@@ -328,3 +328,53 @@ leave the defect representable while adding the vocabulary that was supposed to 
 `Candidate.__post_init__` refuses a numeric `bound` with `bound_provenance=None`, and refuses a `bound_provenance` with
 `bound=None`, each naming both fields. That is the move `/review-contract` calls making the omission unrepresentable
 rather than watched: forgetting the provenance becomes a failure at construction instead of an absence nothing reads.
+
+## Amendment 3 — C1 renamed the field and left the majority of records filling it from the other judgment
+
+C1's code author reported this rather than leaving it, and it is the most consequential finding of the entry: **the
+rename is done and the value flow is half done.**
+
+`serve.route_once` has two branches and they fill `record.Decision.certified` from two different judgments. Verified by
+reading both:
+
+```python
+        drawn = next(c for c in candidates if c.id == chosen)
+        certified, _not_admissible_because = admissible(...)     # explored branch: SCOPE section 2
+    else:
+        certified = bool(got["validated"])                       # deterministic branch: non-inferiority
+```
+
+The deterministic branch is the majority of decisions. So a record saying `certified: true` on that path still means
+"a held-out fold supported this against the reference", which is the judgment C1 renamed to `validated` three lines
+above, and the falsifier compares that value against `admissible` — which is the `no_false_certification` failure the
+live run in v0.2.0's phase 5 already observed.
+
+**And the rename makes it harder to see, not easier.** Before, one word carried two meanings and a reader could suspect
+it. Now two words exist and one of them is silently carrying the other's value, which reads as though the distinction
+had been made.
+
+The code author's reasoning was that changing the value flow is new logic outside "the smallest change", and that is
+the right instinct applied to the wrong sentence. C1's interface says *"`certified` keeps section 2's meaning, which is
+the one SCOPE defines and the falsifier tests."* A branch filling it from the validation status contradicts that
+sentence, so fixing it is the entry's own content rather than an addition to it.
+
+**Both branches call `admissible`.** The explored branch already does and its comment already says why — the two
+predicates cannot disagree by construction. The deterministic branch does the same. Decisions that were `certified`
+because the policy was validated become `certified` only when the candidate is admissible, which is the behaviour the
+falsifier has been testing for all along.
+
+**A3.2 — the online path includes the `route` verb's JSON, and the compile path does not.** The interface says the word
+`certified` appears in the online path only where section 2's judgment is meant. `cli.py`'s `route` verb returns
+`"certified": entry["certified"]` — the non-inferiority status, to an operator, in the JSON the persona round found them
+trusting. That is the online path and it is in scope: the key is renamed `validated`, which is the same rename applied
+to the same judgment.
+
+The twelve other references in `policy.py`, `table.py`, `report.py`, `router.py` and `reproduce.py` are the **offline
+compile path** and are **out of scope**. `policy.Candidate.certified` there is the calibration-fold judgment under its
+own name in its own subsystem, and renaming it would be a second change of its own size. The line is the interface's
+own word "online", not a count of references.
+
+**A3.3 — the reason is `unearned_correction`, not amendment 2's `unsupported_correction`.** The code author chose the
+first before amendment 2 was written. Theirs is better and is adopted: "unsupported" reads as "a correction this
+software does not support", and the defect is that the claim was not earned by the work. Amendment 2's naming is
+withdrawn on this point.
