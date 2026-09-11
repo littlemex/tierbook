@@ -57,6 +57,7 @@
       "max_label_latency_s": 3600.0,
       "label_independent_of_candidate": true,
       "staleness_limit_days": 21.0,
+      "tenant_scope": "pooled",
       "exploration_rate": 0.05
     },
     "tool-agent-user-retail": {
@@ -65,12 +66,14 @@
       "label_source": "model_judge",
       "max_label_latency_s": 259200.0,
       "label_independent_of_candidate": false,
-      "staleness_limit_days": null
+      "staleness_limit_days": null,
+      "tenant_scope": "per_tenant"
     }
   },
   "_families_note": "config_format 2: a family is an object, not a bare reference string, because the floor is declared per family (SCOPE sections 2, 5, 12) beside the reference it falls back to. The two families here carry DIFFERENT floors on purpose -- agentic-coding tolerates more failure than the retail tool-use family does -- so a regression that collapsed them back to one shared number would show up as a wrong floor on one of the two rather than passing silently.",
   "_label_source_note": "C4 (amendment 4): label_source is oracle.kind's vocabulary read from schema.json at load time, plus 'none'. The two families use DIFFERENT values on purpose, and neither is the obvious guess for its domain -- agentic-coding's CI-graded tasks settle fast (max_label_latency_s 3600s) and independently of any candidate, so it declares an exploration_rate; the retail family's label comes from an LLM judge (model_judge, the weakest and slowest of the seven, so max_label_latency_s is 259200s) that may itself be one of this family's candidates, so label_independent_of_candidate is false and exploration_rate is absent -- present, load_config would refuse it, naming both the rate and the reason.",
   "_staleness_limit_note": "C3 (amendment 5): staleness_limit_days is required on every family, and null is legitimate only when the family cannot explore. agentic-coding explores, so it declares a limit (21 days) bounding how stale a bound explore.clears_floor may draw into past the ratchet; null there would be refused alongside exploration_rate, naming both. tool-agent-user-retail does not explore (label_independent_of_candidate is false), so null here is the honest declaration of no stated limit rather than a value nothing needed.",
+  "_tenant_scope_note": "v0.3.0's C3: tenant_scope is required on every family and 'single' is legitimate -- what is refused is silence. The two families here declare DIFFERENT non-single values on purpose, to show the field is real rather than a rubber stamp: agentic-coding is 'pooled' because it explores (exploration_rate 0.05) and per_tenant is refused together with an exploration_rate (the rate and section 6's selection-process term are coupled, and this release corrects over neither); tool-agent-user-retail carries no exploration_rate, so it is free to declare 'per_tenant' -- a retail tool-use family plausibly serving distinct tenants -- without meeting that refusal. Neither declaration is acted on this release; both are now recorded instead of assumed.",
   "objective": {
     "objective": "cost",
     "constraints": {

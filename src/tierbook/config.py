@@ -50,6 +50,14 @@ LIFECYCLE_KEYS = (
 # with a small identity allowlist: a candidate must be able to say which tier it is, or the join has no key.
 JOIN_KEYS = frozenset({"id", "schema_version"})
 
+# C3 (v0.3.0): the tenant term SCOPE section 6's multiplicity family names -- candidates x families x tenants x
+# the selection process -- had no field anywhere to be cardinality 1 BY DECLARATION rather than by omission.
+# Closed the way EXCLUSION_REASONS is, for the same reason: `pooled` and `per_tenant` are recorded and not acted
+# on this release, and an open-ended string here would let a family declare a fourth state this release has no
+# meaning for. `single` is not a placeholder for "not yet declared" -- it is the legitimate common case; what a
+# missing field meant before was cardinality 1 with nobody having said so.
+TENANT_SCOPES = ("single", "pooled", "per_tenant")
+
 
 class ConfigError(ValueError):
     """A candidate file that cannot be loaded, with the boundary it crossed named in the message."""
@@ -188,6 +196,19 @@ class FamilyDeclaration:
     `max_evidence_age_days` for exactly that candidate), so an unbounded staleness there is a bound from any
     past environment at all, not a declared one. A family may decline to state a limit, or may explore, but not
     both.
+
+    `tenant_scope` (v0.3.0's C3) is required and refused when absent, like the fields above. SCOPE section 6's
+    multiplicity family is candidates x families x tenants x the selection process, and no field anywhere --
+    not the record, not this config, not the compiled artifact -- let an operator say what the tenant term's
+    cardinality was; every bound this project has ever computed assumed it was 1 without anyone declaring so.
+    A term with cardinality 1 by omission is not the same as a term with cardinality 1 by declaration, and only
+    the second can be corrected over later, which is why `single` is a legitimate value here rather than
+    something this field exists to talk an operator out of. `pooled` and `per_tenant` are declarations this
+    release records and does not act on -- SCOPE section 7 calls pooling across tenants while holding per-tenant
+    floors "a declared policy input, not an emergency measure", so recording the declaration is real work even
+    though nothing downstream reads it yet. `load_config` refuses `per_tenant` declared together with an
+    `exploration_rate`: R11 found the rate and section 6's selection-process term are coupled, and this release
+    corrects over neither, so a family cannot represent having settled that question by declaring both at once.
     """
 
     reference: str
@@ -196,6 +217,7 @@ class FamilyDeclaration:
     max_label_latency_s: float | None
     label_independent_of_candidate: bool
     staleness_limit_days: float | None
+    tenant_scope: str
     exploration_rate: float | None = None
 
 
@@ -401,12 +423,15 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
                 "second config_format bump: how a future request's label will be produced (label_source), how "
                 "long to wait for one (max_label_latency_s, null only when label_source is 'none'), whether "
                 "that labeller is independent of any candidate in the family (label_independent_of_candidate), "
-                "and how stale a bound exploration may draw into before it is refused (staleness_limit_days, "
-                f'null meaning no limit). Change it to {{"reference": {decl!r}, "floor": <this family\'s '
+                "how stale a bound exploration may draw into before it is refused (staleness_limit_days, null "
+                "meaning no limit), and -- v0.3.0's C3 -- the tenant term SCOPE section 6's multiplicity family "
+                "requires (tenant_scope, one of 'single', 'pooled' or 'per_tenant'; section 7 calls declaring it "
+                "a policy input, and 'single' is legitimate -- what is refused is silence, not multi-tenancy). "
+                f'Change it to {{"reference": {decl!r}, "floor": <this family\'s '
                 'success-rate floor>, "label_source": <one of oracle.kind\'s values, or "none">, '
                 '"max_label_latency_s": <seconds to wait for a label, or null only if label_source is "none">, '
                 '"label_independent_of_candidate": <true or false>, "staleness_limit_days": <days, or null '
-                'for no limit>}.'
+                'for no limit>, "tenant_scope": <"single", "pooled" or "per_tenant">}.'
             )
             continue
         if not isinstance(decl, dict):
@@ -416,7 +441,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
         # a family cannot be joined to an outcome, and therefore cannot be given an exploration rate, without
         # saying where its label comes from and how long to wait for one.
         required = ("reference", "floor", "label_source", "max_label_latency_s", "label_independent_of_candidate",
-                   "staleness_limit_days")
+                   "staleness_limit_days", "tenant_scope")
         missing = [k for k in required if k not in decl]
         if missing:
             problems.append(
@@ -424,8 +449,12 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
                 "the floor its certified assignment must clear, how a future request's label will be produced "
                 "(label_source), how long to wait for one (max_label_latency_s, null only when label_source is "
                 "'none'), whether that labeller is independent of any candidate in the family "
-                "(label_independent_of_candidate) -- since C4 -- and how stale a bound exploration may draw "
-                "into before it is refused (staleness_limit_days, null meaning no limit) -- since C3"
+                "(label_independent_of_candidate) -- since C4 -- how stale a bound exploration may draw "
+                "into before it is refused (staleness_limit_days, null meaning no limit) -- since C3 -- and "
+                "its tenant scope (tenant_scope, one of 'single', 'pooled' or 'per_tenant') -- since v0.3.0's "
+                "C3: SCOPE section 6 requires this multiplicity term and section 7 calls declaring it a policy "
+                "input, and 'single' is a legitimate declaration -- what is refused is silence, not "
+                "multi-tenancy"
             )
             continue
         label_source = decl["label_source"]
@@ -472,6 +501,27 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
                 f"family {fam!r}.staleness_limit_days must be a number or null, not {staleness_limit_days!r}"
             )
             continue
+        tenant_scope = decl["tenant_scope"]
+        if tenant_scope not in TENANT_SCOPES:
+            problems.append(
+                f"family {fam!r}.tenant_scope is {tenant_scope!r}, which is not one of {TENANT_SCOPES}. SCOPE "
+                "section 6's multiplicity family is candidates x families x tenants x the selection process, and "
+                "section 7 calls pooling across tenants a declared policy input, not an emergency measure -- so "
+                "this field must say which of the three the family is. Declaring 'single' is legitimate: what "
+                "is refused is silence, not multi-tenancy."
+            )
+            continue
+        # v0.3.0's C3, R11: the rate exploration draws with and section 6's selection-process term are coupled,
+        # and this release corrects over neither -- a family cannot represent having settled that coupling by
+        # declaring both a per-tenant scope and a rate to explore with at once.
+        if tenant_scope == "per_tenant" and "exploration_rate" in decl:
+            problems.append(
+                f"family {fam!r} declares tenant_scope 'per_tenant' and exploration_rate "
+                f"{decl.get('exploration_rate')!r}: the rate exploration draws with and SCOPE section 6's "
+                "selection-process term are coupled, and this release corrects over neither. Remove "
+                "exploration_rate, or declare a tenant_scope this release does not couple to it."
+            )
+            continue
         exploration_rate = decl.get("exploration_rate")
         if "exploration_rate" in decl and (label_source == "none" or not label_independent_of_candidate):
             reason = ("label_source is 'none'" if label_source == "none"
@@ -502,6 +552,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
             max_label_latency_s=(float(max_label_latency_s) if max_label_latency_s is not None else None),
             label_independent_of_candidate=label_independent_of_candidate,
             staleness_limit_days=(float(staleness_limit_days) if staleness_limit_days is not None else None),
+            tenant_scope=tenant_scope,
             exploration_rate=(float(exploration_rate) if exploration_rate is not None else None),
         )
     unknown = {f: d.reference for f, d in families.items() if d.reference not in candidates}

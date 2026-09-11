@@ -41,9 +41,11 @@
       "label_source": "none",
       "max_label_latency_s": null,
       "label_independent_of_candidate": true,
-      "staleness_limit_days": null
+      "staleness_limit_days": null,
+      "tenant_scope": "single"
     }
   },
+  "_tenant_scope_note": "tenant_scope is required on every family. 'single' is the template default because it is the common case and a legitimate declaration -- what tierbook refuses is silence about the tenant term SCOPE section 6's multiplicity family names, not the choice of 'single' itself. Change it to 'pooled' or 'per_tenant' if this family actually serves more than one tenant; neither is acted on yet, only recorded.",
   "_label_source_note": "label_source is oracle.kind's vocabulary (schema.json), read at load time, plus 'none'. 'none' is the template default because most deployments have not wired an online labeller yet -- replace it with whichever of the seven applies once one exists, set max_label_latency_s to a number (it must be null exactly when label_source is 'none'), and only then may this family carry an exploration_rate.",
   "_staleness_limit_note": "staleness_limit_days is required on every family. null here is the honest declaration of no stated limit -- this template family has no exploration_rate yet, so there is nothing for the limit to bound. Once this family declares an exploration_rate, staleness_limit_days must be a number: null combined with a rate is refused, because exploration exists to reach a candidate whose evidence has expired and an unbounded limit there is a bound from any past environment at all.",
   "objective": {
