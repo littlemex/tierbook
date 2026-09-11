@@ -79,6 +79,12 @@ EXCLUSION_REASONS = (
     # `admissible` compared only `bound < floor` and nothing anywhere read the kind. This is what makes an
     # overclaimed correction refused rather than merely unlabelled.
     "unearned_correction",
+    # Amendment 4.1, and distinct from the line above: that one is a claim made and not earned, this one is no claim
+    # at all. A row written before `bound_provenance` existed reads with an `unrecorded` estimator so the log stays
+    # readable -- v0.2.0's C1's whole purpose -- and a bound whose provenance was never recorded cannot support a
+    # NEW certification, because the mechanism has no record of what produced it. Both of those are C1's purposes
+    # rather than a compromise between them.
+    "unrecorded_provenance",
 )
 
 #: The three states a label can be in. `missing` and `pending` are different facts and collapsing them is how a
@@ -114,7 +120,13 @@ BOUND_CORRECTIONS = ("candidates", "families", "tenants", "selection_process")
 #: exactly one, and adding `anytime_valid_*` is a later release's act (SCOPE section 6, out of scope in this
 #: contract) -- the vocabulary makes its absence explicit here rather than leaving `estimator` a free string that
 #: could name one nothing here implements.
-BOUND_ESTIMATORS = ("clopper_pearson_fixed_sample",)
+#:
+#: `unrecorded` is the one member no CALLER may write: `_candidate_from_row` supplies it for a row below
+#: schema_version 3, whose bound genuinely has no recorded provenance. Amendment 4.1 exists because the pairing
+#: rule below, applied to reading as well as to construction, made every row this project has ever written
+#: unreadable -- which contradicts v0.2.0's C1 entirely, the entry whose purpose is that a log survives its own
+#: evolution. Reading is not certifying, and `admissible` refuses this estimator separately.
+BOUND_ESTIMATORS = ("clopper_pearson_fixed_sample", "unrecorded")
 
 #: Which of BOUND_CORRECTIONS this release's mechanism actually performs. Empty, honestly: nothing here corrects a
 #: bound over any multiplicity term (SCOPE section 6's anytime-valid bound and its multiplicity correction are both
@@ -140,10 +152,13 @@ class BoundProvenance:
     """
 
     estimator: str
-    confidence: float
+    confidence: float | None
     corrected_over: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.estimator == "unrecorded" and self.corrected_over:
+            raise Incomplete("an unrecorded provenance cannot also claim a correction: there is no record of what "
+                             "produced the bound, so there is no record of what it was corrected over either")
         if self.estimator not in BOUND_ESTIMATORS:
             raise Incomplete(f"{self.estimator!r} is not one of {BOUND_ESTIMATORS}; an open-ended estimator name "
                              f"cannot be checked against what this mechanism actually ships")
@@ -305,6 +320,13 @@ def _candidate_from_row(row: dict, index: int) -> tuple[Candidate, list[str]]:
                                  f"from the row")
         kw["bound_provenance"] = BoundProvenance(estimator=bp["estimator"], confidence=bp["confidence"],
                                                  corrected_over=tuple(bp.get("corrected_over", ())))
+    elif kw.get("bound") is not None:
+        # Amendment 4.1. A row written before this field existed carries a bound and no provenance, and the
+        # constructor's pairing rule refuses that -- correctly, for a NEW candidate, and catastrophically for a
+        # read: applied here it made every row this project has ever written unreadable, which is the opposite of
+        # what v0.2.0's C1 exists for. So the row reads, saying truthfully that the provenance was never recorded,
+        # and `admissible` refuses the estimator separately. Reading is not certifying.
+        kw["bound_provenance"] = BoundProvenance(estimator="unrecorded", confidence=None)
     return Candidate(**kw), ignored
 
 
@@ -419,6 +441,8 @@ def admissible(candidate: Candidate, *, floor: float, authorised: bool,
     """
     if candidate.bound is None:
         return False, "no_bound"
+    if candidate.bound_provenance.estimator == "unrecorded":
+        return False, "unrecorded_provenance"
     if set(candidate.bound_provenance.corrected_over) - set(CORRECTIONS_PERFORMED):
         return False, "unearned_correction"
     if (max_age_days is not None and evidence_age_days is not None
