@@ -978,11 +978,18 @@ needs one home, and the way to find the ones that do not have it is to ask which
 were wrong.** For the bound, the answer was nobody.
 
 **What phase 5 has established so far, and what it has not.** The engine half is verified: `observe` read occupancy
-from a live vLLM across six distinct values from 3 to 24 under a 24-way load, and a variable it could not read is
+from a live vLLM across 19 distinct values from 2 to 20 over 400 samples under a 20-way load, and a variable it
+could not read is
 absent with a reason rather than defaulted. Exploration's live behaviour is **not** verified — the example ledger's
 compiled policy has no rule and no eligible alternative, so every draw returned `no_eligible_arm` and the diverted
 share was 0. That is correct behaviour on that fixture and it is not evidence about the draw. Said plainly here
 because a gap presented as coverage is the failure phase 5 exists to prevent.
+
+This paragraph first carried six distinct values from 3 to 24 over a 24-way load, which was the reading from the
+first six samples taken while the run was still being set up. The final run took 400. Corrected rather than
+left, and the correction noted rather than made silently, because a figure that moved with no explanation is
+indistinguishable from a typo -- and because a preliminary number surviving into a governing document is the
+defect this release closed four times.
 
 ## Amendment 16 — C13 is deferred with its reasoning, and C14 lands, and the difference between them is the point
 
