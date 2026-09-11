@@ -257,7 +257,7 @@ def _key_value(fam: str, key: str):
     if key == "floor":
         return _OPERATOR_SUPPLIED_FLOORS[fam]
     return {"label_source": "executable_acceptance", "max_label_latency_s": 3600.0,
-            "label_independent_of_candidate": True, "staleness_limit_days": None}[key]
+            "label_independent_of_candidate": True, "staleness_limit_days": None, "tenant_scope": "single"}[key]
 
 
 def _load_config_round_trips(cfg: dict, tmp_path: Path) -> tuple[int, dict]:

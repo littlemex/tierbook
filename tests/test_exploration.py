@@ -597,6 +597,7 @@ def _family(*, reference="ref", floor=0.5, label_source="human_label", max_label
         "label_source": label_source, "max_label_latency_s": max_label_latency_s,
         "label_independent_of_candidate": label_independent_of_candidate,
         "staleness_limit_days": staleness_limit_days,
+        "tenant_scope": "single",
     }
     if exploration_rate is not None:
         d["exploration_rate"] = exploration_rate

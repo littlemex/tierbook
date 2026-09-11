@@ -49,6 +49,7 @@ def _full_family(reference: str, floor: float = 0.8) -> dict:
         "max_label_latency_s": 3600.0,
         "label_independent_of_candidate": True,
         "staleness_limit_days": 14.0,
+        "tenant_scope": "single",
     }
 
 
@@ -80,6 +81,7 @@ _FAMILY_KEY_DEFAULTS = {
     "max_label_latency_s": 3600.0,
     "label_independent_of_candidate": True,
     "staleness_limit_days": 14.0,
+    "tenant_scope": "single",
 }
 
 _RE_CONFIG_FORMAT = re.compile(r"config_format must be (\d+)")

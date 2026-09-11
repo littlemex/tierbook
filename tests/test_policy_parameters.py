@@ -68,7 +68,8 @@ def minimal_policy_dict(*, floor=0.05, max_evidence_age_days=None, staleness_lim
         "provenance": {},
         "rules": [],
         "parameters": {"floor": floor, "max_evidence_age_days": max_evidence_age_days,
-                       "staleness_limit_days": staleness_limit_days},
+                       "staleness_limit_days": staleness_limit_days,
+                       "tenant_scope": "single"},
     }
 
 
@@ -395,7 +396,8 @@ def test_two_families_with_different_floors_each_carry_their_own_in_the_compiled
     # subject is that two floors stay two numbers, and varying anything else alongside them would leave a failure
     # with two candidate causes.
     labels = {"label_source": "executable_acceptance", "max_label_latency_s": 3600.0,
-              "label_independent_of_candidate": True, "staleness_limit_days": 14.0}
+              "label_independent_of_candidate": True, "staleness_limit_days": 14.0,
+              "tenant_scope": "single"}
     raw["families"] = {
         "agentic-coding": {"reference": "api-strong-a", "floor": 0.65, **labels},
         "tool-agent-user-retail": {"reference": "api-strong-a", "floor": 0.85, **labels},

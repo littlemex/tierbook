@@ -56,6 +56,7 @@ def _family_c4(*, reference="ref", floor=0.5, label_source="human_label",
         max_label_latency_s = None if label_source == "none" else 3600.0
     d = {
         "reference": reference, "floor": floor, "staleness_limit_days": 14.0,
+        "tenant_scope": "single",
         "label_source": label_source,
         "max_label_latency_s": max_label_latency_s,
         "label_independent_of_candidate": label_independent_of_candidate,
