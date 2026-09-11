@@ -239,7 +239,12 @@ def cmd_compile(args) -> int:
                                  # source, same absence, for the two C3/amendment-5 numbers beside it.
                                  floor=floors.get(fam),
                                  staleness_limit_days=staleness_limits.get(fam),
-                                 exploration_rate=exploration_rates.get(fam))
+                                 exploration_rate=exploration_rates.get(fam),
+                                 # CONTRACT v0.3.0 C5: the same significance level `compile_to_file` above
+                                 # already used for this table's non-inferiority calibration -- `alpha ** (1/n)`
+                                 # is the ceiling a lower confidence bound at that same significance can ever
+                                 # reach, so this is the existing number, not a second one.
+                                 alpha=args.alpha)
             table["decide"].setdefault(fam, {})[label] = decide_as_dict(pol)
             bound = ((pol.domain or {}).get(f"inflight:{sorted(self_hosted)[0]}")
                      if self_hosted else None)
@@ -564,6 +569,7 @@ def cmd_accept(args) -> int:
 
     max_age_days = None
     max_age_provenance = "not checked: no --policy was given to read a limit from"
+    floor_ceiling = None
     if args.policy:
         policy = from_dict(json.loads(Path(args.policy).read_text()))
         try:
@@ -577,6 +583,11 @@ def cmd_accept(args) -> int:
         # 7, C6, following amendment 2's rule for the floor): a second typed number here would reopen the very
         # defect amendment 2 closed, in a second value.
         max_age_days = parameter(policy, "max_evidence_age_days", None)
+        # CONTRACT v0.3.0 C5: same reason and same rule as `max_evidence_age_days` above -- no flag confirms
+        # it, because there is nothing an operator would type here that the artifact did not already compute.
+        # `None` for a v0.2.0 artifact (no `floor_ceiling` key at all) makes `floor_is_reachable` UNSUPPORTED
+        # rather than this command guessing a verdict for a policy that never carried the number.
+        floor_ceiling = parameter(policy, "floor_ceiling", None)
         # Recorded, not just used. The floor got `floor_provenance` because a number that reached the
         # computation with no copy in the record is exactly what C2 audited and found -- zero recorded
         # copies. This value arrived the same way, and `null` alone is ambiguous between "the operator
@@ -603,7 +614,8 @@ def cmd_accept(args) -> int:
                          uncertified_tolerance=args.uncertified_tolerance,
                          budgeted_exploration=args.budgeted_exploration,
                          latency_limit_s=args.latency_limit_s, slo_tolerance=args.slo_tolerance,
-                         significance=args.significance, max_age_days=max_age_days)
+                         significance=args.significance, max_age_days=max_age_days,
+                         floor_ceiling=floor_ceiling)
     out = {"verdicts": [v.as_dict() for v in verdicts], "summary": summarise(verdicts),
           "floor": floor, "floor_provenance": floor_provenance,
           "max_age_days": max_age_days, "max_age_days_provenance": max_age_provenance,

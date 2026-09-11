@@ -533,13 +533,42 @@ def _compiled(policy: Policy) -> Policy:
     return replace(policy, policy_digest=policy_digest(policy))
 
 
+def _floor_ceiling(tiers: dict, family: str, default: tuple[str, ...], floor: float, alpha: float) -> dict | None:
+    """CONTRACT v0.3.0 C5's three numbers for `compile_policy`'s `params`, or `None` when there is no cohort to
+    count them from.
+
+    The cohort is the reference's own recorded outcome for `family` -- `default[0]`, since every caller of
+    `compile_policy` compiles `default` as the family's declared reference (`cli.cmd_compile` and
+    `table.compile_to_file` both key `families` by `family -> reference` and pass that single id straight
+    through). This is the same count `table._evidence` already reports as `reference_attempted`; reading it a
+    second way here -- say, from `policy.candidates_for`'s membership -- would mean picking one of possibly
+    several different `attempted` counts across candidates with no stated rule for which, and `candidates_for`
+    carries no counts at all since CONTRACT v0.3.0 C6's own amendment 10 (a bound recorded there is exactly the
+    fixed-sample, single-test quantity R1 rejects).
+    """
+    if not default:
+        return None
+    ref = tiers.get(default[0])
+    if ref is None:
+        return None
+    n = (ref.outcome(family) or {}).get("attempted")
+    if not n:
+        return None
+    # Imported locally, at call time, for the same reason `candidates_for` is (CONTRACT v0.3.0 C6, above): a
+    # module-level import here would close the cycle `accept` -> `record` -> `observe` -> `decide` -> `accept`.
+    from .accept import floor_reachable
+    _, ceiling, needed = floor_reachable(int(n), floor, alpha)
+    return {"ceiling": ceiling, "cohort_size": int(n), "cohort_size_needed": needed}
+
+
 def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_ids: set[str],
                    default: tuple[str, ...], default_declared_by: str,
                    service_curve: list | None = None, latency_p95_slo_s: float | None = None,
                    max_evidence_age_days: float | None = None, floor: float | None = None,
                    staleness_limit_days: float | None = None,
                    exploration_rate: float | None = None,
-                   tiers: "dict[str, Tier] | None" = None) -> Policy:
+                   tiers: "dict[str, Tier] | None" = None,
+                   alpha: float = 0.05) -> Policy:
     """Derive the policy from one compiled family entry. Every threshold is a measurement or a named gap.
 
     `tiers` (CONTRACT v0.3.0 C6): the ledger this family was compiled from, so `policy.candidates_for` can name
@@ -547,6 +576,11 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     `default`, which left a candidate with no rule invisible. `None` (a caller with no ledger to hand over, the
     shape every test that predates this entry uses) reads as `{}`: an honest "no ledger-derived set", not a
     guess at what one would have contained.
+
+    `alpha` (CONTRACT v0.3.0 C5): the same significance level `cli.py`'s `--alpha` already threads into
+    `compile_to_file` for the non-inferiority calibration -- reused here, not a second number, because
+    `alpha ** (1/n)` is the ceiling a lower confidence bound at that same significance can ever reach. Defaults
+    to 0.05 for a caller (every test that predates this entry) with no reason to pass anything else.
 
     The shape falls out of the accounting rather than being chosen. A reserved candidate is free at the margin
     **while it has capacity**, so the assignment has exactly one derived boundary: the occupancy at which that
@@ -578,6 +612,15 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     # declaration from, only what its caller hands it.
     params = {"floor": floor, "max_evidence_age_days": max_evidence_age_days,
              "staleness_limit_days": staleness_limit_days, "exploration_rate": exploration_rate}
+    # CONTRACT v0.3.0 C5: the ceiling `alpha ** (1/n)` imposes on the declared floor, the cohort size `n` that
+    # ceiling was computed from, and the smallest cohort the declared floor would need instead -- `accept.
+    # floor_is_reachable`'s one input. Absent from `params` (rather than present as `None`) when there is
+    # nothing to count it from: no floor was declared, there is no reference tier in `tiers`, or the reference
+    # carries no usable `attempted` count for this family. Computed once, before any branch below, for the
+    # same reason `candidates` is: it does not depend on whether THIS compile validated an assignment.
+    floor_ceiling = _floor_ceiling(tiers or {}, family, default, floor, alpha) if floor is not None else None
+    if floor_ceiling is not None:
+        params["floor_ceiling"] = floor_ceiling
     # CONTRACT v0.3.0 C6: computed once, before any branch below, because the ledger's own outcomes do not
     # depend on whether THIS compile validated an assignment -- a candidate not chosen here is exactly the kind
     # of candidate the set exists to keep visible. Imported locally rather than at module scope, to avoid

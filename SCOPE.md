@@ -291,11 +291,14 @@ written.
 
 ## 12. Acceptance criteria, and what would prove this broken
 
-Pre-registered, reported rather than asserted, and computed only from what section 9 requires to be logged.
+Pre-registered, reported rather than asserted. Nine of these ten are computed only from what section 9 requires to be
+logged; the tenth is computed from what the compiler already has before a single request is logged, because it is a
+question about the evidence budget rather than about traffic (see "floor reachability", below).
 
 | criterion | measured how | fails if |
 |---|---|---|
 | floor compliance | realised success rate on routed traffic, per family, against that family's floor | it falls below the floor beyond sampling error at significance `s` |
+| floor reachability | the family's declared floor against `alpha ** (1/n)`, the ceiling a lower confidence bound at significance `alpha` can ever reach on the cohort size `n` the evidence for that family actually has | the declared floor exceeds that ceiling, naming both numbers and the cohort size the floor would need instead |
 | bound calibration | the confidence procedure on pre-registered resampling or simulation where the estimand is known | a pre-declared test rejects the claimed coverage at significance `s` |
 | no false certification | over the log, against section 2's three-part definition | any decision marked certified whose candidate was not admissible |
 | default is not a hiding place | over the log | an uncertified assignment was made while an admissible candidate existed, or the uncertified share exceeds its stated tolerance |
