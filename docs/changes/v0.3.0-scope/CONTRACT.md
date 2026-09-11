@@ -1,0 +1,276 @@
+# v0.3.0 — stop claiming more than the mechanism has, and open the door that lets it have more
+
+Phase 2's output. The single source of scope. Phase 1 is `01-design/design.md`; the rounds that produced its findings
+are indexed in `02-findings/README.md`.
+
+## Out of scope, written first
+
+Written first because it is the harder half, and because phase 1 proposed a centre this contract does not adopt.
+
+| Not doing | Why not, and where it goes |
+|---|---|
+| **An anytime-valid bound** | SCOPE section 6 requires one and this release does not build it. R14 established a real tension rather than a detail: the authoritative general implementation is compiled C++ needing numerical optimisation, `pyproject.toml` declares `dependencies = []` with a stated reason, and the one elementary construction a round surfaced arrived through an automated fetch rather than a read — **a lead, not a citation**. Section 6 exists because a point estimate was trusted once; adopting a confidence sequence from a summary is the same mistake with more machinery. The smaller change that removes the harm is C1 below: stop asserting a correction the mechanism did not perform. Goes to v0.4.0's phase 1 with R14 as its input. |
+| **A multiplicity correction over four terms** | Same reason, and one term does not exist to correct over. C3 makes the tenant term's cardinality **declared** rather than assumed, which is what makes a later correction honest; performing the correction is not in this release. |
+| **Change-point detection** | R12 split it in two and both halves are blocked. The measured side needs a per-item time series the ledger does not have — `Evidence` is `path`, `header`, `verdicts` with one `produced_at` for a whole run — so it needs a ledger schema change. The serving side is derivable from the decision log today but needs labels, and C4 is the door to labels rather than the labels themselves. Deferring is not a choice about priority; the inputs are absent. |
+| **Retirement of a candidate** | A9 found SCOPE section 6's "retired when it stops clearing" has no implementation at all — no state, no vocabulary, no path — and R11 found it requires extending `EXCLUSION_REASONS`, a closed enum whose every value describes *current* admissibility. That is a concept, not a fix, and it depends on change-point detection to know when clearing stopped. Named here so the omission is recorded rather than inherited a third time. |
+| **Per-tenant floors** | R10 named it the requirement that would force a rewrite rather than an extension. C3 makes the ground ready by requiring the tenant scope be declared; nothing more. |
+| **The compile cadence** | R13 found `deploy/base/compile-cronjob.yaml` runs daily and keeps the previous artifact on refusal, against section 6's "recomputed continuously". True, and it only bites once retirement exists, which is out. Recorded, not fixed. |
+| **`explain` gaining a floor or bound column** | The persona round found it gives an operator nothing toward choosing a floor. Real, and it is a surface improvement rather than a claim being corrected. It waits until the absolute bound exists to show. |
+| **`tierbook logs` accepting a decision log** | A naming collision that returns a plausible answer for the wrong file. A tangent found on the way past; fix it in a separate change and say so here so it is not lost. |
+| **`requires-python` disagreeing with the tested minimum** | `pyproject.toml` declares `>=3.10`; the suite is green on 3.9.6 and has been through two releases. One of the two is wrong and deciding which is a packaging question with no bearing on this release's subject. A tangent. |
+| **A second provenance scheme** | R15: `policy.registry_version` already content-hashes the ledger. C2 gives the compiled artifact the same treatment rather than inventing a scheme beside it. Rejected because inventing one is the defect C2 exists to fix. |
+
+## What changes
+
+The release is one thing said four ways: **every claim the mechanism makes is either true or labelled as weaker than it
+looks, and the one door an operator needs is open.** Every entry below is a claim that currently outruns its evidence,
+plus the door.
+
+### C1 — a bound says which corrections produced it, and `certified` stops meaning two things
+
+Two defects, one entry, because fixing either alone leaves the other's damage in an append-only log (R8).
+
+**`bound_kind` becomes a checked, structured statement rather than a free string.** Today three records carrying a
+fabricated `bound` of `0.99` with `bound_kind` of `lcb`, `point_estimate` and `asserted_by_operator` all certify
+identically, because `admissible` compares only `bound < floor` and nothing reads the kind. It names, from a closed
+vocabulary tied to its producers in the shape `tests/test_reason_vocabulary.py` established: the estimator, the
+confidence level, and **which terms of section 6's multiplicity family were corrected over**. A bound that corrected
+over none says so. Nothing in this release produces a bound claiming anytime-validity, and the vocabulary makes that
+claim unrepresentable rather than merely absent.
+
+**`certified` names one judgment.** `decide.py` sets `certified = entry.get("status") == "assigned"` — non-inferiority
+validation against a reference — and `record.check_certification` computes section 2 admissibility. Both travel under
+one word, and `tierbook route`'s JSON returns the first to an operator who declared a floor and reads it as the second.
+The compile-time judgment is renamed to what it is; `certified` keeps section 2's meaning, which is the one SCOPE
+defines and the falsifier tests.
+
+This is the entry the ordering argument is about: R8 established the log is append-only, so a decision written before
+this lands is permanently a bound of unknown provenance under an ambiguous word.
+
+### C2 — a record can name the artifact it came from
+
+`Decision`'s version-shaped fields are `feature_vector_version`, `policy_version`, `mechanism_version` and
+`schema_version`. `policy_version` is a hand-typed CLI string defaulting to `"unversioned"`. So phase 1's own falsifier
+contract — "the record carries which artifact" — was unimplementable as written, and I wrote it as though it held.
+
+The compiled policy carries a content hash, derived the way `policy.registry_version` already derives one over the
+ledger, and the record carries it. A `policy_version` supplied by a caller that disagrees is refused naming both, by
+`decide.parameter`'s established rule.
+
+Fixes three things the design credited once (R6): the falsifier gets a premise, and auditing which multiplicity
+assumption a historical bound used becomes possible at all, which is what makes C1's vocabulary readable later.
+
+### C3 — the tenant term's cardinality is declared, not assumed
+
+SCOPE section 6's multiplicity family is candidates × families × tenants × the selection process. No tenant field
+exists anywhere in the record, the config or the artifact, and SCOPE section 7 is normative: pooling across tenants
+while holding per-tenant floors is *"a declared policy input, not an emergency measure."* So the document requires a
+declaration for which there is no field, and every bound ever computed assumed cardinality 1 without saying so.
+
+`config.FamilyDeclaration` requires a tenant scope. Declaring a single tenant is legitimate and is the common case;
+what is refused is silence. **A term with cardinality 1 by omission is not the same as a term with cardinality 1 by
+declaration, and only the second can be corrected over later.**
+
+### C4 — the door to a labelled log
+
+`Log.attach_outcome` exists, `record.classify_label` exists, a family declares a labeller and a maximum label latency,
+and there is no CLI verb and no mention in `README.md`, `SCOPE.md` or any `--help`. An operator working from the
+documented surface cannot produce a labelled log without reading `src/`. Every criterion needing a realised rate is
+therefore permanently `unsupported` for them, and the report attributes that to a missing measurement rather than to a
+missing door.
+
+A verb attaches an outcome. It does **not** invoke a labeller: A7 settled that decisively against phase 1's first
+draft, because `cli.py`'s own first paragraph says running a benchmark is somebody's suite and anything that can write
+a record in the documented shape is a valid producer of one. The verb is a door, not a runner.
+
+### C5 — the ceiling is reported, and something reads it
+
+A declared floor above `alpha ** (1/n)` can never be cleared, whatever the measurement says. The shipped ledger
+declares `tool-agent-user-retail` at **0.92** on a **20-item** cohort whose ceiling is **0.8609**. Today an impossible
+floor and no floor at all produce byte-identical `compile` and `route` output, `certified: true` either way, with no
+warning (R7).
+
+The compiler computes the ceiling and the cohort size the declared floor would need, and records both. It does **not**
+refuse: R3 established that an unreachable floor is a true fact about the evidence budget rather than a malformed
+declaration, and SCOPE sections 2, 8 and 12 all make serving the declared default uncertified the correct behaviour in
+that state — section 12 makes it a *passing* criterion.
+
+**And something reads it.** R16 found `"warning"` strings already written into artifacts in two places with **zero**
+reads across `src/` and `tests/` — the same condition as `bound_kind`. Adopting only the surface would make this the
+third value recorded and never read. A criterion reads the ceiling, so a floor that cannot be cleared is a stated
+verdict rather than a comment in JSON.
+
+### C6 — the candidate set comes from the ledger, not from the policy's rules
+
+`serve.candidate_set` builds from `policy.rules`, so a candidate with no rule is absent from the set, invisible to
+exploration, never labelled, and its evidence never refreshes (F3). A3 established the set is derivable without new
+measurement: `assign_family`'s `ranked` already covers every candidate with an outcome for the family, for both shipped
+families.
+
+A candidate the ledger cannot bound is named **with no bound** rather than omitted. Omission is what makes it
+invisible; the fix is to say it has none, which is also what C1's vocabulary now has a word for.
+
+### What no entry does
+
+Nothing here computes an anytime-valid bound, corrects over any multiplicity term, detects a change point, retires a
+candidate, or invokes a labeller. Four of those are in the out-of-scope table with their reasons; the fifth is refused
+on a boundary this project states in its own first paragraph.
+
+## The stop condition
+
+Two mutations, and neither is satisfiable by losing the thing it counts.
+
+1. **A record whose bound claims a correction the release does not perform cannot be written.** Mutate `bound_kind` to
+   accept a free string and a test fails; mutate a producer to emit a kind naming a correction nothing applied and a
+   test fails. Counted as unresolved obligation ids, not as current text, so deleting the sentence that carries an
+   obligation does not discharge it.
+2. **An operator can produce a labelled log using only the documented surface, and the ceiling is a verdict rather
+   than a string.** Mutate the ceiling out of the criterion and a test fails; delete the verb's documentation and the
+   journey test that walks the documented surface fails.
+
+## The obligation carried forward, as prose
+
+Two things this release does not mechanise and a person has to hold.
+
+The absolute bound the mechanism now labels honestly is still supplied by a caller. C1 stops it from claiming to be
+something it is not; it does not make it a measurement. Whoever ships v0.4.0 owes the derivation, and until then a
+certified assignment rests on a number an operator typed — correctly labelled, and still typed.
+
+And section 6's sentence has two halves. This release touches admission and leaves retirement absent, so a candidate
+that stops clearing keeps clearing until somebody recompiles and notices. Age stands where a change point belongs, and
+SCOPE section 2 clause 4 currently describes the placeholder as the requirement — a document disagreeing with itself in
+two sections, written that way by me in v0.2.0's amendment 6. Correcting the document is C1's neighbour and is not in
+this release either; what is here is that the disagreement is now written down.
+
+## Rejected alternatives, with reasons
+
+| Rejected | Reason |
+|---|---|
+| Compute the absolute lower bound and make it the release's centre, as phase 1 proposed | R1: the bound available dependency-free is fixed-sample and single-test, which section 6 disqualifies **in those words**. Shipping it would relocate the defect rather than close it — a caller's honest guess becomes the compiler's miscalibrated assertion, which is worse because it carries the compiler's authority. |
+| Refuse a floor above the cohort's ceiling at compile time (phase 1's F8) | R3: an unreachable floor is a true fact about the evidence budget, not a malformed declaration. SCOPE section 2 says there is no "choose nothing", section 8 serves the default uncertified on day one, and section 12 makes "everything to the default" a passing state. Refusing turns a purpose-correct degenerate state into an outage. |
+| Build a component that invokes the family's declared labeller | A7: `cli.py`'s first paragraph. A component here that ran somebody's suite would cross the boundary this project states before anything else. |
+| Add a third vocabulary-and-test scaffold for the new bound provenance | Q2 of the convention round: this project has already solved "a set that must not go stale" twice — a producer-tied vocabulary test, and a claim-with-probe pair. C1 uses the first because bound provenance is a per-record value. A third would be new machinery for a solved problem. |
+| Invent a provenance scheme for the compiled artifact | R15: `registry_version` already content-hashes the ledger. C2 extends the existing shape. |
+| Ship the ceiling as a `"warning"` string like the two that already exist | R16: neither existing warning key is read anywhere. Matching the surface without a reader would be the third value recorded and never read, which is the defect C1 is fixing in `bound_kind`. |
+| Treat the three remaining `MISSING_FOR_A_CLOSED_LOOP` entries as one backlog | F6: anytime-valid bounds became load-bearing the moment exploration shipped, and the other two did not. Treating them as interchangeable hid that one is a prerequisite. |
+| Resume C13 as new work under a new label | R17: v0.2.0's amendment 16 named it C13 and deferred it to this phase by name. Re-deriving it as F1/F2 was the duplicated-knowledge defect committed by the document complaining about it. C1 and C2 are C13, split by what each claims. |
+
+## Every claim this contract makes about a file, checked
+
+Run before the interface section was written, because a worker who inherits an unverified assertion builds on it four
+times over. The commands are in `02-findings/README.md`'s neighbour; the results:
+
+| claim | checked | result |
+|---|---|---|
+| the shipped ledger declares `tool-agent-user-retail` at a floor of 0.92 | read `examples/ledger/candidates.json` | 0.92 |
+| the ceiling at n=20 is 0.8609 | `clopper_pearson_lower(20, 20, 0.05)` | 0.8609 |
+| `admissible` never compares `bound_kind` | read the function body | not present |
+| `registry_version` content-hashes the ledger | read it | sha256 over every tier record |
+| `policy_version` defaults to `"unversioned"` | read `cli.py` | `default="unversioned"` |
+| no CLI verb attaches an outcome | ran `--help` | no verb contains "attach" |
+| `attach_outcome` is unmentioned in `README.md` and `SCOPE.md` | read both | absent from both |
+| `candidate_set` builds from `policy.rules` | read `serve.py` | `for rule in policy.rules` |
+| a `"warning"` key is written and never read | grepped writes and reads | 2 writes, **0** reads |
+
+## Interface
+
+Handed to `/split-impl` unchanged. Failure behaviour is part of every entry, because that is where two readers of one
+sentence diverge.
+
+### C1 — bound provenance, and one meaning for `certified`
+
+**`record.BOUND_CORRECTIONS`** — a closed tuple naming what a bound may have been corrected over: `none`,
+`candidates`, `families`, `tenants`, `selection_process`. Tied to its producers the way `EXCLUSION_REASONS` is: a test
+drives every producer of a bound and asserts what comes back is in the tuple, and a producer growing a value the tuple
+lacks fails at merge time.
+
+**`record.BoundProvenance`** — `estimator: str`, `confidence: float`, `corrected_over: tuple[str, ...]`. `estimator` is
+from a closed tuple whose only member this release ships is `clopper_pearson_fixed_sample`; adding
+`anytime_valid_*` is a later release's act and the vocabulary makes its absence explicit rather than implied.
+`corrected_over` is a subset of `BOUND_CORRECTIONS` and `()` is legal and is what this release produces.
+
+**`Candidate.bound_kind` is replaced by `Candidate.bound_provenance: BoundProvenance | None`.** `None` means no bound,
+which C6 requires to be representable. A free string is refused naming the field and the tuple — the old `bound_kind`
+is not kept as an alias, because keeping it would leave a writer of an unchecked claim that the new check cannot see.
+
+**`record.admissible` reads it**: a bound whose provenance claims a correction over a term the mechanism did not correct
+over is not merely unlabelled, it is refused. That is the difference between the vocabulary being checked and being
+recorded.
+
+**`decide.Policy.certified` is renamed `validated`**, and `decide.as_dict` writes `validated`. It is the
+non-inferiority status against the reference and nothing else. `route`'s JSON reports `validated`, and the word
+`certified` appears in the online path only where section 2's judgment is meant. `from_dict` on an artifact carrying
+`certified` refuses, naming both words and saying which judgment each is — an artifact from v0.2.0 is exactly that case
+and must not be read optimistically, by C1's own rule for a version it does not know.
+
+### C2 — the artifact's own hash, in the record
+
+**`decide.policy_digest(policy) -> str`** — sha256 over the artifact's own serialisation, truncated the way
+`registry_version` truncates, and written into the artifact by `compile_policy` as `policy_digest`.
+
+**`Decision.policy_digest: str`**, no default, required at `schema_version` 3. `from_row` supplies `""` for a row at
+version 1 or 2 and raises `Incomplete` naming the field at 3 or above — SEAMS S4's rule, applied to the third field
+that needs it.
+
+**`route_once` reads the digest from the policy** and refuses a caller-supplied `policy_version` that disagrees,
+naming both, by `decide.parameter`'s rule. `--policy-version` loses its `"unversioned"` default: a value the mechanism
+can derive is not a value a caller supplies.
+
+### C3 — the tenant scope, declared
+
+**`config.FamilyDeclaration.tenant_scope: str`** — required, refused when absent naming the family and the field. One
+of `single`, `pooled`, `per_tenant`. `pooled` and `per_tenant` are declarations this release records and does not act
+on; `load_config` refuses a family declaring `per_tenant` **together with** an `exploration_rate`, because R11 found
+the rate and the selection-process term are coupled and this release corrects over neither.
+
+The refusal message says that the scope is a multiplicity term SCOPE section 6 requires and section 7 calls a declared
+policy input, and that declaring `single` is legitimate — what is refused is silence.
+
+### C4 — the door
+
+**`tierbook attach-outcome --log <path> --request-id <id> --label-state <state> [--label true|false] [--tokens N]
+[--latency-s S]`**. Exit 0 on success. Exit 2 on a missing required argument. Exit 1 when the log refuses the outcome —
+a label that changes, or a state that does not admit the label — with `record.Incomplete`'s own message on stderr,
+unmodified, because it already says what the operator did and why the log refuses it.
+
+It attaches. It does not read a family's `label_source`, does not invoke anything, and does not decide `label_state`:
+`classify_label` owns that and the caller states what it observed. A `--label-state` outside `LABEL_STATES` is refused
+naming the tuple.
+
+**`README.md` gains the verb in the documented sequence**, between `assign` and `accept`, because a criterion that
+needs a realised rate is unsupported until it runs.
+
+### C5 — the ceiling, and a criterion that reads it
+
+**`accept.floor_reachable(n, floor, alpha) -> tuple[bool, float, int]`** — whether the floor is reachable on a cohort
+of `n`, the ceiling `alpha ** (1/n)`, and the smallest `n` at which the floor becomes reachable. `n <= 0` raises, by
+C14's rule.
+
+**`compile_policy` writes `floor_ceiling` into `Policy.parameters`**: the ceiling, the cohort size the evidence
+actually has, and the smallest cohort the declared floor would need. Absent when the family has no evidence to count.
+
+**`accept.CRITERIA` gains `floor_is_reachable`** — `FAIL` when the artifact's declared floor exceeds the ceiling its
+own cohort imposes, naming both numbers and the cohort size required; `PASS` when it does not; `UNSUPPORTED` when the
+artifact carries no `floor_ceiling`, which is a v0.2.0 artifact. It is a criterion and not a compile-time refusal, and
+the reason is in the rejected-alternatives table.
+
+This is the tenth criterion. SCOPE section 12 defines nine and C5 in v0.2.0 kept `floor_compliance` as one criterion
+carrying two rates specifically to avoid a tenth. **That decision is reversed here deliberately and the reason is
+different**: two rates over one population are one question asked twice, and floor reachability is a different question
+about a different object — the declared floor against its cohort, not the traffic against the floor. SCOPE section 12's
+list grows by one and the document is amended to say so, rather than the criterion being folded into a neighbour to
+preserve a count.
+
+### C6 — the candidate set from the ledger
+
+**`policy.candidates_for(tiers, family) -> dict[str, float | None]`** — every candidate with an outcome for the family,
+mapped to its bound or to `None`. Derived from what `assign_family`'s `ranked` already enumerates, which A3 verified
+covers every measured candidate for both shipped families.
+
+**`compile_policy` writes the set into the artifact** as `candidates`, and **`serve.candidate_set` reads it** rather
+than deriving from `policy.rules`. A candidate present with `None` is in the set with no bound, excluded for
+`no_bound`, and visible to `explore.eligible` as a candidate that exists and cannot be drawn into — which is the
+distinction that made it invisible before.
+
+A v0.2.0 artifact has no `candidates` key. `from_dict` refuses it rather than falling back to the rules, because
+falling back is what made the omission silent.
