@@ -260,9 +260,20 @@ tierbook assign --policy policy.json --request-id r1 --candidate box \
     --authorised true --previous obs.json --bounds '{"box":0.90,"api":0.70}' \
     --costs '{"box":0.004,"api":0.012}' --log decisions.jsonl
 
+# the outcome, once one exists: attach it to the decision it belongs to
+tierbook attach-outcome --log decisions.jsonl --request-id r1 --label-state labelled --label true
+
 # SCOPE section 12's criteria over that log
 tierbook accept --policy policy.json --log decisions.jsonl --uncertified-tolerance 0.10
 ```
+
+`attach-outcome` is the one documented way to turn a decision log into a labelled one. It reads the log before
+appending and refuses at that door rather than writing something `accept` would later have to discover was wrong:
+an outcome for a `request_id` the log holds no decision for, or a label that disagrees with one already recorded
+for that `request_id`. It attaches only -- `label_state` and `label` are the caller's own observation, never
+inferred, and nothing here invokes a labeller or reads a family's `label_source`; deciding what a label is
+belongs to `classify_label`. Without it, every criterion that needs a realised label -- `floor_compliance`
+foremost -- stays `unsupported` regardless of how much traffic the log holds.
 
 `accept` takes the same policy the assignment was made under, and reads the accuracy floor and the evidence-age limit
 out of it. Both are available as flags, and using them is weaker: a number typed at a shell prompt is one the artifact
