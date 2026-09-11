@@ -295,3 +295,36 @@ allowed. Two refusals, two audiences, and conflating them would make the longer 
 No test is required for it by this amendment beyond what the enum check naturally gets: the reachability requirement in
 C1's vocabulary test covers "every legal value is reachable", and the three-values test C3 already commissions covers
 the positive side. Stating the wording is what was missing.
+
+## Amendment 2 — four things C1's interface implied and did not state, all reported rather than guessed
+
+C1's test author found each of these and deliberately left the corresponding case untested rather than pinning a
+behaviour the contract had not committed to. Three of the four are defects I introduced in the interface.
+
+**A2.1 — `"none"` is removed from `BOUND_CORRECTIONS`.** The interface listed it as a member and separately said
+`corrected_over = ()` is legal and is what this release produces. That is two spellings for one meaning, which is the
+duplication class this whole release is about, in the vocabulary the release adds. The tuple names **terms that can be
+corrected over**, and "none" is not a term. `()` is the only spelling for no correction, and `("none",)` is refused as
+an out-of-vocabulary value like any other string.
+
+**A2.2 — the producer is named.** `EXCLUSION_REASONS`' vocabulary test drives named producers — `admissible`,
+`clears_floor`, `_why_not`, `draw`. `BoundProvenance` had none: the interface named `record.admissible` as the consumer
+that refuses a bad claim and no function that constructs one. The producer is **`serve.candidate_set`**, which is where
+a `Candidate` acquires its bound today, and the vocabulary test drives it. Without a named producer the test can only
+check the consumer, and a second construction site added later would be unwatched — which is C7's defect in the
+vocabulary this entry adds.
+
+**A2.3 — the refusal has a reason and it is in the exclusion vocabulary.** `admissible` returns a reason that lands in
+`Candidate.excluded_because`, so a refusal with no named reason is unassignable. `EXCLUSION_REASONS` gains
+**`unsupported_correction`**: the bound claims a correction over a term the mechanism did not perform. It is distinct
+from `no_bound`, which says there is no bound at all, and from `below_floor`, which is about the number rather than the
+claim.
+
+**A2.4 — a bound and its provenance travel together, and the alternative is unrepresentable.** The interface defined
+`bound_provenance = None` as "no bound" and said nothing about a numeric `bound` carrying no provenance. That
+combination **is the pre-C1 state** — a number with no statement of what produced it — so leaving it constructible would
+leave the defect representable while adding the vocabulary that was supposed to end it.
+
+`Candidate.__post_init__` refuses a numeric `bound` with `bound_provenance=None`, and refuses a `bound_provenance` with
+`bound=None`, each naming both fields. That is the move `/review-contract` calls making the omission unrepresentable
+rather than watched: forgetting the provenance becomes a failure at construction instead of an absence nothing reads.
