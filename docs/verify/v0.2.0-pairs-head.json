@@ -1,0 +1,63 @@
+[
+  {
+    "entry": "C8",
+    "observation": "loads to migrate the real v0.1.0 ledger",
+    "value": 2
+  },
+  {
+    "entry": "C6",
+    "observation": "the falsifier on a 617-day and a 9-day candidate",
+    "value": {
+      "violations": 1,
+      "named": [
+        "fresh_9"
+      ],
+      "shape": "age derived per candidate"
+    }
+  },
+  {
+    "entry": "C10",
+    "observation": "share reported vs share diverted at rate 0.05",
+    "value": {
+      "reason_says_explored": 0.0552,
+      "actually_diverted": 0.0552
+    }
+  },
+  {
+    "entry": "C11",
+    "observation": "floor_compliance over a log with dropped rows",
+    "value": {
+      "decisions": 40,
+      "dropped": 15,
+      "verdict": "unsupported",
+      "rate": null
+    }
+  },
+  {
+    "entry": "C12",
+    "observation": "keys a read did not understand, as reported",
+    "value": {
+      "ignored_keys": {
+        "evidence_ref": 1,
+        "stratum": 1
+      }
+    }
+  },
+  {
+    "entry": "C5",
+    "observation": "exploration_cost on a version-mixed log, 25% budget",
+    "value": {
+      "verdict": "unsupported",
+      "share": null
+    }
+  },
+  {
+    "entry": "C9",
+    "observation": "claims the artifact makes that are already shipped",
+    "value": {
+      "claims": 3,
+      "false_because_shipped": [],
+      "has_probes": true
+    }
+  }
+]

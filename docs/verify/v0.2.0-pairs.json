@@ -1,0 +1,95 @@
+[
+  {
+    "entry": "C5",
+    "observation": "exploration_cost on a version-mixed log, 25% budget",
+    "reproduce": {
+      "verdict": "pass",
+      "share": 0.2
+    },
+    "verify": {
+      "verdict": "unsupported",
+      "share": null
+    }
+  },
+  {
+    "entry": "C6",
+    "observation": "the falsifier on a 617-day and a 9-day candidate",
+    "reproduce": {
+      "scalar_400": 0,
+      "scalar_5": 2,
+      "shape": "one scalar for all candidates"
+    },
+    "verify": {
+      "violations": 1,
+      "named": [
+        "fresh_9"
+      ],
+      "shape": "age derived per candidate"
+    }
+  },
+  {
+    "entry": "C8",
+    "observation": "loads to migrate the real v0.1.0 ledger",
+    "reproduce": 6,
+    "verify": 2
+  },
+  {
+    "entry": "C9",
+    "observation": "claims the artifact makes that are already shipped",
+    "reproduce": {
+      "claims": 6,
+      "false_because_shipped": [
+        "a collector",
+        "logged selection probabilities",
+        "exploration or shadow allocation"
+      ],
+      "has_probes": false
+    },
+    "verify": {
+      "claims": 3,
+      "false_because_shipped": [],
+      "has_probes": true
+    }
+  },
+  {
+    "entry": "C10",
+    "observation": "share reported vs share diverted at rate 0.05",
+    "reproduce": {
+      "reason_says_explored": 1.0,
+      "actually_diverted": 0.0552
+    },
+    "verify": {
+      "reason_says_explored": 0.0552,
+      "actually_diverted": 0.0552
+    }
+  },
+  {
+    "entry": "C11",
+    "observation": "floor_compliance over a log with dropped rows",
+    "reproduce": {
+      "decisions": 40,
+      "dropped": 15,
+      "verdict": "pass",
+      "rate": 1.0
+    },
+    "verify": {
+      "decisions": 40,
+      "dropped": 15,
+      "verdict": "unsupported",
+      "rate": null
+    }
+  },
+  {
+    "entry": "C12",
+    "observation": "keys a read did not understand, as reported",
+    "reproduce": {
+      "ignored_keys": "not reported"
+    },
+    "verify": {
+      "ignored_keys": {
+        "evidence_ref": 1,
+        "stratum": 1
+      }
+    }
+  }
+]

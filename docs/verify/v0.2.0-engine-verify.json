@@ -1,0 +1,166 @@
+{
+  "metrics_url": "http://127.0.0.1:18000/metrics",
+  "model_name": "Qwen/Qwen2.5-0.5B-Instruct",
+  "started_at": 1789078109.5041862,
+  "observe": {
+    "samples": 6,
+    "inflight_readings": [
+      19.0,
+      16.0,
+      23.0,
+      24.0,
+      24.0,
+      23.0
+    ],
+    "distinct_values": [
+      16.0,
+      19.0,
+      23.0,
+      24.0
+    ],
+    "never_read": [
+      {
+        "arrival_rate_per_hour": "a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one"
+      },
+      {
+        "arrival_rate_per_hour": "a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one"
+      }
+    ],
+    "occupancy_varied": true,
+    "occupancy_ever_nonzero": true
+  },
+  "absent_not_defaulted": {
+    "state": {
+      "available:box": true,
+      "metered_authorised": true,
+      "evidence_age_days": -0.077
+    },
+    "not_observed": {
+      "inflight:box": "vllm:num_requests_running is absent from the metrics this endpoint served for {'model_name': 'a-model-not-being-served'}",
+      "arrival_rate_per_hour": "vllm:request_success_total is absent from the metrics this endpoint served for {'model_name': 'a-model-not-being-served'}"
+    },
+    "complete": false
+  },
+  "compiled_parameters": {
+    "floor": 0.8,
+    "max_evidence_age_days": 90,
+    "staleness_limit_days": 21.0,
+    "exploration_rate": 0.05
+  },
+  "documented_path": [
+    {
+      "step": "validate",
+      "argv": [
+        "validate",
+        "--registry",
+        "/Users/akazawt/tierbook/examples/ledger/tiers"
+      ],
+      "rc": 0,
+      "output_tail": "3 records, registry version 0d666c63b504286c\n  api-strong-a / agentic-coding: schema-valid but cannot be certified -- missing ['paired_vs_reference']\nevery record can be read; see any notes above for what they cannot support\n"
+    },
+    {
+      "step": "compile",
+      "argv": [
+        "compile",
+        "--config",
+        "/Users/akazawt/tierbook/examples/ledger/candidates.json",
+        "--registry",
+        "/Users/akazawt/tierbook/examples/ledger/tiers",
+        "--out",
+        "/Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/table.json",
+        "--margin",
+        "0.25"
+      ],
+      "rc": 0,
+      "output_tail": "rbook-v020-verify/results/documented-path/table.json (format 1, registry 0d666c63b504286c, objective cost, margin 0.25)\n  agentic-coding: cannot_reject -> api-strong-a (certified=False), can_reject -> self-hosted-a/api-strong-a\n    evidence: 20 items, nested=True, crossovers=0\n    cannot_reject  status=provisional  nothing was certified on the calibration fold either; the reference tier carries no cheaper claim to validate\n    can_reject     status=provisional  no held-out fold has been measured for this family, so the calibration fold's own choice is all there is\n    WARNING: 20 items is below --min-items=100. This project compiled a wrong answer from 20.\n  tool-agent-user-retail: cannot_reject -> self-hosted-a (certified=True), can_reject -> self-hosted-a\n    evidence: 20 items, nested=True, crossovers=0\n    cannot_reject  status=provisional  no held-out fold has been measured for this family, so the calibration fold's own choice is all there is\n    can_reject     status=provisional  no held-out fold has been measured for this family, so the calibration fold's own choice is all there is\n    WARNING: 20 items is below --min-items=100. This project compiled a wrong answer from 20.\n"
+    },
+    {
+      "step": "observe",
+      "argv": [
+        "observe",
+        "--candidate",
+        "box",
+        "--metrics-url",
+        "http://127.0.0.1:18000/metrics",
+        "--model-name",
+        "Qwen/Qwen2.5-0.5B-Instruct",
+        "--authorised",
+        "true",
+        "--measured-on",
+        "2026-09-11",
+        "--out",
+        "/Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/obs1.json"
+      ],
+      "rc": 3,
+      "output_tail": "{\n  \"state\": {\n    \"available:box\": true,\n    \"inflight:box\": 18.0,\n    \"metered_authorised\": true,\n    \"evidence_age_days\": -0.077\n  },\n  \"readings\": {\n    \"available:box\": {\n      \"value\": true,\n      \"as_of\": 1789078126.32229,\n      \"source\": \"http://127.0.0.1:18000/metrics\"\n    },\n    \"inflight:box\": {\n      \"value\": 18.0,\n      \"as_of\": 1789078126.323167,\n      \"source\": \"http://127.0.0.1:18000/metrics (vllm:num_requests_running+vllm:num_requests_waiting)\"\n    },\n    \"counter\": {\n      \"value\": 15939.0,\n      \"as_of\": 1789078126.323591,\n      \"source\": \"http://127.0.0.1:18000/metrics (vllm:request_success_total)\"\n    },\n    \"metered_authorised\": {\n      \"value\": true,\n      \"as_of\": 1789078126.323596,\n      \"source\": \"supplied by the caller\"\n    },\n    \"evidence_age_days\": {\n      \"value\": -0.077,\n      \"as_of\": 1789078126.323623,\n      \"source\": \"policy measured_on=2026-09-11\"\n    }\n  },\n  \"not_observed\": {\n    \"arrival_rate_per_hour\": \"a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one\"\n  },\n  \"spread_s\": 0.001,\n  \"complete\": false\n}\n"
+    },
+    {
+      "step": "observe again for a rate",
+      "argv": [
+        "observe",
+        "--candidate",
+        "box",
+        "--metrics-url",
+        "http://127.0.0.1:18000/metrics",
+        "--model-name",
+        "Qwen/Qwen2.5-0.5B-Instruct",
+        "--authorised",
+        "true",
+        "--measured-on",
+        "2026-09-11",
+        "--previous",
+        "/Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/obs1.json",
+        "--out",
+        "/Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/obs2.json"
+      ],
+      "rc": 0,
+      "output_tail": "\"available:box\": true,\n    \"inflight:box\": 16.0,\n    \"arrival_rate_per_hour\": 449512.7823336353,\n    \"metered_authorised\": true,\n    \"evidence_age_days\": -0.077\n  },\n  \"readings\": {\n    \"available:box\": {\n      \"value\": true,\n      \"as_of\": 1789078129.7279081,\n      \"source\": \"http://127.0.0.1:18000/metrics\"\n    },\n    \"inflight:box\": {\n      \"value\": 16.0,\n      \"as_of\": 1789078129.728822,\n      \"source\": \"http://127.0.0.1:18000/metrics (vllm:num_requests_running+vllm:num_requests_waiting)\"\n    },\n    \"counter\": {\n      \"value\": 16356.0,\n      \"as_of\": 1789078129.729227,\n      \"source\": \"http://127.0.0.1:18000/metrics (vllm:request_success_total)\"\n    },\n    \"arrival_rate_per_hour\": {\n      \"value\": 449512.7823336353,\n      \"as_of\": 1789078129.729231,\n      \"source\": \"http://127.0.0.1:18000/metrics (vllm:request_success_total, differenced)\"\n    },\n    \"metered_authorised\": {\n      \"value\": true,\n      \"as_of\": 1789078129.7292328,\n      \"source\": \"supplied by the caller\"\n    },\n    \"evidence_age_days\": {\n      \"value\": -0.077,\n      \"as_of\": 1789078129.729256,\n      \"source\": \"policy measured_on=2026-09-11\"\n    }\n  },\n  \"not_observed\": {},\n  \"spread_s\": 0.001,\n  \"complete\": true\n}\n"
+    }
+  ],
+  "route_once_live": {
+    "decisions": 60,
+    "diverted": 0,
+    "diverted_share": 0.0,
+    "declared_rate": 0.05,
+    "distinct_propensities": [
+      1.0
+    ],
+    "distinct_reasons": [
+      "no_eligible_arm"
+    ],
+    "certified_count": 0
+  },
+  "label_means": "the engine returned a non-empty completion for this request; NOT task success, which needs an oracle this project does not ship",
+  "labelled": {
+    "count": 60,
+    "empty_completions": 0
+  },
+  "accept": {
+    "rc": 1,
+    "output_tail": "ion is accepted only when it was evaluated and held. `unsupported` is neither a pass nor a failure: it names a measurement that has not been made, and most of section 12 needs traffic, a randomised design or an injected change rather than more of the same log\"\n  },\n  \"floor\": 0.8,\n  \"floor_provenance\": \"read from /Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/policy.json's compiled parameters\",\n  \"max_age_days\": 90,\n  \"max_age_days_provenance\": \"read from /Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/policy.json's compiled parameters\",\n  \"ignored_keys\": {}\n}\n"
+  },
+  "accept_report": {
+    "summary": {
+      "pass": 2,
+      "fail": 1,
+      "unsupported": 6
+    },
+    "floor": 0.8,
+    "floor_provenance": "read from /Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/policy.json's compiled parameters",
+    "max_age_days": 90,
+    "max_age_days_provenance": "read from /Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/policy.json's compiled parameters",
+    "ignored_keys": {},
+    "exploration_cost": {
+      "criterion": "exploration_cost",
+      "verdict": "pass",
+      "detail": "the exploration share 0.0% is within the budgeted 25.0%",
+      "numbers": {
+        "decisions": 60,
+        "exploration_share": 0.0,
+        "budget": 0.25
+      }
+    }
+  },
+  "finished_at": 1789078147.4704058,
+  "wall_seconds": 38.0
+}

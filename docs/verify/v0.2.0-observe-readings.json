@@ -1,0 +1,74 @@
+[
+  {
+    "at": 1789078109.581235,
+    "state": {
+      "available:box": true,
+      "inflight:box": 19.0,
+      "metered_authorised": true,
+      "evidence_age_days": -0.077
+    },
+    "not_observed": {
+      "arrival_rate_per_hour": "a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one"
+    }
+  },
+  {
+    "at": 1789078112.6469,
+    "state": {
+      "available:box": true,
+      "inflight:box": 16.0,
+      "metered_authorised": true,
+      "evidence_age_days": -0.077
+    },
+    "not_observed": {
+      "arrival_rate_per_hour": "a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one"
+    }
+  },
+  {
+    "at": 1789078115.71853,
+    "state": {
+      "available:box": true,
+      "inflight:box": 23.0,
+      "metered_authorised": true,
+      "evidence_age_days": -0.077
+    },
+    "not_observed": {
+      "arrival_rate_per_hour": "a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one"
+    }
+  },
+  {
+    "at": 1789078118.791116,
+    "state": {
+      "available:box": true,
+      "inflight:box": 24.0,
+      "metered_authorised": true,
+      "evidence_age_days": -0.077
+    },
+    "not_observed": {
+      "arrival_rate_per_hour": "a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one"
+    }
+  },
+  {
+    "at": 1789078121.848922,
+    "state": {
+      "available:box": true,
+      "inflight:box": 24.0,
+      "metered_authorised": true,
+      "evidence_age_days": -0.077
+    },
+    "not_observed": {
+      "arrival_rate_per_hour": "a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one"
+    }
+  },
+  {
+    "at": 1789078124.919038,
+    "state": {
+      "available:box": true,
+      "inflight:box": 23.0,
+      "metered_authorised": true,
+      "evidence_age_days": -0.077
+    },
+    "not_observed": {
+      "arrival_rate_per_hour": "a rate is a difference of two counter readings and this is the first; pass the previous reading as `previous` to obtain one"
+    }
+  }
+]

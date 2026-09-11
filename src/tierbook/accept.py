@@ -157,9 +157,21 @@ def clopper_pearson_lower(n: int, k: int, alpha: float) -> float:
     inverse is monotone. `p` such that P(X >= k | p) = alpha, which is the standard construction; k == 0 has no
     positive lower bound.
     """
+    # DEFECT these two prevent, measured: the boundary below is `k >= n`, which is exact for k == n and was
+    # applied to k > n as well -- so `cp(n=16, k=20)`, twenty successes in sixteen trials, returned 0.8293. That
+    # is not a boundary, it is a contradiction, and the value is HIGH, so a transposed argument pair produced a
+    # bound that flattered the candidate instead of a refusal. The true bound for that cohort is 0.4922, and the
+    # transposition happened while reading whether a tier cleared a 0.80 floor.
+    if n <= 0:
+        raise ValueError(f"a lower bound needs at least one trial; n={n!r}. `alpha ** (1/n)` below would divide "
+                         f"by zero, which is a better failure than a wrong answer but not a stated one")
+    if k > n:
+        raise ValueError(f"{k} successes in {n} trials is not a measurement. Check the argument order: this "
+                         f"function takes (n, k, alpha) -- trials first -- and the mistake returns a HIGH bound "
+                         f"rather than an obviously wrong one, so it reads as a candidate clearing its floor")
     if k <= 0:
         return 0.0
-    if k >= n:
+    if k == n:
         return alpha ** (1.0 / n)
     lo, hi = 0.0, 1.0
     for _ in range(200):

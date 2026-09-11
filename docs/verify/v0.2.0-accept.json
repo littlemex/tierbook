@@ -1,0 +1,104 @@
+{
+ "verdicts": [
+  {
+   "criterion": "floor_compliance",
+   "verdict": "unsupported",
+   "detail": "certified traffic: 0 decisions and none of them labelled, so no realised rate exists. This needs the task's own oracle to have run and its verdict attached; all served traffic: the 95% lower bound on the realised rate is 95.1% over 60 labelled decisions, which clears the floor 80.0%",
+   "numbers": {
+    "labelled": 0,
+    "successes": 0,
+    "rate": null,
+    "floor": 0.8,
+    "significance": 0.05,
+    "certified": 0,
+    "unlabelled_certified": 0,
+    "verdict": "unsupported",
+    "served": 60,
+    "served_labelled": 60,
+    "served_successes": 60,
+    "served_rate": 1.0,
+    "unlabelled_served": 0,
+    "served_verdict": "pass",
+    "served_p_below_floor": 1.0,
+    "served_lower_bound": 0.9513
+   }
+  },
+  {
+   "criterion": "bound_calibration",
+   "verdict": "unsupported",
+   "detail": "this is a property of the confidence procedure, not of the log. It needs the pre-registered resampling or simulation where the estimand is known, run against the procedure -- no amount of routed traffic substitutes, because in traffic the estimand is what is unknown",
+   "numbers": {}
+  },
+  {
+   "criterion": "no_false_certification",
+   "verdict": "pass",
+   "detail": "every certified assignment's candidate was admissible under section 2",
+   "numbers": {
+    "decisions": 60,
+    "certified": 0
+   }
+  },
+  {
+   "criterion": "default_is_not_a_hiding_place",
+   "verdict": "fail",
+   "detail": "the uncertified share 100.0% exceeds the declared tolerance 10.0%",
+   "numbers": {
+    "decisions": 60,
+    "uncertified_share": 1.0,
+    "tolerance": 0.1
+   }
+  },
+  {
+   "criterion": "slo",
+   "verdict": "unsupported",
+   "detail": "no latency limit or tolerance was declared. SCOPE section 1 says performance is not what is being optimised and its treatment is explicitly unsettled, so this criterion applies only where an operator imposed a constraint",
+   "numbers": {
+    "latencies_recorded": 60
+   }
+  },
+  {
+   "criterion": "spend_regret",
+   "verdict": "unsupported",
+   "detail": "an off-policy estimate with an interval, by the method section 9 declares, and no estimator for it exists yet -- that is the blocker, not the log. Amendment 9 corrects an earlier version of this message, written a release before C3 shipped: a family with no declared exploration_rate still gives every decision propensity 1, under which the counterfactual arm has no data and the estimate stays unidentified, so that dependency is real and unchanged. But where a family DOES declare a rate, C3's randomised draw already makes selection_probability vary -- the prerequisite this criterion needed is now met for that traffic, and what remains missing is the estimator and its confidence interval, not exploration itself",
+   "numbers": {}
+  },
+  {
+   "criterion": "exploration_cost",
+   "verdict": "pass",
+   "detail": "the exploration share 0.0% is within the budgeted 25.0%",
+   "numbers": {
+    "decisions": 60,
+    "exploration_share": 0.0,
+    "budget": 0.25
+   }
+  },
+  {
+   "criterion": "adaptation",
+   "verdict": "unsupported",
+   "detail": "an injected change -- a price change, a model release, an agent swap, a capacity loss -- and then a check that the new candidate enters shadow evaluation within the adaptation window and is admitted once its bound clears, WITHOUT a code change. It is an experiment on the mechanism, so a log of ordinary traffic cannot contain it",
+   "numbers": {}
+  },
+  {
+   "criterion": "genericity_and_usefulness",
+   "verdict": "unsupported",
+   "detail": "a held-out environment and a candidate introduced after implementation freeze, reusing the incumbent policy file except environment-owned rows. Also an experiment rather than a reading, and the criterion's second half -- a certified share above its stated minimum while a feasible admissible candidate exists -- needs the acceptance oracle that names one",
+   "numbers": {}
+  }
+ ],
+ "summary": {
+  "counts": {
+   "pass": 2,
+   "fail": 1,
+   "unsupported": 6
+  },
+  "any_failure": true,
+  "evaluated": 3,
+  "of": 9,
+  "note": "a criterion is accepted only when it was evaluated and held. `unsupported` is neither a pass nor a failure: it names a measurement that has not been made, and most of section 12 needs traffic, a randomised design or an injected change rather than more of the same log"
+ },
+ "floor": 0.8,
+ "floor_provenance": "read from /Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/policy.json's compiled parameters",
+ "max_age_days": 90,
+ "max_age_days_provenance": "read from /Users/akazawt/tmp/tierbook-v020-verify/results/documented-path/policy.json's compiled parameters",
+ "ignored_keys": {}
+}
