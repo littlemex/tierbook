@@ -169,6 +169,39 @@ produces exactly the varying propensities the message said were missing. The mes
 actual blocker, and says exploration is available and is what makes the estimate identifiable once a family declares
 a rate -- found not by reviewing the message, but by a worker reporting a guard three layers away.
 
+### Found by verifying against a real engine
+
+Phase 5 stood up one `g5.xlarge` for this release, ran the mechanism against a live vLLM under a 20-way load, and
+destroyed the instance. Artifacts and the run's full configuration are in `docs/verify/`.
+
+**`observe` reads occupancy rather than returning a constant, established over 400 samples**: `inflight` took 19
+distinct values from 2 to 20. One reading could not have shown that -- a constant is indistinguishable from a
+measurement until it moves. Asked for a model the engine is not serving, it reports the variable absent with the
+metric and label set that were missing, and reports itself incomplete, so nothing is defaulted to a zero that would
+read as an idle engine.
+
+**A bound function accepted more successes than trials and answered confidently.**
+`accept.clopper_pearson_lower(n, k, alpha)` had the boundary `if k >= n`, exact for `k == n` and applied to `k > n`
+too, so twenty successes in sixteen trials returned `0.8293`. The value is *high*, so a transposed argument pair
+produced a bound that flattered the candidate rather than a refusal -- and it happened while reading whether a tier
+cleared a 0.80 floor, where the true bound was `0.4922`. It raises now, naming both numbers and the argument order.
+
+**Exploration's live behaviour is NOT verified, and the reason is a limitation nobody had written down.** Over 400
+live decisions the draw returned `no_eligible_arm` every time against a declared rate of 0.05. `serve.candidate_set`
+builds the set from the **policy's own rules and default**, and a policy that certified nothing has no rules -- so
+exploration can only reach a candidate the policy already names. Whether that is right is a design question rather
+than a defect: routing paid traffic into a candidate a held-out fold refused is what the compiler's refusal exists to
+prevent. But it means the shipped example cannot exercise the draw. The draw's arithmetic is verified hermetically
+instead, over 5,000 seeds.
+
+**A caller can still assert a bound the evidence does not support.** `serve.route_once` takes `bounds` from its
+caller while the floor it is compared against lives in the artifact, so the two halves of one comparison have
+different homes. A caller claiming `0.99` for a tier the ledger measures at 70% gets `no_false_certification: pass`,
+because the falsifier computes admissibility from the caller's own number. This is **not fixed in this release**. The
+artifact does not carry the absolute lower bound SCOPE section 2 clause 1 names -- only a paired difference against a
+reference tier -- so closing it changes what a compiled policy claims rather than where a number is read from. That
+is a design change and it goes to the next release's first phase with this observation as its input.
+
 ### Known gaps, named rather than implied
 
 `decide.MISSING_FOR_A_CLOSED_LOOP` now lists **three**, down from six: anytime-valid bounds, change-point detection,
@@ -182,9 +215,9 @@ declaring one is not calling one, and exploration on top of an unlabelled log pr
 can learn from. Spend regret's blocker is now the estimator, not the data, for a family that declares a rate; a family
 that declares none still has propensity 1 for every decision, which is the older problem and not a lesser one.
 
-The full suite passes at **1072 passed, 3 skipped** in `tests/` and **302 passed** in `harness/tests`, identically on
+The full suite passes at **1077 passed, 3 skipped** in `tests/` and **302 passed** in `harness/tests`, identically on
 Python 3.9.6 and 3.11.15 -- checked directly on both interpreters. The count was 1065 while C12 was still being
-written, and this entry carried that number for an hour: a changelog written alongside the work it describes is a
+written and 1072 before phase 5 added C14's guard, and this entry carried each of those in turn: a changelog written alongside the work it describes is a
 measurement like any other, and it goes stale the same way. That equality is asserted rather than assumed because it was false earlier in this release for exactly
 the reason above: four tests compared against an interpreter clock epoch the language does not define, and passed on
 one minor version while failing on the other from the same commit.
