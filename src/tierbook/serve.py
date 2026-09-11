@@ -51,8 +51,22 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
                   evidence_age_days: float | None = None, max_age_days: float | None = None) -> list:
     """The candidate set for the record, including the chosen one and why each other was not.
 
-    Every candidate the policy can name is included, because section 9 asks for the set with the reason each was
-    excluded, and a set containing only the winner cannot support an exclusion analysis.
+    Every candidate the LEDGER can name is included, because section 9 asks for the set with the reason each
+    was excluded, and a set containing only the winner cannot support an exclusion analysis.
+
+    **CONTRACT v0.3.0 C6: membership comes from `policy.candidates`, not from `policy.rules`.** A candidate
+    with no rule used to be absent from this set entirely -- invisible to exploration, never labelled, its
+    evidence never refreshed -- because `policy.rules` only ever names the arm a compile actually chose (and
+    its tail), never every candidate the ledger has an outcome for. `policy.candidates` (`policy.candidates_for`,
+    written into the artifact by `compile_policy`) is that wider set: a candidate the ledger cannot bound is a
+    key mapped to `None` rather than a missing key, which is what makes it a candidate that EXISTS with no
+    bound -- excluded for `no_bound` below -- rather than a candidate nobody considered. Each member's own
+    `Candidate.bound` on the record is still whatever `bounds` supplies for it (this function's own,
+    longer-standing contract, unchanged here); `policy.candidates`'s values are consulted only for which ids
+    belong in the set, never substituted in as a second source for the bound itself. `policy.candidates_for`'s
+    own numbers say what the ledger itself could bound at compile time, which is not the same claim as a
+    per-request bound, and v0.3.0 does not wire the second into the first -- see CONTRACT C6's own "obligation
+    carried forward": the absolute bound is still typed by an operator.
 
     **The reason is derived, not asserted.** An earlier version wrote `below_floor` for any candidate it could not
     otherwise classify, without a floor to compare against -- and four of the eight reasons were unreachable from this
@@ -70,10 +84,9 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
     bounds = bounds or {}
     costs = costs or {}
     available = available or {}
-    named = []
-    for rule in policy.rules:
-        named.extend(rule.assign)
-    named.extend(policy.default)
+    # CONTRACT v0.3.0 C6: the ledger's own candidate set, not `policy.rules` -- see this function's own
+    # docstring for why deriving from the rules left a ruleless candidate invisible.
+    named = list(policy.candidates)
     seen, out = set(), []
     for cid in named:
         if cid in seen:
@@ -89,9 +102,16 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
                                              evidence_age_days=evidence_age_days, max_age_days=max_age_days)
         out.append(cand)
     if chosen not in seen:  # noqa: SIM102 - see the comment below
-        # The policy chose something it does not name. Recorded rather than raised: the record's own invariant will
-        # refuse it, and refusing here would lose the evidence of how it happened.
+        # The policy chose something it does not name -- CONTRACT v0.3.0 C6 makes this the ordinary shape of a
+        # candidate the ledger has never recorded an outcome for (SCOPE section 6: a new candidate enters
+        # through shadow or epsilon-rate evaluation before it has one), not only the pre-C6 escape hatch this
+        # branch was written for. Recorded rather than raised: the record's own invariant will refuse it, and
+        # refusing here would lose the evidence of how it happened.
         out.append(Candidate(id=chosen, excluded_because="chosen", bound=bounds.get(chosen),
+                             # Mirrors the main loop above: a bound with no provenance is unrepresentable
+                             # (CONTRACT amendment 3, C1), and this branch supplying one without the other used
+                             # to raise `Incomplete` for exactly the caller this docstring says is legitimate.
+                             bound_provenance=bound_provenance if chosen in bounds else None,
                              cost_usd=costs.get(chosen), evidence_as_of=evidence_as_of))
     return out
 
