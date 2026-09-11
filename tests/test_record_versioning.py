@@ -41,7 +41,8 @@ def row(**kw):
         "family": "agentic-coding", "request_id": "r1", "feature_vector_version": "fv1", "state_ref": "obs:a",
         "candidates": [cand(), cand("api", "below_floor", 0.70, 0.012)], "chosen": "box",
         "selection_probability": 1.0, "exploration": False, "certified": True,
-        "policy_version": "p1", "mechanism_version": "0.1.0", "agent": "opencode", "model": "m",
+        "policy_version": "p1", "policy_digest": "0123456789abcdef",
+        "mechanism_version": "0.1.0", "agent": "opencode", "model": "m",
         "endpoint": "http://e", "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": 1000.0,
         "exploration_reason": "no_mechanism", "eligible_set": [],
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
@@ -84,10 +85,9 @@ def real_v010_row() -> dict:
 # --- the version number itself -----------------------------------------------------------------------
 
 
-def test_schema_version_is_2():
-    """Catches C1 shipping with the wrong constant -- every other test in this file is keyed against it, so a wrong
-    value here would make them all pass or fail for the wrong reason."""
-    assert rec.SCHEMA_VERSION == 2
+# The version lock that lived here asserted 2. C2 bumps the constant to 3 for `policy_digest`, and the lock moved
+# with the entry that changed it: `test_policy_provenance.py::test_schema_version_becomes_3`. One lock, beside the
+# reason the number is what it is.
 
 
 # --- stamped by the writer, refused from a caller -----------------------------------------------------

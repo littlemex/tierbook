@@ -244,6 +244,7 @@ def test_an_exploration_reason_outside_the_vocabulary_is_refused():
             candidates=[cand(id="box", excluded_because="chosen"),
                         cand(id="api", excluded_because="below_floor", bound=0.70)], chosen="box",
             selection_probability=1.0, exploration=False, certified=False, policy_version="p",
+            policy_digest="0123456789abcdef",
             mechanism_version="0.2.0", agent="a", model="m", endpoint="http://e",
             gateway_quote_usd=0.004, gateway_authorised=True,
             exploration_reason="probably explored", eligible_set=[])

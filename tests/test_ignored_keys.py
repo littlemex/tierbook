@@ -44,6 +44,11 @@ def row(**kw):
         "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": 1_780_000_000.0,
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
         "schema_version": rec.SCHEMA_VERSION, "exploration_reason": "no_mechanism", "eligible_set": [],
+        # This fixture labels itself with the LIVE constant, so it must carry every field that version requires.
+        # C2 made `policy_digest` one of them, and a row claiming to be current while omitting a current field is
+        # `Incomplete` by SEAMS S4 -- which is the rule working: the bump forces this decision instead of letting
+        # the missing field pass as an ignorable one.
+        "policy_digest": "0123456789abcdef",
     }
     base.update(kw)
     return base

@@ -6,6 +6,7 @@ that was not observed.
 """
 from __future__ import annotations
 
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -28,7 +29,7 @@ def policy(validated=True, domain=None):
     """A two-rule policy: the box below a capacity bound, the API above it. `validated` (CONTRACT C1): the
     non-inferiority status, renamed from `certified` -- this keyword names the same judgment it always did,
     only the word changed."""
-    return dc.Policy(
+    pol = dc.Policy(
         family="agentic-coding",
         rules=(
             dc.Rule(guards=(dc.Guard(var="inflight:box", op="<", threshold=8.0,
@@ -43,6 +44,10 @@ def policy(validated=True, domain=None):
         validated=validated,
         note="a fixture",
     )
+    # CONTRACT C2: a policy built by hand carries no digest until stamped -- the same stamp `compile_policy`
+    # applies -- so `route_once` (whose `policy_version` default now reads the policy's own digest) has one to
+    # confirm against.
+    return dataclasses.replace(pol, policy_digest=dc.policy_digest(pol))
 
 
 def obs(**state):
@@ -57,7 +62,7 @@ def obs(**state):
 
 def route(o, pol=None, **kw):
     base = dict(policy=pol or policy(), observation=o, request_id="r1", feature_vector_version="fv1",
-                policy_version="p1", mechanism_version="0.1.0", agent="opencode", model="m",
+                mechanism_version="0.1.0", agent="opencode", model="m",
                 endpoint="http://e", gateway_quote_usd=0.004, bounds=BOUNDS, costs=COSTS,
                 evidence_as_of="2026-09-01", floor=0.80,
                 bound_provenance=rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95))
@@ -214,6 +219,7 @@ def test_the_falsifier_catches_a_certified_row_below_the_floor_from_any_writer(t
         candidates=[rec.Candidate(id="box", excluded_because="chosen", bound=0.10, cost_usd=0.004,
                                   evidence_as_of="2026-09-01", bound_provenance=prov)],
         chosen="box", selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
+        policy_digest="0123456789abcdef",
         mechanism_version="0.1.0", agent="opencode", model="m", endpoint="http://e", gateway_quote_usd=0.004,
         gateway_authorised=True, decided_at=1000.0, exploration_reason="no_mechanism", eligible_set=[]))
     decisions, _ = log.read()

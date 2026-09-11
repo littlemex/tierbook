@@ -119,8 +119,31 @@ def _why_not(cand: Candidate, cid: str, *, costs: dict, floor: float | None, aut
     return "not_evaluated" if ok else why
 
 
+def _confirmed_policy_version(policy: dc.Policy, supplied: str | None) -> str:
+    """`policy_version` on the record, confirmed against the policy's own digest by `decide.parameter`'s rule
+    (CONTRACT C2): `supplied=None` reads the digest and returns it; a `supplied` value that agrees is handed
+    back; one that disagrees is refused, naming both, because a caller that could prefer its own label over the
+    artifact's own hash is a second, competing home for the fact this digest exists to answer -- the same
+    defect `parameter` already refuses for `floor` and the other compiled numbers.
+    """
+    digest = policy.policy_digest
+    if supplied is None:
+        return digest
+    # `parameter` distinguishes two refusals and so does this: an artifact that recorded NOTHING cannot confirm a
+    # supplied value, and an artifact that recorded a DIFFERENT value contradicts it. Collapsing both into "does
+    # not match ''" reports an absence as a competing value, which is the shape of claim this release is closing.
+    if not digest:
+        raise ValueError(f"policy_version was supplied as {supplied!r}, but this policy carries no digest: an "
+                         f"artifact that did not record one cannot confirm a supplied version. A policy from "
+                         f"compile_policy carries its own; one built by hand has nothing to check against")
+    if supplied != digest:
+        raise ValueError(f"policy_version supplied as {supplied!r} does not match {digest!r}, this policy's "
+                         f"own digest. Refusing rather than preferring either")
+    return supplied
+
+
 def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: str,
-               feature_vector_version: str, policy_version: str, mechanism_version: str,
+               feature_vector_version: str, policy_version: str | None = None, mechanism_version: str,
                agent: str, model: str, endpoint: str, gateway_quote_usd: float | None,
                bounds: dict | None = None, costs: dict | None = None, evidence_as_of: str = "",
                bound_provenance: BoundProvenance | None = None, floor: float | None = None,
@@ -135,11 +158,20 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
     Returns the raw decision from `decide` and the record that was written, because the two say different things: the
     first carries the gaps, the second carries what a later claim will be computed from.
 
+    CONTRACT C2: `policy_version` is left `None` by a caller with nothing to add, and this reads `policy.policy_digest`
+    for it -- the compiled artifact's own content hash, the fact `Decision.policy_digest` also carries. A caller that
+    DOES supply a value is checked against the digest through `_confirmed_policy_version` rather than trusted outright,
+    by `decide.parameter`'s rule: a value that disagrees is refused, naming both, because a value the mechanism can
+    derive is not a value a caller supplies.
+
     `rng` is a parameter rather than a module-level generator (CONTRACT constraint), so a caller can seed one run
     and get a reproducible draw. Left absent, a fresh `random.Random()` is used -- harmless even then, because
     `explore.draw` never touches it when `exploration_rate` is `None` or `0`: the "rate_zero" branch returns
     before any random number is drawn.
     """
+    # CONTRACT C2: resolved before anything else runs, so a mismatched `policy_version` is refused before this
+    # function does any work a caller would have to notice was wasted.
+    resolved_policy_version = _confirmed_policy_version(policy, policy_version)
     got = dc.decide(policy, observation.state)
     deterministic = got["assign"][0]
     authorised = bool(observation.state.get("metered_authorised", False))
@@ -232,7 +264,10 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
         exploration_reason=exploration_reason,
         eligible_set=eligible_ids,
         certified=certified,
-        policy_version=policy_version,
+        policy_version=resolved_policy_version,
+        # CONTRACT C2: the policy's own digest, read once above and never recomputed here -- the same value
+        # `resolved_policy_version` was just confirmed against, so the two fields cannot disagree by construction.
+        policy_digest=policy.policy_digest,
         mechanism_version=mechanism_version,
         agent=agent,
         model=model,

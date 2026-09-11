@@ -108,6 +108,7 @@ def test_the_reproduction_40_successes_15_future_schema_failures(tmp_path):
                                     bound_provenance=rec.BoundProvenance(
                                         estimator="clopper_pearson_fixed_sample", confidence=0.95))],
             chosen="box", selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
+            policy_digest="0123456789abcdef",
             mechanism_version="0.2.0", agent="opencode", model="m", endpoint="http://e",
             gateway_quote_usd=0.004, gateway_authorised=True,
             exploration_reason="no_mechanism", eligible_set=[]))
@@ -158,6 +159,7 @@ def test_truncated_lines_and_future_schema_rows_produce_differently_worded_refus
                                       bound_provenance=rec.BoundProvenance(
                                           estimator="clopper_pearson_fixed_sample", confidence=0.95))],
             chosen="box", selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
+            policy_digest="0123456789abcdef",
             mechanism_version="0.2.0", agent="opencode", model="m", endpoint="http://e",
             gateway_quote_usd=0.004, gateway_authorised=True, exploration_reason="no_mechanism", eligible_set=[]))
         truncated_log.attach_outcome(rid, label_state="labelled", label=True)
@@ -178,6 +180,7 @@ def test_truncated_lines_and_future_schema_rows_produce_differently_worded_refus
                                       bound_provenance=rec.BoundProvenance(
                                           estimator="clopper_pearson_fixed_sample", confidence=0.95))],
             chosen="box", selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
+            policy_digest="0123456789abcdef",
             mechanism_version="0.2.0", agent="opencode", model="m", endpoint="http://e",
             gateway_quote_usd=0.004, gateway_authorised=True, exploration_reason="no_mechanism", eligible_set=[]))
         future_log.attach_outcome(rid, label_state="labelled", label=True)

@@ -240,6 +240,7 @@ def test_the_checker_reads_what_the_log_writes(tmp_path):
                                  bound_provenance=rec.BoundProvenance(
                                      estimator="clopper_pearson_fixed_sample", confidence=0.95))],
         chosen="box", selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
+        policy_digest="0123456789abcdef",
         mechanism_version="0.1.0", agent="opencode", model="m", endpoint="http://e",
         gateway_quote_usd=0.004, gateway_authorised=True,
         exploration_reason="no_mechanism", eligible_set=[]))
