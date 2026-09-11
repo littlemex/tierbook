@@ -8,6 +8,7 @@
     tierbook preflight   ask each configured endpoint whether it will accept what a measurement needs
     tierbook export-vsr  turn a compiled table into a router configuration
     tierbook logs        what a log file can and cannot support as a benchmark
+    tierbook attach-outcome  attach an observed outcome (label, tokens, latency) to a decision already logged
 
 There is no `serve`. A component that decides where money goes should not also be the thing holding the
 socket: the online decision is a dictionary lookup, and the caller already has a process.
@@ -649,7 +650,60 @@ def cmd_logs(args) -> int:
     return 0
 
 
+def cmd_attach_outcome(args) -> int:
+    """Attach an observed outcome to a decision already in the log -- the documented door onto a labelled log.
+
+    Attaches only. `label_state` and `label` are read as facts the caller observed, not decided here: this
+    command does not read a family's `label_source`, does not invoke a labeller, and does not call
+    `record.classify_label` -- deciding what a label is belongs to `classify_label`, and a component here that
+    ran a labeller would cross the boundary this module's own docstring draws between what this project does
+    and "somebody's suite."
+
+    CONTRACT amendment 11: the log is read BEFORE the append, and two mistakes are refused at this door rather
+    than left for the next `Log.read()` to catch. Both were measured to be accepted by `Log.attach_outcome`
+    alone: an outcome for a `request_id` this log holds no decision for (it joins to nothing, and
+    `Log.read` never complains because nothing there conflicts), and a label that disagrees with one already
+    recorded for this `request_id` (append succeeds, and the log becomes unreadable only on the NEXT
+    `Log.read()` -- one append too late, because the log is append-only and that append cannot be undone).
+    `Log.read`'s own check for the second case is left exactly as it is: it is what catches a second writer, a
+    second implementation, or a hand-edited line -- callers this door was never shown to.
+    """
+    from tierbook.record import Incomplete, Log
+
+    decisions, outcomes = Log(args.log).read()
+    known_ids = {d["request_id"] for d in decisions}
+    if args.request_id not in known_ids:
+        print(f"refused: {args.request_id!r} is not a request_id this log holds a decision for. An outcome "
+              f"attached to a request the log never recorded joins to nothing, and this door only joins an "
+              f"outcome to a decision already logged", file=sys.stderr)
+        return 1
+    prev = outcomes.get(args.request_id)
+    if prev is not None and prev.get("label_state") == "labelled":
+        if prev.get("label") != args.label or args.label_state != "labelled":
+            print(f"refused: {args.request_id!r} already carries the label {prev.get('label')!r} and this call "
+                  f"says {args.label!r} ({args.label_state}). A label that changes makes every criterion "
+                  f"computed over this log a criterion over the rewrite", file=sys.stderr)
+            return 1
+    outcome_kw = {}
+    if args.tokens is not None:
+        outcome_kw["tokens"] = args.tokens
+    if args.latency_s is not None:
+        outcome_kw["latency_s"] = args.latency_s
+    try:
+        Log(args.log).attach_outcome(args.request_id, label_state=args.label_state, label=args.label,
+                                     **outcome_kw)
+    except Incomplete as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    print(f"attached outcome for {args.request_id!r}: label_state={args.label_state} label={args.label}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    # Deferred, like `record.Log`/`record.Incomplete` elsewhere in this module: only `attach-outcome` needs
+    # LABEL_STATES, to build its own `--label-state` choices below.
+    from tierbook.record import LABEL_STATES
+
     # --registry is accepted before or after the subcommand, because both read naturally and a tool that
     # rejects the second spelling is teaching its user a lesson nobody asked for.
     common = argparse.ArgumentParser(add_help=False)
@@ -778,6 +832,17 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    ao = sub.add_parser("attach-outcome", parents=[common],
+                        help="attach an observed outcome to a decision already in the log")
+    ao.add_argument("--log", required=True, help="the decision log to read and append to")
+    ao.add_argument("--request-id", required=True, help="which logged decision this outcome belongs to")
+    ao.add_argument("--label-state", required=True, choices=LABEL_STATES)
+    ao.add_argument("--label", type=_tri, default=None,
+                    help="true or false; required exactly when --label-state is labelled")
+    ao.add_argument("--tokens", type=int, default=None)
+    ao.add_argument("--latency-s", type=float, default=None)
+    ao.set_defaults(fn=cmd_attach_outcome, registry=None)
 
     o = sub.add_parser("observe", parents=[common],
                        help="read the state a policy would decide from, and say what could not be read")
