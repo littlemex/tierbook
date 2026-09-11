@@ -1,0 +1,67 @@
+{
+ "family": "agentic-coding",
+ "default": [
+  "api"
+ ],
+ "certified": true,
+ "note": "a v0.2.0 smoke policy, not a measured one -- generated for the v0.3.0 C1 test suite from the actual v0.2.0-shaped decide.as_dict() so the fixture is a real artifact rather than a hand-typed stand-in",
+ "domain": {
+  "inflight:box": [
+   0.0,
+   128.0
+  ]
+ },
+ "provenance": {
+  "default_declared_by": "the operator running this smoke test"
+ },
+ "parameters": {
+  "floor": 0.8,
+  "max_evidence_age_days": 90.0,
+  "staleness_limit_days": null,
+  "exploration_rate": null
+ },
+ "unmeasured_guards": [],
+ "can_ever_fire": true,
+ "rule_overlaps": [],
+ "missing_for_a_closed_loop": [
+  "anytime-valid bounds; the margins here are fixed-sample, which is anti-conservative once bounds are recomputed as evidence accrues and admission happens at a data-dependent stopping time",
+  "change-point detection, so a policy stays valid until its evidence expires by age rather than because the environment stopped resembling the one it was measured in",
+  "a value for the reserved candidate's scarce capacity. Below capacity its marginal charge is nothing, so these rules give it to whichever certified request arrives first -- and the last free slot spent on a request that avoids a tenth of a cent of metered spend displaces one that would have avoided a dollar. That is scheduling utility rather than a gateway charge, which is why it is not in the cost objective, but it is also not nowhere: greedy use is locally right and globally unproven"
+ ],
+ "rules": [
+  {
+   "when": [
+    "inflight:box < 8.0 (from a capacity probe)"
+   ],
+   "guards": [
+    {
+     "var": "inflight:box",
+     "op": "<",
+     "threshold": 8.0,
+     "derived_from": "a capacity probe"
+    }
+   ],
+   "assign": [
+    "box"
+   ],
+   "because": "the reserved candidate has a free seat"
+  },
+  {
+   "when": [
+    "inflight:box >= 8.0 (from a capacity probe)"
+   ],
+   "guards": [
+    {
+     "var": "inflight:box",
+     "op": ">=",
+     "threshold": 8.0,
+     "derived_from": "a capacity probe"
+    }
+   ],
+   "assign": [
+    "api"
+   ],
+   "because": "the reserved candidate is full"
+  }
+ ]
+}
