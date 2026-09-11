@@ -274,3 +274,201 @@ distinction that made it invisible before.
 
 A v0.2.0 artifact has no `candidates` key. `from_dict` refuses it rather than falling back to the rules, because
 falling back is what made the omission silent.
+
+## Amendment 1 — C3's out-of-enum refusal, which the interface implied and did not state
+
+C3's test author reported it rather than pinning a message the contract had not committed to, which is the right call:
+the interface says `tenant_scope` is "one of `single`, `pooled`, `per_tenant`", which implies an enum check, and
+specifies the wording of only the omission and the coupling refusals.
+
+The local idiom already answers it. `load_config`'s existing out-of-enum refusal for `label_source` reads:
+
+```
+family 'agentic-coding'.label_source is 'not_a_real_kind', which is not one of [...]
+```
+
+**`tenant_scope` follows that shape**: the family, the field, the value given, and the legal values. It does **not**
+repeat the omission refusal's explanation that `single` is legitimate — an operator who typed a wrong value already
+knows the field exists and needs the list, whereas an operator who omitted it needs to be told the easy answer is
+allowed. Two refusals, two audiences, and conflating them would make the longer message the common case.
+
+No test is required for it by this amendment beyond what the enum check naturally gets: the reachability requirement in
+C1's vocabulary test covers "every legal value is reachable", and the three-values test C3 already commissions covers
+the positive side. Stating the wording is what was missing.
+
+## Amendment 2 — four things C1's interface implied and did not state, all reported rather than guessed
+
+C1's test author found each of these and deliberately left the corresponding case untested rather than pinning a
+behaviour the contract had not committed to. Three of the four are defects I introduced in the interface.
+
+**A2.1 — `"none"` is removed from `BOUND_CORRECTIONS`.** The interface listed it as a member and separately said
+`corrected_over = ()` is legal and is what this release produces. That is two spellings for one meaning, which is the
+duplication class this whole release is about, in the vocabulary the release adds. The tuple names **terms that can be
+corrected over**, and "none" is not a term. `()` is the only spelling for no correction, and `("none",)` is refused as
+an out-of-vocabulary value like any other string.
+
+**A2.2 — the producer is named.** `EXCLUSION_REASONS`' vocabulary test drives named producers — `admissible`,
+`clears_floor`, `_why_not`, `draw`. `BoundProvenance` had none: the interface named `record.admissible` as the consumer
+that refuses a bad claim and no function that constructs one. The producer is **`serve.candidate_set`**, which is where
+a `Candidate` acquires its bound today, and the vocabulary test drives it. Without a named producer the test can only
+check the consumer, and a second construction site added later would be unwatched — which is C7's defect in the
+vocabulary this entry adds.
+
+**A2.3 — the refusal has a reason and it is in the exclusion vocabulary.** `admissible` returns a reason that lands in
+`Candidate.excluded_because`, so a refusal with no named reason is unassignable. `EXCLUSION_REASONS` gains
+**`unsupported_correction`**: the bound claims a correction over a term the mechanism did not perform. It is distinct
+from `no_bound`, which says there is no bound at all, and from `below_floor`, which is about the number rather than the
+claim.
+
+**A2.4 — a bound and its provenance travel together, and the alternative is unrepresentable.** The interface defined
+`bound_provenance = None` as "no bound" and said nothing about a numeric `bound` carrying no provenance. That
+combination **is the pre-C1 state** — a number with no statement of what produced it — so leaving it constructible would
+leave the defect representable while adding the vocabulary that was supposed to end it.
+
+`Candidate.__post_init__` refuses a numeric `bound` with `bound_provenance=None`, and refuses a `bound_provenance` with
+`bound=None`, each naming both fields. That is the move `/review-contract` calls making the omission unrepresentable
+rather than watched: forgetting the provenance becomes a failure at construction instead of an absence nothing reads.
+
+## Amendment 3 — C1 renamed the field and left the majority of records filling it from the other judgment
+
+C1's code author reported this rather than leaving it, and it is the most consequential finding of the entry: **the
+rename is done and the value flow is half done.**
+
+`serve.route_once` has two branches and they fill `record.Decision.certified` from two different judgments. Verified by
+reading both:
+
+```python
+        drawn = next(c for c in candidates if c.id == chosen)
+        certified, _not_admissible_because = admissible(...)     # explored branch: SCOPE section 2
+    else:
+        certified = bool(got["validated"])                       # deterministic branch: non-inferiority
+```
+
+The deterministic branch is the majority of decisions. So a record saying `certified: true` on that path still means
+"a held-out fold supported this against the reference", which is the judgment C1 renamed to `validated` three lines
+above, and the falsifier compares that value against `admissible` — which is the `no_false_certification` failure the
+live run in v0.2.0's phase 5 already observed.
+
+**And the rename makes it harder to see, not easier.** Before, one word carried two meanings and a reader could suspect
+it. Now two words exist and one of them is silently carrying the other's value, which reads as though the distinction
+had been made.
+
+The code author's reasoning was that changing the value flow is new logic outside "the smallest change", and that is
+the right instinct applied to the wrong sentence. C1's interface says *"`certified` keeps section 2's meaning, which is
+the one SCOPE defines and the falsifier tests."* A branch filling it from the validation status contradicts that
+sentence, so fixing it is the entry's own content rather than an addition to it.
+
+**Both branches call `admissible`.** The explored branch already does and its comment already says why — the two
+predicates cannot disagree by construction. The deterministic branch does the same. Decisions that were `certified`
+because the policy was validated become `certified` only when the candidate is admissible, which is the behaviour the
+falsifier has been testing for all along.
+
+**A3.2 — the online path includes the `route` verb's JSON, and the compile path does not.** The interface says the word
+`certified` appears in the online path only where section 2's judgment is meant. `cli.py`'s `route` verb returns
+`"certified": entry["certified"]` — the non-inferiority status, to an operator, in the JSON the persona round found them
+trusting. That is the online path and it is in scope: the key is renamed `validated`, which is the same rename applied
+to the same judgment.
+
+The twelve other references in `policy.py`, `table.py`, `report.py`, `router.py` and `reproduce.py` are the **offline
+compile path** and are **out of scope**. `policy.Candidate.certified` there is the calibration-fold judgment under its
+own name in its own subsystem, and renaming it would be a second change of its own size. The line is the interface's
+own word "online", not a count of references.
+
+**A3.3 — the reason is `unearned_correction`, not amendment 2's `unsupported_correction`.** The code author chose the
+first before amendment 2 was written. Theirs is better and is adopted: "unsupported" reads as "a correction this
+software does not support", and the defect is that the claim was not earned by the work. Amendment 2's naming is
+withdrawn on this point.
+
+## Amendment 4 — amendment 2.4 made every historical record unreadable, and two corrections to my own claims
+
+**A4.1 — the pairing rule is about construction, not about reading, and I wrote it as both.** Amendment 2.4 said a
+numeric `bound` with no `bound_provenance` is refused. Applied in `_candidate_from_row` as well as in the constructor,
+that makes every row this project has ever written unreadable. Verified on the real artifact:
+
+```
+a real v0.1.0 row carries: ['bound', 'bound_kind', 'cost_usd', 'evidence_as_of', 'excluded_because', 'id']
+REFUSED: Incomplete  bound=0.9 has no bound_provenance
+```
+
+That contradicts v0.2.0's C1 in its entirety — the entry whose purpose is that a log survives its own evolution, and
+whose amendment 1 established that **the version decides**. I wrote a rule that refuses the past while adding a
+vocabulary meant to describe the future.
+
+**Reading is not certifying, and the two halves separate cleanly.** `BOUND_ESTIMATORS` gains `unrecorded`, and
+`_candidate_from_row` supplies `BoundProvenance(estimator="unrecorded", confidence=None, corrected_over=())` for a row
+below `schema_version` 3. The row reads. It says truthfully that the bound's provenance was never recorded, which is a
+different statement from the record being unreadable.
+
+And `admissible` **refuses** a candidate whose provenance is `unrecorded`, with its own reason
+**`unrecorded_provenance`** — distinct from `unearned_correction`, which is a claim that was made and not earned, where
+this is no claim at all. So a historical log stays readable and a historical bound stays unusable for a *new*
+certification, which are both C1's purposes rather than a compromise between them. A historical record's own
+`certified` field is untouched: it says what it said, and the falsifier reading it is a separate question from routing
+on it today.
+
+The constructor's pairing rule stands unchanged for **new** candidates: `serve.candidate_set` and `cli.cmd_assign` may
+not build a bound with no provenance, which is where the defect actually lived.
+
+**A4.2 — I attributed the phase-5 failure to the wrong criterion.** Amendment 3 said the live run flagged this as a
+`no_false_certification` failure. The code author checked and reported that both `docs/verify/v0.1.0-accept.json` and
+`docs/verify/v0.2.0-accept.json` show that criterion passing. Verified here: the v0.2.0 run's only failure is
+**`default_is_not_a_hiding_place`**, and `no_false_certification` passes in both.
+
+Amendment 3's argument does not depend on it — the two branches genuinely fill one field from two judgments, which is
+readable in the code — but the citation was wrong and the author was right to leave it out of a comment rather than
+assert it. Corrected here rather than quietly dropped, because a wrong citation in a contract is the class of defect
+this release exists to fix.
+
+**A4.3 — three tests encode the defect, which is the strongest evidence C1 is real.** All in `tests/test_serve.py`,
+one shared root cause: the helper never supplies `floor` to `route_once`, so each assertion depended on `certified`
+reflecting `policy.validated` regardless of any bound-against-floor check.
+
+| test | asserted | under C1 |
+|---|---|---|
+| `test_a_free_seat_goes_to_the_reserved_candidate_and_is_recorded` | `certified is True` with **no floor given at all** | `False` |
+| `test_a_certified_decision_whose_chosen_candidate_is_below_the_floor_is_caught_end_to_end` | its own docstring: "the policy says certified, the bound says otherwise, and the offline checker catches it" | nothing to catch — the online path no longer certifies it |
+| `test_the_loop_writes_a_log_the_acceptance_checker_reads` | `unlabelled_certified == 2` | `0` |
+
+The second is the sharpest: a test whose docstring describes the conflation as the *intended* behaviour, written when
+that was the design. It changes deliberately as a wire change, and the falsifier it exercised is now catching nothing
+because the defect it was built to catch cannot occur — which is the outcome, not a regression.
+
+## Amendment 5 — amendment 4.1 made every historical certification report the mechanism as broken
+
+Surfaced by the integrator's own fixture pass, not by either C1 author, and it is a defect in amendment 4.1 rather than
+in anyone's code. Reproduced on the real artifact:
+
+```
+the historical decision recorded certified = True
+check_certification says: ["certified but the chosen candidate 'box' was not admissible: unrecorded_provenance"]
+no_false_certification: FAIL -- "the mechanism is broken rather than mistuned"
+```
+
+Amendment 4.1 fixed "a historical row is readable" and created "a historical row's certification is unauditable".
+Every pre-C1 certified decision now fails the falsifier on replay — **not only the ones that were wrong** — and SCOPE
+section 12 reads that criterion's failure as evidence the mechanism is broken. So a correct historical log now
+accuses the mechanism.
+
+**The distinction is the same one I have now drawn three times in this release and did not carry far enough.** Reading
+is not certifying — amendment 4.1. Certifying a *new* decision is not auditing an *old* one — this amendment. For a
+row whose bound's provenance was never recorded, the honest verdict is not "this was not admissible"; it is **"this
+cannot be verified"**, and `accept` has had a third verdict for exactly that situation since v0.1.0.
+
+**`record.check_certification` distinguishes not-admissible from not-checkable.** A candidate refused for
+`unrecorded_provenance` yields an *unverifiable* finding rather than a violation, reported separately.
+
+**`accept.no_false_certification` returns `UNSUPPORTED`** when every certified decision it holds is unverifiable, and
+when the population is mixed it computes over the verifiable ones and its detail names how many it could not check —
+which is C11's rule from the previous release, applied to a second way a population can be incomplete. It never
+reports `FAIL` on a row it cannot check, because a falsifier whose silence is read as evidence must not speak from
+absence.
+
+`admissible` is unchanged: refusing `unrecorded_provenance` is correct for a **new** routing decision, where a bound
+with no recorded provenance cannot support a claim about this request. What changes is only what an audit of an old
+record concludes from the same refusal.
+
+**Two tests are reclassified by this.** The fixture pass filed
+`test_record_versioning.py::test_accept_reads_a_v010_row_without_a_schema_version_key` and
+`journeys::test_p2_old_decisions_log_gets_a_full_accept_report_not_a_crash` as obsolete-bordering-on-encodes-the-defect,
+and was right to hesitate: they are neither. They assert the correct behaviour and amendment 4.1 broke it. They stay
+as they are and this amendment makes them pass again.
