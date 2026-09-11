@@ -19,6 +19,11 @@ Two criteria are computable from a small log and are the ones worth having first
 - **default is not a hiding place**, its mirror image: an uncertified assignment made while an admissible candidate
   existed.
 
+One criterion needs no log at all. **floor reachability** (CONTRACT v0.3.0 C5) is a fact about the evidence budget,
+not about traffic: a declared floor above `alpha ** (1/n)` for the cohort's own `n` cannot be cleared by any
+measurement, however the traffic behaves, so it is checked at compile time and carried into the artifact rather than
+computed here from `decisions` -- `floor_is_reachable` below reads what `decide.compile_policy` already worked out.
+
 The rest need traffic, a randomised design, or an injected change, and each says so in its own words rather than
 sharing a generic message -- a reader who is told "insufficient data" learns nothing about what to do next.
 
@@ -39,6 +44,10 @@ PASS, FAIL, UNSUPPORTED = "pass", "fail", "unsupported"
 #: would be visible as a missing row rather than as an absence.
 CRITERIA = (
     "floor_compliance",
+    # CONTRACT v0.3.0 C5: the tenth criterion. SCOPE section 12 previously named nine; this is a different
+    # question about a different object -- the declared floor against its cohort's ceiling, not traffic
+    # against the floor -- so it is a new row rather than a reading folded into `floor_compliance`.
+    "floor_is_reachable",
     "bound_calibration",
     "no_false_certification",
     "default_is_not_a_hiding_place",
@@ -206,6 +215,89 @@ def clopper_pearson_lower(n: int, k: int, alpha: float) -> float:
         else:
             hi = mid
     return lo
+
+
+def floor_reachable(n: int, floor: float, alpha: float) -> tuple[bool, float, int]:
+    """CONTRACT v0.3.0 C5. Whether `floor` is reachable AT ALL on a cohort of `n` -- not whether traffic has
+    shown it, but whether any measurement on `n` items could. `clopper_pearson_lower`'s own `k == n` case is
+    the highest lower confidence bound `n` trials can ever produce: `alpha ** (1/n)`. A floor declared above
+    that number cannot be cleared regardless of what the evidence says, because clearing it would need a
+    perfect record on a cohort this size, and even a perfect record's bound tops out below the floor.
+
+    Returns `(reachable, ceiling, smallest_n)`: whether `floor` is at or below the ceiling `n` imposes, the
+    ceiling itself, and the smallest cohort size at which the ceiling first reaches `floor` -- what a cohort
+    would have to grow to for this floor to stop being unreachable.
+
+    `n <= 0` raises, by `clopper_pearson_lower`'s own C14 rule: `alpha ** (1/n)` divides by zero at `n == 0`,
+    and a negative cohort is not a measurement.
+    """
+    if n <= 0:
+        raise ValueError(f"a ceiling needs at least one trial; n={n!r}. `alpha ** (1/n)` would divide by zero "
+                         f"at n=0, which is a better failure than a wrong answer but not a stated one")
+    ceiling = alpha ** (1.0 / n)
+    needed = _smallest_reachable_cohort(floor, alpha)
+    return ceiling >= floor, ceiling, needed
+
+
+def _smallest_reachable_cohort(floor: float, alpha: float, *, cap: int = 10_000_000) -> int:
+    """The smallest `n` at which `alpha ** (1/n) >= floor`.
+
+    `alpha ** (1/n)` increases toward 1 as `n` grows and is lowest, at `alpha` itself, when `n == 1` -- so a
+    floor at or below `alpha` is reachable on a single trial, and a floor at or above 1 is not reachable on
+    any finite cohort, which is refused rather than searched for forever.
+
+    A closed-form estimate (`log(alpha) / log(floor)`) gets within one integer of the answer and is then
+    walked to the exact boundary rather than trusted as-is: floating point put the estimate one past the true
+    answer on this release's own worked example -- at `floor = alpha ** (1/20)` exactly, the estimate came
+    back 21, not 20 -- so the walk is what makes this return value exact rather than approximately right.
+    """
+    if floor <= alpha:
+        return 1
+    if floor >= 1.0:
+        raise ValueError(f"floor={floor!r} is not reachable on any finite cohort: alpha ** (1/n) < 1 for "
+                         f"every n, however large")
+    guess = max(1, math.ceil(math.log(alpha) / math.log(floor)))
+    while guess > 1 and alpha ** (1.0 / (guess - 1)) >= floor:
+        guess -= 1
+    while guess <= cap and alpha ** (1.0 / guess) < floor:
+        guess += 1
+    if guess > cap:
+        raise ValueError(f"floor={floor!r} against alpha={alpha!r} needs a cohort larger than {cap}, which is "
+                         f"not a search worth trusting floating point for")
+    return guess
+
+
+def floor_is_reachable(floor: float, floor_ceiling: dict | None) -> Verdict:
+    """CONTRACT v0.3.0 C5. SCOPE section 12's tenth criterion: the declared floor against the ceiling its own
+    cohort imposes -- a fact about the evidence budget, checkable before a single request is served, and a
+    different question from `floor_compliance`'s "did the traffic clear it."
+
+    `floor_ceiling` is `decide.compile_policy`'s own computation (`floor_reachable`, above), carried in the
+    compiled artifact's `parameters` and read here rather than recomputed, so this criterion and the number an
+    operator already saw out of `tierbook compile` cannot drift into two answers to the same question.
+
+    Its absence means the compiled artifact predates this entry (a v0.2.0 policy) or the family had no
+    evidence to count a cohort from -- either way nothing was computed, so UNSUPPORTED names that rather than
+    guessing a verdict from a fact this criterion was never given.
+    """
+    if not floor_ceiling:
+        return Verdict("floor_is_reachable", UNSUPPORTED,
+                       "the compiled policy carries no floor_ceiling, so either it predates CONTRACT v0.3.0 "
+                       "C5 (a v0.2.0 artifact) or the family had no evidence to count a cohort from. This "
+                       "needs a policy compiled by this release against a family the ledger records an "
+                       "outcome for")
+    ceiling = floor_ceiling["ceiling"]
+    cohort_size = floor_ceiling["cohort_size"]
+    needed = floor_ceiling["cohort_size_needed"]
+    numbers = {"floor": floor, "ceiling": ceiling, "cohort_size": cohort_size, "cohort_size_needed": needed}
+    if floor > ceiling:
+        return Verdict("floor_is_reachable", FAIL,
+                       f"the declared floor {floor:.4f} exceeds {ceiling:.4f}, the ceiling a {cohort_size}-item "
+                       f"cohort imposes on any lower confidence bound; clearing it needs a cohort of at least "
+                       f"{needed} items", numbers)
+    return Verdict("floor_is_reachable", PASS,
+                   f"the declared floor {floor:.4f} does not exceed {ceiling:.4f}, the ceiling a "
+                   f"{cohort_size}-item cohort imposes", numbers)
 
 
 def _unreadable(outcomes: dict) -> dict:
@@ -490,9 +582,11 @@ def _mixture_guarded(criterion: str, compute, *, version_counts: dict, pool_acro
     `UNSUPPORTED` result gains no such note either, for the same reason as above: it was not affected by the
     pooling, so there is nothing pooled to disclose.
 
-    Not applied to `no_false_certification`: CONTRACT C5 is explicit that it is a per-decision universal claim
-    rather than a rate, so a mixture does not change what it means, and `check_all` below calls it directly,
-    unguarded.
+    Not applied to `no_false_certification`: CONTRACT v0.2.0 C5 is explicit that it is a per-decision universal
+    claim rather than a rate, so a mixture does not change what it means, and `check_all` below calls it
+    directly, unguarded. Not applied to `floor_is_reachable` either, for the same reason from the other
+    direction (CONTRACT v0.3.0 C5): it is a fact about the declared floor and the compiled cohort, not a rate
+    over `decisions` at all, so there is nothing here for a schema-version mixture to blend.
     """
     verdict = compute()
     if len(version_counts) <= 1 or verdict.verdict == UNSUPPORTED:
@@ -514,13 +608,13 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
               uncertified_tolerance: float | None = None, budgeted_exploration: float | None = None,
               latency_limit_s: float | None = None, slo_tolerance: float | None = None,
               significance: float = 0.05, pool_across_versions: bool = False,
-              max_age_days: float | None = None) -> list:
+              max_age_days: float | None = None, floor_ceiling: dict | None = None) -> list:
     """Every criterion section 12 names, in its order, each with its own verdict.
 
     The three that cannot be computed from a log at all say what they need instead of sharing a message: a reader told
     "insufficient data" learns nothing about what to collect.
 
-    `pool_across_versions` (CONTRACT C5) now has the behaviour C1 only reserved the keyword for: `floor_compliance`,
+    `pool_across_versions` (CONTRACT v0.2.0 C5) now has the behaviour C1 only reserved the keyword for: `floor_compliance`,
     `default_is_not_a_hiding_place`, `exploration_cost` and `spend_regret` -- the criteria a mixture changes the
     value of -- go through `_mixture_guarded`, which always computes the criterion first (amendment 9, A9.1: an
     `UNSUPPORTED` a criterion returns for its own reason, such as `spend_regret` having no estimator at all, is
@@ -528,8 +622,9 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
     never the blocker). When `decisions` carries more than one `schema_version` and the criterion would
     otherwise have produced a `PASS` or a `FAIL`, that value is replaced with `UNSUPPORTED` naming the versions
     present and the count in each -- computing and discarding the result is how "would have answered" is told
-    apart from "could not have answered anyway". `no_false_certification` is a per-decision universal claim
-    rather than a rate, so a mixture does not change what it means and it is never guarded.
+    apart from "could not have answered anyway". `no_false_certification` and `floor_is_reachable` are each a
+    per-decision or per-declaration claim rather than a rate, so a mixture does not change what either means
+    and neither is ever guarded.
     `pool_across_versions=True` keeps a `PASS`/`FAIL` computed from the mixed traffic and says, in that verdict's
     own detail, that the versions were pooled on the caller's instruction.
 
@@ -537,6 +632,12 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
     that call `record.check_certification`. It is not in the record the way an age is -- it is a policy input, so
     it comes from outside, and `cli.cmd_accept` is the one caller that supplies it, read from the compiled policy
     through `decide.parameter` rather than a second CLI flag.
+
+    `floor_ceiling` (CONTRACT v0.3.0 C5) is the same kind of value for the same reason: `decide.compile_policy`
+    already computed it and stamped it into the artifact's `parameters`, so `cli.cmd_accept` reads it through
+    `decide.parameter` rather than this function re-deriving it from a ledger it is never given. `None` (a caller
+    with no policy artifact, or a policy from before this entry) makes `floor_is_reachable` UNSUPPORTED rather
+    than silently absent from this list -- it is still section 12's tenth row and still gets a verdict.
     """
     version_counts = _version_counts(decisions)
 
@@ -547,6 +648,7 @@ def check_all(decisions: list, outcomes: dict, *, floor: float, latency_feasible
     return [
         guard("floor_compliance",
              lambda: floor_compliance(decisions, outcomes, floor=floor, significance=significance)),
+        floor_is_reachable(floor, floor_ceiling),
         _needs_a_design("bound_calibration",
                         "this is a property of the confidence procedure, not of the log. It needs the "
                         "pre-registered resampling or simulation where the estimand is known, run against the "
