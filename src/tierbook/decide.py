@@ -243,14 +243,15 @@ class Policy:
     #: so a record names the artifact `compile_policy` actually produced, not a hash of whatever the record's
     #: own reader would derive from it later.
     policy_digest: str = ""
-    #: CONTRACT v0.3.0 C6: every candidate the ledger records an outcome for this family, mapped to its own
-    #: bound or to `None` (`policy.candidates_for`). Stamped by `compile_policy`, never supplied by a direct
-    #: `Policy(...)` call -- `{}` is the honest reading for a hand-built policy with no ledger behind it, the
-    #: same default-for-an-incomplete-object treatment `policy_digest` above already gets. `serve.candidate_set`
-    #: reads this for the candidate set's MEMBERSHIP rather than deriving it from `rules`/`default`: a candidate
-    #: with no rule used to be absent from the set entirely -- invisible to exploration, never labelled, its
-    #: evidence never refreshed -- and a set built from what a rule happens to name cannot end that.
-    candidates: dict = field(default_factory=dict)
+    #: CONTRACT v0.3.0 C6, as amended by amendment 10: the ids of every candidate the ledger records an outcome
+    #: for this family. MEMBERSHIP and no number -- a bound recorded here would be the fixed-sample single-test
+    #: quantity R1 rejects, and nothing would read it. Stamped by `compile_policy`, never supplied by a direct
+    #: `Policy(...)` call -- an empty set is the honest reading for a hand-built policy with no ledger behind it,
+    #: the same default-for-an-incomplete-object treatment `policy_digest` above already gets. `serve.candidate_set`
+    #: reads this instead of deriving from `rules`/`default`: a candidate with no rule used to be absent from the
+    #: set entirely -- invisible to exploration, never labelled, its evidence never refreshed -- and a set built
+    #: from what a rule happens to name cannot end that.
+    candidates: tuple = ()
 
     @property
     def overlaps(self) -> list[str]:
@@ -396,7 +397,7 @@ def as_dict(policy: Policy) -> dict:
         "policy_digest": policy.policy_digest,
         # CONTRACT v0.3.0 C6: written unconditionally, including `{}`, so a round trip through `as_dict` ->
         # `from_dict` always carries the key -- the same reason `parameters` is written even when empty.
-        "candidates": policy.candidates,
+        "candidates": list(policy.candidates),
         "unmeasured_guards": policy.gaps,
         "can_ever_fire": policy.can_ever_fire,
         "rule_overlaps": policy.overlaps,
@@ -444,13 +445,18 @@ def from_dict(d: dict) -> Policy:
             "'certified' into 'validated' here would relabel the first judgment as if it had always been named "
             "correctly. Recompile it: the artifact is not the source, and re-deriving it under the current schema "
             "is what produces 'validated' honestly")
-    # CONTRACT v0.3.0 C6: a policy carrying rules but no 'candidates' key was compiled by a version that built
-    # the candidate set from `rules`/`default` rather than from the ledger's own outcomes -- a v0.2.0 artifact
-    # (once past the `certified` refusal above, which fires first for a real one) is exactly this case. Refused
-    # rather than read as an empty set: falling back silently is what made a candidate with no rule invisible
-    # in the first place, and `as_dict` above writes this key unconditionally, so nothing this reader ever wrote
-    # itself can trigger this refusal on a round trip.
-    if d.get("rules") and "candidates" not in d:
+    # CONTRACT v0.3.0 C6: an artifact with no 'candidates' key was compiled by a version that built the candidate
+    # set from `rules`/`default` rather than from the ledger's own outcomes. Refused rather than read as an empty
+    # set: falling back silently is what made a candidate with no rule invisible in the first place, and `as_dict`
+    # above writes this key unconditionally, so nothing this reader ever wrote itself can trigger this on a round
+    # trip.
+    #
+    # NOT gated on the artifact carrying rules. A RULES-LESS artifact is the sharper case, not the exempt one: it
+    # is exactly what the shipped ledger produced in the incident C6 exists to close -- the compiler certified
+    # nothing on a 20-item cohort, so `rules` was empty, the set collapsed to one member and 400 consecutive
+    # draws returned `no_eligible_arm`. Exempting that shape would read the incident's own artifact happily with
+    # an empty candidate set, which is the defect wearing the fix's clothes.
+    if "candidates" not in d:
         raise ValueError(
             "this policy was written by a version that recorded rules with no 'candidates' key, so it cannot be "
             "loaded: the candidate set used to be derived from 'rules' and 'default', which is exactly the "
@@ -476,7 +482,7 @@ def from_dict(d: dict) -> Policy:
                   # CONTRACT v0.3.0 C6: absent only when `rules` is also empty (the guard above already refuses
                   # the non-degenerate case); `{}` there is the honest reading of a policy that never named a
                   # ledger-derived candidate set, the same as a hand-built `Policy()`'s own default.
-                  candidates=d.get("candidates", {}))
+                  candidates=tuple(d["candidates"]))
 
 
 def parameter(policy: Policy, name: str, supplied: float | None = None) -> float | None:
@@ -578,14 +584,13 @@ def compile_policy(family: str, entry: dict, *, reserved_ids: set[str], metered_
     # closing an import cycle (`policy` -> `accept` -> `record` -> `observe` -> `decide`).
     from .policy import candidates_for
 
+    # Amendment 8 (C6) needs no fold-back here. `assign_family` can `continue` a tier into its own `excluded`
+    # map -- a stated `latency_slo_p95_ms` or `min_completion_probability` guard -- before it ever reaches
+    # `ranked`, and a set derived from `ranked` would drop it. `candidates_for` reads each tier's own recorded
+    # outcome and never calls `assign_family`, so an excluded tier is in this set for the same reason every
+    # other measured tier is. That is the construction the omission cannot occur in, rather than a second pass
+    # that puts back what the first pass dropped.
     candidates = candidates_for(tiers or {}, family)
-    # Amendment 8 (C6): `assign_family` can `continue` a tier into its own `excluded` map (a stated
-    # `latency_slo_p95_ms` or `min_completion_probability` guard) before it ever reaches `ranked`. That tier
-    # still has an outcome the ledger CAN bound, so `candidates_for` above gives it a real number; naming it
-    # here as `None` instead is the same treatment `candidates_for` already gives a candidate the ledger cannot
-    # bound, applied to a candidate this compile's own constraints excluded.
-    for excluded_id in (entry.get("excluded_by_constraint") or {}):
-        candidates[excluded_id] = None
     if not chosen or not validated:
         why = (entry.get("validation") or {}).get("reason") or "no held-out fold supports this assignment"
         return _compiled(Policy(family, (), default, domain={}, validated=False, provenance=prov,

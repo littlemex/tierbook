@@ -81,28 +81,55 @@ def test_candidates_for_excludes_a_candidate_with_no_outcome_for_this_family_at_
     assert "only-on-agentic-coding" not in P.candidates_for(tiers, "tool-agent-user-retail")
 
 
-def test_candidates_for_values_are_a_float_bound_or_none_and_nothing_else():
-    """`dict[str, float | None]` is the contracted return type. A caller downstream (`compile_policy`, then
-    `serve.candidate_set`) treats `None` as a structured fact -- "no bound" -- so a value of any other shape
-    (a string, a nested dict) would make that downstream check silently pass or silently crash depending on
-    what it happened to compare against."""
+def test_a_candidate_measured_but_with_no_usable_counts_is_still_in_the_set():
+    """The gap a mutation found and no test held: dropping the tier whose family entry exists but carries no
+    `attempted`/`solved` passed the whole suite.
+
+    That candidate is the one most at risk of being invisible, not the least -- an outcome recorded without
+    counts is a candidate somebody ran and whose evidence is incomplete, and omitting it from the set is how it
+    stops being explored into, stops being labelled, and never gets the counts it is missing. C6's own sentence:
+    a candidate the ledger cannot bound is named rather than omitted, because omission is what makes it
+    invisible. Amendment 10 removed the value that used to say "cannot bound", so membership is the only place
+    left for that fact to live, which makes this test the whole of it.
+
+    The three shipped tiers all carry usable counts, so this state needs a synthetic tier to reach at all --
+    which is the reason to test it rather than to trust it."""
     tiers = registry()
-    for family in ("agentic-coding", "tool-agent-user-retail"):
-        for cid, bound in P.candidates_for(tiers, family).items():
-            assert bound is None or isinstance(bound, float), (family, cid, bound)
+    stripped = {**tiers["api-strong-a"].record}
+    stripped["id"] = "measured-without-counts"
+    entry = {k: v for k, v in tiers["api-strong-a"].record["families"]["agentic-coding"].items()
+             if k not in ("solved", "attempted")}
+    stripped["families"] = {"agentic-coding": entry}
+    tiers["measured-without-counts"] = P.Tier("measured-without-counts", stripped)
+    got = P.candidates_for(tiers, "agentic-coding")
+    assert "measured-without-counts" in got, (
+        "a candidate with an outcome and no counts was dropped: the set is 'has an outcome for this family', and "
+        "the candidate whose evidence is incomplete is the one omission hurts most")
 
 
-def test_every_shipped_candidate_is_bounded_for_both_shipped_families():
-    """`None` is C6's escape hatch for a candidate the ledger genuinely cannot bound, not the default outcome
-    for well-formed evidence. All three shipped tiers carry an executable-checked, non-tautological, paired
-    outcome for both families, so none of them should come back unbounded -- if this starts failing it means
-    either the fixture changed or `candidates_for` is defaulting to `None` far more often than the evidence
-    calls for."""
+def test_candidates_for_carries_ids_and_no_number():
+    """Deliberately changed by CONTRACT amendment 10. Two tests here asserted the return type was
+    `dict[str, float | None]` and that every shipped candidate came back with a real bound. Both asserted the
+    alternative the contract's rejected-alternatives table turns down under R1: the bound derivable without a
+    dependency is fixed-sample and single-test, which SCOPE section 6 disqualifies in those words, and writing
+    it into the artifact attaches the compiler's authority to it.
+
+    Two measurements decided it rather than taste. At 20 of 20 the bound was 0.8609 -- exactly `0.05 ** (1/20)`,
+    the cohort's own ceiling -- so at the top of the range the number was a property of how many items were run
+    and not of the candidate it was filed under. And nothing read it: the per-request bound is the caller's, so
+    it would have been the fourth number this codebase records and never reads, beside `bound_kind` and the two
+    `"warning"` strings this same release removes.
+
+    What survives is the type check, which is why this is one test and not a deletion: a value of any other
+    shape would still make a downstream membership check pass or crash on what it happened to compare against."""
     tiers = registry()
     for family in ("agentic-coding", "tool-agent-user-retail"):
-        bounds = P.candidates_for(tiers, family)
-        unbounded = {cid for cid, b in bounds.items() if b is None}
-        assert not unbounded, f"{family}: {unbounded} came back with no bound on well-formed shipped evidence"
+        ids = P.candidates_for(tiers, family)
+        assert isinstance(ids, tuple)
+        assert all(isinstance(cid, str) for cid in ids), (family, ids)
+        assert ids == tuple(sorted(ids)), "a set with an order nobody stated is a diff nobody can read"
+        # Not a number anywhere in it: the fourth write-only value must not be reachable through a nested shape.
+        assert not any(isinstance(cid, (int, float)) for cid in ids)
 
 
 # =====================================================================================================
@@ -130,7 +157,7 @@ def test_candidate_set_includes_a_candidate_no_rule_and_no_default_ever_names():
     """The regression itself, at the `serve.candidate_set` boundary: before C6, the set was `{rule.assign for
     rule in policy.rules} | set(policy.default)`, so a candidate named by neither was simply not in it. Here
     "quiet" is named by nothing except `policy.candidates`, and it must still show up."""
-    pol = dc.from_dict(_raw_policy(default=("box",), candidates={"box": 0.9, "quiet": 0.5}))
+    pol = dc.from_dict(_raw_policy(default=("box",), candidates=("box", "quiet")))
     prov = rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95)
     out = sv.candidate_set(pol, "box", bounds={"box": 0.9, "quiet": 0.5}, costs={"box": 0.01, "quiet": 0.01},
                           bound_provenance=prov)
@@ -142,7 +169,7 @@ def test_a_candidate_with_no_bound_is_present_and_excluded_for_no_bound_not_omit
     the distinction that made it invisible before. `bounds` deliberately does not mention "quiet" either, so
     this holds regardless of whether a value's SOURCE ends up being `policy.candidates` or the live `bounds`
     dict: both agree there is no bound for it, and the candidate must still be named."""
-    pol = dc.from_dict(_raw_policy(default=("box",), candidates={"box": 0.9, "quiet": None}))
+    pol = dc.from_dict(_raw_policy(default=("box",), candidates=("box", "quiet")))
     prov = rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95)
     out = sv.candidate_set(pol, "box", bounds={"box": 0.9}, costs={"box": 0.01}, bound_provenance=prov)
     quiet = next(c for c in out if c.id == "quiet")
@@ -157,7 +184,7 @@ def test_the_rule_less_policy_from_the_real_regression_does_not_collapse_to_one_
     set must have three members even though the policy fired zero rules."""
     pol = dc.from_dict(_raw_policy(
         default=("api-strong-a",), validated=False, rules=[],
-        candidates={"api-strong-a": 0.0, "api-cheap-a": -0.35, "self-hosted-a": -0.47}))
+        candidates=("api-cheap-a", "api-strong-a", "self-hosted-a")))
     prov = rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95)
     out = sv.candidate_set(pol, "api-strong-a",
                            bounds={"api-strong-a": 0.0, "api-cheap-a": -0.35, "self-hosted-a": -0.47},
@@ -187,7 +214,7 @@ def test_explore_eligible_can_see_a_bound_candidate_and_cannot_draw_into_an_unbo
     C6, "quiet" was not in `d.candidates` at all, so there was no way to tell "cannot be drawn into" from
     "does not exist". After C6 it is in `d.candidates` and absent from `d.eligible_set` -- two different facts,
     both visible on the one record."""
-    pol = dc.from_dict(_raw_policy(default=("box",), candidates={"box": 0.9, "quiet": None}))
+    pol = dc.from_dict(_raw_policy(default=("box",), candidates=("box", "quiet")))
     o = obs(metered_authorised=True)
     _, d = sv.route_once(
         policy=pol, observation=o, request_id="r1", feature_vector_version="fv1",
@@ -347,22 +374,25 @@ def test_the_latency_slo_fixture_actually_excludes_the_candidate_via_assign_fami
     assert not any("api-cheap-a" in heads for heads in ranked_heads)
 
 
-def test_a_candidate_assign_family_excludes_is_named_in_the_compiled_artifact_with_no_bound(tmp_path):
+def test_a_candidate_assign_family_excludes_is_named_in_the_compiled_artifact(tmp_path):
     """Amendment 8, directly: "the set is derived from every candidate the ledger records an outcome for, and
     a candidate `assign_family` excluded is named with the reason it was excluded and no bound -- the same
     treatment C6 already gives a candidate the ledger cannot bound." `api-cheap-a` has a recorded outcome for
     `agentic-coding` (attempted=20) and is excluded by the SLO guard; it must be present in the compiled
     artifact's `candidates`, not omitted the way a `ranked`-derived set would have omitted it, and it must
-    carry no bound -- the guard that excluded it says nothing about whether the ledger could otherwise have
-    bounded it, so `None` (not some numeric leftover) is the only honest value here."""
+    be present in the compiled artifact's `candidates`.
+
+    Amendment 10 removed the "with no bound" half: the set carries ids and no numbers at all, so there is no
+    value left for this candidate to differ from the others in. Membership IS the claim, and the guard that
+    excluded it says nothing about whether the ledger could otherwise have bounded it -- which is exactly why
+    recording a number here was the wrong shape."""
     tiers_dir, cfg_path = _ledger_with_a_latency_slo_violation(tmp_path)
     out_path = tmp_path / "table.json"
     rc = run_cli(["compile", "--config", str(cfg_path), "--out", str(out_path), "--registry", str(tiers_dir)])
     assert rc == 0
     table = json.loads(out_path.read_text())
     cands = table["decide"]["agentic-coding"]["cannot_reject"]["candidates"]
-    assert "api-cheap-a" in cands, "excluded by a constraint, not omitted -- the same fate C6 gives no_bound"
-    assert cands["api-cheap-a"] is None
+    assert "api-cheap-a" in cands, "excluded by a constraint, not omitted -- which is the whole of the claim"
     # The two candidates the constraint did not touch are still both there: this is not a second collapse
     # wearing amendment 8's justification.
     assert set(cands) == SHIPPED_TIER_IDS

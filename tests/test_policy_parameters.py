@@ -67,6 +67,9 @@ def minimal_policy_dict(*, floor=0.05, max_evidence_age_days=None, staleness_lim
         "domain": {},
         "provenance": {},
         "rules": [],
+        # C6: the candidate set comes from the ledger, so every artifact records it. `from_dict` refuses one
+        # that does not, rules or no rules, so a minimal artifact carries the same key a real one does.
+        "candidates": ["api"],
         "parameters": {"floor": floor, "max_evidence_age_days": max_evidence_age_days,
                        "staleness_limit_days": staleness_limit_days,
                        "tenant_scope": "single"},

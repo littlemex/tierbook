@@ -25,7 +25,6 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tierbook.accept import clopper_pearson_lower
 from tierbook.evidence import EvidenceError
 from tierbook.evidence import load as _load_evidence
 from tierbook.evidence import paired as _evidence_paired
@@ -439,17 +438,20 @@ def registry_version(tiers: dict[str, Tier]) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-#: Significance for a candidate's own absolute lower bound on success (CONTRACT v0.3.0 C6). Not a per-family
-#: declaration: SCOPE section 2's "corrected lower bound on success" is the same kind of quantity everywhere
-#: this project computes one from raw solved/attempted counts, and it is fixed at 0.05 everywhere else too
-#: (`record.BOUND_ESTIMATORS`'s `clopper_pearson_fixed_sample`, and the ceiling this contract's own worked
-#: example checks: `clopper_pearson_lower(20, 20, 0.05) == 0.8609`).
-CANDIDATE_BOUND_ALPHA = 0.05
 
+def candidates_for(tiers: dict[str, Tier], family: str) -> tuple[str, ...]:
+    """Every candidate the ledger records an outcome for `family`, by id, sorted (CONTRACT v0.3.0 C6 as
+    amended by amendment 10).
 
-def candidates_for(tiers: dict[str, Tier], family: str) -> dict[str, float | None]:
-    """Every candidate the ledger records an outcome for `family`, mapped to its own absolute lower bound on
-    success, or to `None` when the ledger cannot produce one (CONTRACT v0.3.0 C6).
+    Membership, and no number. An earlier form mapped each id to an absolute Clopper-Pearson lower bound over
+    the candidate's own solved/attempted, and that is the alternative the contract's rejected-alternatives table
+    turns down under R1: the bound available without a dependency is fixed-sample and single-test, which SCOPE
+    section 6 disqualifies in those words, and recording it here attaches the compiler's authority to it. Two
+    measurements say why it must not ship. At 20 of 20 the bound is 0.8609, which is exactly `alpha ** (1/20)`,
+    the cohort's own ceiling -- so at the top of the range the number is a property of how many items were run
+    and not of the candidate it is filed under. And no reader consulted it: the per-request bound is the
+    caller's, so the value would have been the fourth number this codebase records and never reads, beside
+    `bound_kind` and the two `"warning"` strings the same release is removing.
 
     `serve.candidate_set` used to build its set from `policy.rules`, so a candidate with no rule was absent
     from the set entirely: invisible to exploration, never labelled, its evidence never refreshed. This is
@@ -467,25 +469,12 @@ def candidates_for(tiers: dict[str, Tier], family: str) -> dict[str, float | Non
     read of `ranked` with a check that the two agree. `compile_policy` is where `assign_family`'s own
     exclusions are folded back over this dict, once it has both.
 
-    A tier the ledger carries no outcome for `family` at all is not a key in the returned dict. "No outcome"
-    and "an outcome the ledger cannot bound" are different facts, and only the second is representable here
-    as `None` -- the same distinction C1's `bound`/`bound_provenance` pairing already makes for a single
-    candidate.
+    A tier the ledger carries no outcome for `family` at all is absent. "The ledger has never measured this
+    candidate for this family" is the one fact this set is about, and it is the fact `serve.candidate_set`
+    needs: whether a candidate belongs in the recorded set at all. Whether a bound exists for it on a given
+    request is a separate question the caller's `bounds` answers, and `no_bound` is derived there.
     """
-    out: dict[str, float | None] = {}
-    for tid, t in tiers.items():
-        o = t.outcome(family)
-        if o is None:
-            continue
-        attempted = o.get("attempted") or 0
-        solved = o.get("solved")
-        if not attempted or solved is None:
-            # The family key exists but carries nothing a rate can be computed from -- an outcome, and one
-            # the ledger cannot bound, not the same thing as no outcome at all.
-            out[tid] = None
-            continue
-        out[tid] = clopper_pearson_lower(int(attempted), int(solved), CANDIDATE_BOUND_ALPHA)
-    return out
+    return tuple(sorted(tid for tid, t in tiers.items() if t.outcome(family) is not None))
 
 
 # --- arrangements, which are what is actually bought --------------------------------------------

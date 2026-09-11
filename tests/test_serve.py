@@ -47,7 +47,7 @@ def policy(validated=True, domain=None):
         # rather than from `policy.rules`/`policy.default`, so a hand-built policy has to name the ledger's own
         # set itself. Same ids and same values as `BOUNDS` above -- this is not a new fact the fixture did not
         # already carry, only a new place it also has to be written for the set to keep naming "box" and "api".
-        candidates=dict(BOUNDS),
+        candidates=tuple(BOUNDS), # C6/amendment 10: ids only, no bound
     )
     # CONTRACT C2: a policy built by hand carries no digest until stamped -- the same stamp `compile_policy`
     # applies -- so `route_once` (whose `policy_version` default now reads the policy's own digest) has one to

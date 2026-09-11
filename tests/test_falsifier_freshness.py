@@ -117,6 +117,9 @@ def minimal_policy_dict(*, floor=0.80, max_evidence_age_days=None) -> dict:
     return {
         "family": "agentic-coding", "default": ["api"], "validated": False, "note": "",
         "domain": {}, "provenance": {}, "rules": [],
+        # C6: the candidate set comes from the ledger, so every artifact records it. `from_dict` refuses one
+        # that does not, rules or no rules, so a minimal artifact carries the same key a real one does.
+        "candidates": ["api"],
         "parameters": {"floor": floor, "max_evidence_age_days": max_evidence_age_days},
     }
 
