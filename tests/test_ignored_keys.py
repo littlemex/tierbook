@@ -25,8 +25,14 @@ from tierbook import record as rec  # noqa: E402
 
 
 def cand(cid="box", why="chosen", bound=0.90, cost=0.004):
-    return {"id": cid, "excluded_because": why, "bound": bound, "bound_kind": "lcb95", "cost_usd": cost,
-            "evidence_as_of": "2026-09-01"}
+    """A row's candidate shape -- `bound_provenance` nested as a plain dict (CONTRACT C1 point 3), a fully known
+    field so this file's `__ignored_keys__` assertions are about the keys each test deliberately injects, not
+    about a field C1 renamed."""
+    return {"id": cid, "excluded_because": why, "bound": bound,
+            "bound_provenance": (None if bound is None else
+                                 {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()}),
+            "cost_usd": cost, "evidence_as_of": "2026-09-01"}
 
 
 def row(**kw):

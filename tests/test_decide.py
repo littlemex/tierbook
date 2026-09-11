@@ -231,7 +231,7 @@ def test_a_second_reserved_candidate_is_named_as_unmodelled_rather_than_guessed(
     p = policy(["box", "box2"], reserved=("box", "box2"), curve=CURVE)
     # Refused, not partially guarded. An earlier version guarded the first and recorded the others as "not
     # modelled" -- and the whole assignment still fired, so the unguarded legs ran with no capacity semantics.
-    assert p.rules == () and p.certified is False
+    assert p.rules == () and p.validated is False
     assert "only one can be capacity-guarded" in p.note
 
 
@@ -268,10 +268,10 @@ def test_a_guard_may_be_qualified_by_candidate():
 
 def test_nothing_certified_means_no_rules_and_the_default_carries_everything():
     p = policy(["box"], status="provisional", reason="held out below the margin")
-    assert p.rules == () and p.certified is False and p.can_ever_fire is False
+    assert p.rules == () and p.validated is False and p.can_ever_fire is False
     assert "held out below the margin" in p.note
     out = D.decide(p, st(**{"available:box": True, "inflight:box": 0}))
-    assert out["assign"] == ["strong"] and out["certified"] is False
+    assert out["assign"] == ["strong"] and out["validated"] is False
 
 
 def test_the_artifact_names_what_a_closed_loop_still_needs():
@@ -371,7 +371,7 @@ def test_a_compiled_policy_round_trips():
         family="f",
         rules=(D.Rule(guards=(D.Guard(var="inflight:box", op="<", threshold=8.0, derived_from="a probe"),),
                        assign=("box",), because="a free seat"),),
-        default=("api",), domain={"inflight:box": (0.0, 128.0)}, certified=True, note="n",
+        default=("api",), domain={"inflight:box": (0.0, 128.0)}, validated=True, note="n",
         provenance={"default_declared_by": "an operator"})
     back = D.from_dict(D.as_dict(pol))
     assert back == pol

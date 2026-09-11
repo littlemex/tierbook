@@ -19,8 +19,13 @@ from tierbook import record as rec  # noqa: E402
 
 
 def cand(cid="box", why="chosen", bound=0.90, cost=0.004):
-    return {"id": cid, "excluded_because": why, "bound": bound, "bound_kind": "lcb95", "cost_usd": cost,
-            "evidence_as_of": "2026-09-01"}
+    """A row's candidate shape -- `bound_provenance` nested as a plain dict (CONTRACT C1 point 3), an honest
+    bound this release could actually produce."""
+    return {"id": cid, "excluded_because": why, "bound": bound,
+            "bound_provenance": (None if bound is None else
+                                 {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()}),
+            "cost_usd": cost, "evidence_as_of": "2026-09-01"}
 
 
 def dec(rid="r1", certified=True, chosen="box", candidates=None, exploration=False, prob=1.0):
@@ -228,8 +233,12 @@ def test_the_checker_reads_what_the_log_writes(tmp_path):
     log = rec.Log(tmp_path / "log.jsonl")
     log.append(rec.Decision(
         family="f", request_id="r1", feature_vector_version="fv1", state_ref="obs:a",
-        candidates=[rec.Candidate(id="box", excluded_because="chosen", bound=0.9, cost_usd=0.004),
-                    rec.Candidate(id="api", excluded_because="below_floor", bound=0.7, cost_usd=0.012)],
+        candidates=[rec.Candidate(id="box", excluded_because="chosen", bound=0.9, cost_usd=0.004,
+                                  bound_provenance=rec.BoundProvenance(
+                                      estimator="clopper_pearson_fixed_sample", confidence=0.95)),
+                    rec.Candidate(id="api", excluded_because="below_floor", bound=0.7, cost_usd=0.012,
+                                 bound_provenance=rec.BoundProvenance(
+                                     estimator="clopper_pearson_fixed_sample", confidence=0.95))],
         chosen="box", selection_probability=1.0, exploration=False, certified=True, policy_version="p1",
         mechanism_version="0.1.0", agent="opencode", model="m", endpoint="http://e",
         gateway_quote_usd=0.004, gateway_authorised=True,

@@ -44,9 +44,13 @@ from tierbook import serve as sv  # noqa: E402
 
 
 def cand(**kw):
-    base = dict(id="c", excluded_because="chosen", bound=0.90, bound_kind="lcb95", cost_usd=0.004,
-                evidence_as_of="2026-09-01")
+    """`bound_provenance` (CONTRACT C1) travels paired with `bound`: an honest bound this release could
+    actually produce when a numeric bound is given, `None` when `bound=None` is passed and not overridden."""
+    base = dict(id="c", excluded_because="chosen", bound=0.90, cost_usd=0.004, evidence_as_of="2026-09-01")
     base.update(kw)
+    if "bound_provenance" not in kw:
+        base["bound_provenance"] = (None if base["bound"] is None else
+                                    rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95))
     return rec.Candidate(**base)
 
 

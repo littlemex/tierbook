@@ -84,9 +84,13 @@ def mk_candidate(*, cid="box", bound=0.90, excluded_because="chosen", cost_usd=0
                  evidence_as_of="2026-09-01") -> rec.Candidate:
     """A `record.Candidate`, the same object `admissible` takes -- `clears_floor` is explicitly "separate from
     `admissible`", not a different domain object, so building the fixture any other way would test a function this
-    module does not define."""
+    module does not define. `bound_provenance` (CONTRACT C1) travels paired with `bound`: an honest bound this
+    release could actually produce when there is one, `None` when there is not."""
     return rec.Candidate(id=cid, excluded_because=excluded_because, bound=bound, cost_usd=cost_usd,
-                         evidence_as_of=evidence_as_of)
+                         evidence_as_of=evidence_as_of,
+                         bound_provenance=(None if bound is None else
+                                           rec.BoundProvenance(estimator="clopper_pearson_fixed_sample",
+                                                               confidence=0.95)))
 
 
 def test_clears_floor_no_bound_is_false_no_bound():
@@ -450,8 +454,28 @@ def test_draw_alternative_propensities_and_deterministic_propensity_sum_to_one()
 
 
 def _cand_row(cid="box", why="chosen", bound=0.90, cost=0.004):
-    return {"id": cid, "excluded_because": why, "bound": bound, "bound_kind": "lcb95", "cost_usd": cost,
-           "evidence_as_of": "2026-09-01"}
+    """A row's candidate shape -- `bound_provenance` nested as a plain dict (CONTRACT C1 point 3), an honest
+    bound this release could actually produce."""
+    return {"id": cid, "excluded_because": why, "bound": bound,
+            "bound_provenance": (None if bound is None else
+                                 {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()}),
+            "cost_usd": cost, "evidence_as_of": "2026-09-01"}
+
+
+def _candidates_from_row(base: dict) -> list:
+    """The bridge from the row shape (`_cand_row`, `bound_provenance` as a nested dict) to the construction shape
+    (`rec.Candidate`, a `BoundProvenance` instance) -- CONTRACT C1 point 3, the mistake to avoid: splatting a
+    row's candidate dict straight into `rec.Candidate(**c)` hands the dataclass a dict where it requires an
+    instance."""
+    out = []
+    for c in base["candidates"]:
+        c = dict(c)
+        bp = c.pop("bound_provenance", None)
+        if bp is not None:
+            bp = rec.BoundProvenance(**bp)
+        out.append(rec.Candidate(bound_provenance=bp, **c))
+    return out
 
 
 def _v2_row(**kw):
@@ -523,7 +547,7 @@ def test_a_written_decision_carries_the_reason_and_the_eligible_set_it_was_drawn
     propensity can be checked rather than reconstructed" -- catches a writer that omits either field or invents a
     fifth reason outside the closed set."""
     base = _v2_row(exploration_reason="explored", eligible_set=["box", "alt"])
-    candidates = [rec.Candidate(**c) for c in base["candidates"]]
+    candidates = _candidates_from_row(base)
     kw = {k: v for k, v in base.items() if k not in ("candidates", "schema_version")}
     kw["candidates"] = candidates
     d = rec.Decision(**kw)
@@ -537,7 +561,7 @@ def test_every_contracted_exploration_reason_is_a_legal_value_on_a_written_decis
     implementation that narrows the set (e.g. refusing `no_mechanism` on a freshly-written v0.2.0 record) or that
     never actually restricts it at all (see the next test for that direction)."""
     base = _v2_row(exploration_reason=reason, eligible_set=[])
-    candidates = [rec.Candidate(**c) for c in base["candidates"]]
+    candidates = _candidates_from_row(base)
     kw = {k: v for k, v in base.items() if k not in ("candidates", "schema_version")}
     kw["candidates"] = candidates
     d = rec.Decision(**kw)
@@ -655,8 +679,12 @@ def test_a_family_with_a_numeric_staleness_limit_and_no_exploration_rate_loads(t
 
 
 def _acc_cand(cid="box", why="chosen", bound=0.90, cost=0.004):
-    return {"id": cid, "excluded_because": why, "bound": bound, "bound_kind": "lcb95", "cost_usd": cost,
-           "evidence_as_of": "2026-09-01"}
+    """A row's candidate shape -- `bound_provenance` nested as a plain dict (CONTRACT C1 point 3)."""
+    return {"id": cid, "excluded_because": why, "bound": bound,
+            "bound_provenance": (None if bound is None else
+                                 {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()}),
+            "cost_usd": cost, "evidence_as_of": "2026-09-01"}
 
 
 def _acc_dec(rid="r1", certified=True, chosen="box", candidates=None):
@@ -781,7 +809,9 @@ def _as_of(age_days: float) -> str:
 
 def _stale_candidate():
     return rec.Candidate(id="stale_box", excluded_because="chosen", bound=0.90, cost_usd=0.01,
-                         evidence_as_of=_as_of(STALE_AGE_DAYS))
+                         evidence_as_of=_as_of(STALE_AGE_DAYS),
+                         bound_provenance=rec.BoundProvenance(estimator="clopper_pearson_fixed_sample",
+                                                              confidence=0.95))
 
 
 def _draw_into_stale_arm(rate=0.99, tries=50):
@@ -817,9 +847,13 @@ def _explored_into_stale_arm_row(rid="exp1"):
     return {
         "family": "agentic-coding", "request_id": rid, "feature_vector_version": "fv1", "state_ref": "obs:a",
         "candidates": [
-            {"id": "stale_box", "excluded_because": "chosen", "bound": 0.90, "bound_kind": "lcb95",
+            {"id": "stale_box", "excluded_because": "chosen", "bound": 0.90,
+             "bound_provenance": {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()},
              "cost_usd": 0.01, "evidence_as_of": _as_of(STALE_AGE_DAYS)},
-            {"id": "reference", "excluded_because": "below_floor", "bound": 0.60, "bound_kind": "lcb95",
+            {"id": "reference", "excluded_because": "below_floor", "bound": 0.60,
+             "bound_provenance": {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()},
              "cost_usd": 0.004, "evidence_as_of": _as_of(5.0)},
         ],
         "chosen": chosen,
@@ -837,9 +871,13 @@ def _explored_into_fresh_arm_row(rid="exp2"):
     return {
         "family": "agentic-coding", "request_id": rid, "feature_vector_version": "fv1", "state_ref": "obs:a",
         "candidates": [
-            {"id": "fresh_alt", "excluded_because": "chosen", "bound": 0.90, "bound_kind": "lcb95",
+            {"id": "fresh_alt", "excluded_because": "chosen", "bound": 0.90,
+             "bound_provenance": {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()},
              "cost_usd": 0.01, "evidence_as_of": _as_of(5.0)},
-            {"id": "reference", "excluded_because": "below_floor", "bound": 0.60, "bound_kind": "lcb95",
+            {"id": "reference", "excluded_because": "below_floor", "bound": 0.60,
+             "bound_provenance": {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()},
              "cost_usd": 0.004, "evidence_as_of": _as_of(5.0)},
         ],
         "chosen": "fresh_alt",
@@ -970,7 +1008,9 @@ def test_amendment_6_explored_assignment_into_a_fresh_admissible_arm_is_certifie
     authorisation and latency otherwise holding: `certified` must be True, and the falsifier must have nothing to
     say about it."""
     fresh = rec.Candidate(id="fresh_alt", excluded_because="chosen", bound=0.90, cost_usd=0.01,
-                          evidence_as_of=_as_of(5.0))
+                          evidence_as_of=_as_of(5.0),
+                          bound_provenance=rec.BoundProvenance(estimator="clopper_pearson_fixed_sample",
+                                                               confidence=0.95))
     ok, reason = rec.admissible(fresh, floor=FLOOR, authorised=True, latency_feasible=True,
                                 evidence_age_days=5.0, max_age_days=MAX_EVIDENCE_AGE_DAYS)
     assert (ok, reason) == (True, "chosen"), "fixture sanity check: this candidate must be fully admissible"
@@ -1002,9 +1042,10 @@ def test_amendment_6_explored_assignment_into_a_fresh_admissible_arm_is_certifie
 # seeded rng"), so this file treats them as given rather than reconstructed.
 
 
-def _rt_policy(certified=True, domain=None):
+def _rt_policy(validated=True, domain=None):
     """Same shape as `tests/test_serve.py`'s `policy()`: box below a capacity bound, api above it, api the
-    declared default."""
+    declared default. `validated` (CONTRACT C1): the non-inferiority status, renamed from `certified` -- this
+    keyword names the same judgment it always did, only the word changed."""
     return dc.Policy(
         family="agentic-coding",
         rules=(
@@ -1017,7 +1058,7 @@ def _rt_policy(certified=True, domain=None):
         ),
         default=("api",),
         domain=domain or {"inflight:box": (0.0, 128.0)},
-        certified=certified,
+        validated=validated,
         note="a fixture",
     )
 
@@ -1041,6 +1082,7 @@ def _rt_route(o, pol=None, **kw):
                policy_version="p1", mechanism_version="0.2.0", agent="opencode", model="m",
                endpoint="http://e", gateway_quote_usd=0.004, bounds={"box": 0.90, "api": 0.70},
                costs={"box": 0.01, "api": 0.012}, evidence_as_of=_as_of(STALE_AGE_DAYS), floor=FLOOR,
+               bound_provenance=rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95),
                latency_feasible=True, max_age_days=MAX_EVIDENCE_AGE_DAYS)
     base.update(kw)
     return sv.route_once(**base)
@@ -1259,7 +1301,7 @@ def test_c10_every_one_of_the_five_exploration_reasons_is_a_legal_value_on_a_wri
     be constructible on a `Decision` -- catching an implementation that adds the value to `EXPLORATION_REASONS`
     without actually letting `__post_init__` accept it, or that narrows the set some other way."""
     base = _v2_row(exploration_reason=reason, eligible_set=[])
-    candidates = [rec.Candidate(**c) for c in base["candidates"]]
+    candidates = _candidates_from_row(base)
     kw = {k: v for k, v in base.items() if k not in ("candidates", "schema_version")}
     kw["candidates"] = candidates
     d = rec.Decision(**kw)
@@ -1271,7 +1313,7 @@ def test_a_sixth_exploration_reason_outside_the_five_is_refused():
     write time like the others'): a value outside the five legal reasons raises `Incomplete` naming it, rather
     than writing an open-ended reason a log could not aggregate."""
     base = _v2_row(exploration_reason="sort_of_explored", eligible_set=[])
-    candidates = [rec.Candidate(**c) for c in base["candidates"]]
+    candidates = _candidates_from_row(base)
     kw = {k: v for k, v in base.items() if k not in ("candidates", "schema_version")}
     kw["candidates"] = candidates
     with pytest.raises(rec.Incomplete, match="not one of"):

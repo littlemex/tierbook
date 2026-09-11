@@ -62,7 +62,7 @@ def minimal_policy_dict(*, floor=0.05, max_evidence_age_days=None, staleness_lim
     return {
         "family": "agentic-coding",
         "default": ["api"],
-        "certified": False,
+        "validated": False,
         "note": "",
         "domain": {},
         "provenance": {},

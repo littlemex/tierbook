@@ -137,7 +137,7 @@ def test_p1_readme_quickstart_is_true_end_to_end(tmp_path: Path):
     r = run_cli(["route", "--table", "table25.json", "--family", "tool-agent-user-retail"], cwd=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     decision = json.loads(r.stdout)
-    assert decision["certified"] is True
+    assert decision["validated"] is True  # CONTRACT C1 (amendment 3): route's JSON key renamed from certified
     assert decision["status"] == "assigned"
     assert decision["send_to"]
 
@@ -171,7 +171,7 @@ def test_p1_help_names_the_two_files_and_the_config_shape_to_copy(tmp_path: Path
 
     r = run_cli(["route", "--table", "table.json", "--family", "tool-agent-user-retail"], cwd=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert json.loads(r.stdout)["certified"] is True
+    assert json.loads(r.stdout)["validated"] is True  # CONTRACT C1 (amendment 3): route's JSON key renamed
 
 
 # ---------------------------------------------------------------------------------------------------------

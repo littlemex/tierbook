@@ -24,8 +24,10 @@ BOUNDS = {"box": 0.90, "api": 0.70}
 COSTS = {"box": 0.004, "api": 0.012}
 
 
-def policy(certified=True, domain=None):
-    """A two-rule policy: the box below a capacity bound, the API above it."""
+def policy(validated=True, domain=None):
+    """A two-rule policy: the box below a capacity bound, the API above it. `validated` (CONTRACT C1): the
+    non-inferiority status, renamed from `certified` -- this keyword names the same judgment it always did,
+    only the word changed."""
     return dc.Policy(
         family="agentic-coding",
         rules=(
@@ -38,7 +40,7 @@ def policy(certified=True, domain=None):
         ),
         default=("api",),
         domain=domain or {"inflight:box": (0.0, 128.0)},
-        certified=certified,
+        validated=validated,
         note="a fixture",
     )
 
@@ -57,7 +59,8 @@ def route(o, pol=None, **kw):
     base = dict(policy=pol or policy(), observation=o, request_id="r1", feature_vector_version="fv1",
                 policy_version="p1", mechanism_version="0.1.0", agent="opencode", model="m",
                 endpoint="http://e", gateway_quote_usd=0.004, bounds=BOUNDS, costs=COSTS,
-                evidence_as_of="2026-09-01")
+                evidence_as_of="2026-09-01",
+                bound_provenance=rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95))
     base.update(kw)
     return sv.route_once(**base)
 
@@ -195,5 +198,5 @@ def test_a_certified_decision_whose_chosen_candidate_is_below_the_floor_is_caugh
 
 
 def test_an_uncertified_policy_never_certifies_however_the_state_looks():
-    _, d = route(obs(inflight=2.0, metered_authorised=True), pol=policy(certified=False))
+    _, d = route(obs(inflight=2.0, metered_authorised=True), pol=policy(validated=False))
     assert d.certified is False

@@ -74,8 +74,13 @@ def evidence_as_of_before(decided_at: float, age_days: float) -> str:
 
 
 def cand(cid="box", why="chosen", bound=0.90, cost=0.004, evidence_as_of=""):
-    return rec.Candidate(id=cid, excluded_because=why, bound=bound, bound_kind="lcb95", cost_usd=cost,
-                         evidence_as_of=evidence_as_of)
+    """A `record.Candidate` -- `bound_provenance` (CONTRACT C1) travels paired with `bound`, an honest bound
+    this release could actually produce."""
+    return rec.Candidate(id=cid, excluded_because=why, bound=bound, cost_usd=cost,
+                         evidence_as_of=evidence_as_of,
+                         bound_provenance=(None if bound is None else
+                                           rec.BoundProvenance(estimator="clopper_pearson_fixed_sample",
+                                                               confidence=0.95)))
 
 
 def decision(**kw):
@@ -109,7 +114,7 @@ def minimal_policy_dict(*, floor=0.80, max_evidence_age_days=None) -> dict:
     """The smallest artifact `decide.from_dict` will load: no rules, so nothing about compilation is under test
     here, only whether `cmd_accept` reads `max_evidence_age_days` out of `parameters` and threads it through."""
     return {
-        "family": "agentic-coding", "default": ["api"], "certified": False, "note": "",
+        "family": "agentic-coding", "default": ["api"], "validated": False, "note": "",
         "domain": {}, "provenance": {}, "rules": [],
         "parameters": {"floor": floor, "max_evidence_age_days": max_evidence_age_days},
     }

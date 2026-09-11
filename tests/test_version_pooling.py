@@ -43,8 +43,14 @@ from tierbook import record as rec  # noqa: E402
 
 
 def cand(cid="box", why="chosen", bound=0.90, cost=0.004):
-    return {"id": cid, "excluded_because": why, "bound": bound, "bound_kind": "lcb95", "cost_usd": cost,
-            "evidence_as_of": "2026-09-01"}
+    """A row's candidate shape -- `bound_provenance` nested as a plain dict (CONTRACT C1 point 3), an honest
+    bound this release could actually produce, so a candidate here is genuinely admissible rather than refused
+    for `unrecorded_provenance` regardless of the schema-version tag this file puts on the decision around it."""
+    return {"id": cid, "excluded_because": why, "bound": bound,
+            "bound_provenance": (None if bound is None else
+                                 {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()}),
+            "cost_usd": cost, "evidence_as_of": "2026-09-01"}
 
 
 def v1_row(rid="r1", certified=True, chosen="box", candidates=None, exploration=False):

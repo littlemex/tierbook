@@ -26,8 +26,13 @@ V010_FIXTURE = ROOT / "docs" / "verify" / "v0.1.0-decisions.jsonl"
 
 
 def cand(cid="box", why="chosen", bound=0.90, cost=0.004):
-    return {"id": cid, "excluded_because": why, "bound": bound, "bound_kind": "lcb95", "cost_usd": cost,
-            "evidence_as_of": "2026-09-01"}
+    """A row's candidate shape -- `bound_provenance` nested as a plain dict, the shape `from_row` reads (CONTRACT
+    C1 point 3): a logged row carries it as a nested object, never as a `BoundProvenance` instance."""
+    return {"id": cid, "excluded_because": why, "bound": bound,
+            "bound_provenance": (None if bound is None else
+                                 {"estimator": "clopper_pearson_fixed_sample", "confidence": 0.95,
+                                  "corrected_over": ()}),
+            "cost_usd": cost, "evidence_as_of": "2026-09-01"}
 
 
 def row(**kw):
@@ -45,11 +50,23 @@ def row(**kw):
     return base
 
 
+def _candidate_from_dict(c: dict) -> rec.Candidate:
+    """`build_decision`'s bridge from the row shape (`cand()`, a plain dict) to the construction shape
+    (`rec.Candidate`, a dataclass): `bound_provenance` is a nested dict in the former and a `BoundProvenance`
+    instance in the latter (CONTRACT C1 point 3), and this is the one place in this file that crosses from one to
+    the other."""
+    c = dict(c)
+    bp = c.pop("bound_provenance", None)
+    if bp is not None:
+        bp = rec.BoundProvenance(**bp)
+    return rec.Candidate(bound_provenance=bp, **c)
+
+
 def build_decision(**kw):
     """A `Decision` built the way a writer builds one -- from plain values, never from a logged row."""
     r = row()
     base = {k: v for k, v in r.items() if k != "candidates"}
-    base["candidates"] = [rec.Candidate(**c) for c in r["candidates"]]
+    base["candidates"] = [_candidate_from_dict(c) for c in r["candidates"]]
     base.update(kw)
     return rec.Decision(**base)
 

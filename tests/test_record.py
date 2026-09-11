@@ -18,8 +18,13 @@ from tierbook import record as rec  # noqa: E402
 
 
 def cand(cid="box", why="chosen", bound=0.82, cost=0.004):
-    return rec.Candidate(id=cid, excluded_because=why, bound=bound, bound_kind="lcb95", cost_usd=cost,
-                         evidence_as_of="2026-09-01")
+    """`bound_provenance` (CONTRACT C1) travels paired with `bound`, an honest bound this release could
+    actually produce."""
+    return rec.Candidate(id=cid, excluded_because=why, bound=bound, cost_usd=cost,
+                         evidence_as_of="2026-09-01",
+                         bound_provenance=(None if bound is None else
+                                           rec.BoundProvenance(estimator="clopper_pearson_fixed_sample",
+                                                               confidence=0.95)))
 
 
 def decision(**kw):
