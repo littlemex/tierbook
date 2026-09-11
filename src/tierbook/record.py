@@ -43,7 +43,13 @@ from . import observe
 #: tolerance, which killed the whole acceptance run rather than being counted. A v0.1.0 log has no `schema_version`
 #: key at all, so its absence is the fact that identifies it: it is read as version 1, not by a convention enforced
 #: by nobody, but because `from_row` below checks for the key's absence in code.
-SCHEMA_VERSION = 2
+#:
+#: CONTRACT C2: 3, not 2. `policy_digest` is required starting at this version -- a version 1 or 2 row never had
+#: it, because the mechanism that derives it did not exist for them, and `from_row` supplies `""` for exactly
+#: those two versions rather than one (SEAMS.md S4, applied with its own cutoff: this field's mechanism shipped a
+#: release after the one that introduced `exploration_reason`/`eligible_set`, so it reads correctly for one more
+#: past version than they do).
+SCHEMA_VERSION = 3
 
 #: The sentinel a fresh `Decision()` call actually receives for `schema_version`. Distinguishing "the writer's
 #: default kicked in" from "a caller passed 2, which happens to equal the default" needs a value no caller would
@@ -224,6 +230,14 @@ class Decision:
     exploration: bool
     certified: bool
     policy_version: str
+    #: CONTRACT C2: a content hash of the compiled policy artifact `route_once` decided from
+    #: (`decide.policy_digest`), so a record can name the artifact rather than a hand-typed label. No dataclass
+    #: default, for the same reason `exploration_reason` below has none: a plausible-looking default here would
+    #: be a value nothing measured. SEAMS.md S4 governs its absence from a row, in `from_row` -- a version 1 or
+    #: 2 row never had this field, because the mechanism that derives it did not exist for them, and reads as
+    #: `""`; a version 3-or-later row omitting it is `Incomplete`, naming the field, because for that row the
+    #: omission means a writer forgot to stamp a fact the mechanism did produce.
+    policy_digest: str
     mechanism_version: str
     agent: str
     model: str
@@ -357,6 +371,9 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
       `[]` because C3's mechanism did not exist when it was written, and a version 2-or-later row missing either
       raises `Incomplete` naming it, because for that row the omission means a writer forgot to stamp a fact
       the mechanism did produce.
+    - `policy_digest` (C2) is the same exception, with a cutoff one version later: a version 1 OR 2 row supplies
+      `""`, because the mechanism that derives a digest did not exist until this release, and only a version 3
+      row missing it raises `Incomplete` naming it.
     """
     # Version first, before any field is validated against this reader's shape: a row written to a shape this
     # reader does not know cannot be meaningfully checked against the shape it does know -- the fields it thinks
@@ -391,8 +408,24 @@ def from_row(row: dict) -> tuple[Decision, list[str]]:
                              f"default: only a version 1 row (written before C3's mechanism existed) reads its "
                              f"absence as no_mechanism/[]")
 
+    # CONTRACT C2, SEAMS.md S4 again, with its own cutoff: `policy_digest` is one release younger than
+    # `exploration_reason`/`eligible_set` above, so a row written under C3 but before C2 (schema_version 2) is
+    # exactly as silent about it as a version 1 row is -- the mechanism that derives a digest did not exist for
+    # either. Only a version 3-or-later row omitting it is a writer that forgot to stamp a fact the mechanism
+    # did produce.
+    S4_VERSION_1_OR_2_VALUES = {"policy_digest": ""}
+    for name in S4_VERSION_1_OR_2_VALUES:
+        if name in row:
+            continue
+        if version <= 2:
+            s4_kw[name] = S4_VERSION_1_OR_2_VALUES[name]
+        else:
+            raise Incomplete(f"row is missing {name!r}, which schema_version {version} requires and does not "
+                             f"default: only a version 1 or 2 row (written before C2's mechanism existed) reads "
+                             f"its absence as \"\"")
+
     for f in fields(Decision):
-        if f.name == "schema_version" or f.name in S4_VERSION_1_VALUES:
+        if f.name == "schema_version" or f.name in S4_VERSION_1_VALUES or f.name in S4_VERSION_1_OR_2_VALUES:
             continue
         if f.default is MISSING and f.default_factory is MISSING and f.name not in row:
             raise Incomplete(f"row is missing {f.name!r}, which this schema requires and does not default")
