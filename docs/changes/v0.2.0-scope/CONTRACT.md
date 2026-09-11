@@ -983,3 +983,60 @@ absent with a reason rather than defaulted. Exploration's live behaviour is **no
 compiled policy has no rule and no eligible alternative, so every draw returned `no_eligible_arm` and the diverted
 share was 0. That is correct behaviour on that fixture and it is not evidence about the draw. Said plainly here
 because a gap presented as coverage is the failure phase 5 exists to prevent.
+
+## Amendment 16 — C13 is deferred with its reasoning, and C14 lands, and the difference between them is the point
+
+Working out how to implement C13 turned it into two findings of different kinds, and the release should take one and
+not the other.
+
+### C14 — the bound function accepts more successes than trials and answers confidently
+
+`accept.clopper_pearson_lower(n, k, alpha)` computes the lower confidence bound the entire floor comparison rests on.
+Its boundary case is `if k >= n: return alpha ** (1.0 / n)`, which is correct for `k == n` and is applied to `k > n`
+as well:
+
+```
+cp(n=16, k=20) = 0.8292502770175191   <- 20 successes in 16 trials, ACCEPTED
+```
+
+More successes than trials is not a boundary, it is a contradiction, and the value returned is **high** — so the
+error flatters the candidate, which is the direction every finding in phase 4 ran. A caller who transposes the two
+arguments gets a plausible bound instead of a refusal. I did exactly that while investigating C13, read
+`self-hosted-a` as clearing a 0.80 floor at `0.8293`, and its true bound is `0.4922`.
+
+`k > n` raises, naming both numbers. `n <= 0` raises too: today it reaches `alpha ** (1.0 / 0)` and crashes with
+`ZeroDivisionError`, which is a better failure than a wrong answer but is not a stated one.
+
+### C13 is deferred, and this is the reason rather than an omission
+
+C13 asked that the bound come from the artifact rather than the caller, by the rule amendment 2 established for the
+floor. Implementing it revealed that **the artifact does not have the quantity to give.** `policy.assign_family`'s
+`ranked` carries `quality_lcb`, and that is a paired lower bound on the **difference** against the reference tier —
+`-0.469` for `self-hosted-a` — not an absolute lower bound on success. SCOPE section 2 clause 1 asks for the absolute
+one: *"the candidate's corrected lower bound on success clears the family's floor."*
+
+So the compiler has never computed the quantity clause 1 names. It computes non-inferiority against a reference, and
+the online floor comparison has always been against a number a caller supplied. Deriving the absolute bound is
+possible — the ledger carries `solved` and `attempted`, and this package already has an exact lower bound — and doing
+it changes what a compiled policy **claims**, not merely where a number is read from. On the example ledger at a 0.80
+floor it changes the answer:
+
+```
+api-cheap-a      16/20 -> lcb95 0.5990   clears 0.80: False
+api-strong-a     20/20 -> lcb95 0.8609   clears 0.80: True
+self-hosted-a    14/20 -> lcb95 0.4922   clears 0.80: False
+```
+
+Only the reference clears the floor, on a 20-item cohort the README already says is too small — *"20 items is below
+--min-items=100. This project compiled a wrong answer from 20."*
+
+That is a design change to what the compiler asserts, not a fix to where a value lives. `/change-pipeline` is explicit
+about the move here: **if phase 4 or 5 keeps producing design-level findings, the contract was thin, and the honest
+response is to return to phase 2 rather than absorb them one at a time.** C13 goes to the next release's phase 1 with
+the observation above as its input, and the hole it names is stated in the release notes rather than quietly carried:
+**a caller can assert a bound the evidence does not support, and the falsifier will pass it, because the falsifier
+computes admissibility from the caller's own number.**
+
+Absorbing C13 here would mean redesigning what a compiled policy claims, on a Friday, at the end of a release that has
+already taken thirteen entries — with the example ledger's own answer changing as a side effect. That is how a release
+acquires a defect nobody reviewed.
