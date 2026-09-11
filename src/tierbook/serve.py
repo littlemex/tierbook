@@ -129,6 +129,13 @@ def _confirmed_policy_version(policy: dc.Policy, supplied: str | None) -> str:
     digest = policy.policy_digest
     if supplied is None:
         return digest
+    # `parameter` distinguishes two refusals and so does this: an artifact that recorded NOTHING cannot confirm a
+    # supplied value, and an artifact that recorded a DIFFERENT value contradicts it. Collapsing both into "does
+    # not match ''" reports an absence as a competing value, which is the shape of claim this release is closing.
+    if not digest:
+        raise ValueError(f"policy_version was supplied as {supplied!r}, but this policy carries no digest: an "
+                         f"artifact that did not record one cannot confirm a supplied version. A policy from "
+                         f"compile_policy carries its own; one built by hand has nothing to check against")
     if supplied != digest:
         raise ValueError(f"policy_version supplied as {supplied!r} does not match {digest!r}, this policy's "
                          f"own digest. Refusing rather than preferring either")

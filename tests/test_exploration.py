@@ -43,6 +43,7 @@ than asserted as settled.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import datetime as _dt
 import random
@@ -486,7 +487,8 @@ def _v2_row(**kw):
         "family": "agentic-coding", "request_id": "r1", "feature_vector_version": "fv1", "state_ref": "obs:a",
         "candidates": [_cand_row(), _cand_row("api", "below_floor", 0.70, 0.012)], "chosen": "box",
         "selection_probability": 1.0, "exploration": False, "certified": True,
-        "policy_version": "p1", "mechanism_version": "0.2.0", "agent": "opencode", "model": "m",
+        "policy_version": "p1", "policy_digest": "0123456789abcdef", "mechanism_version": "0.2.0",
+        "agent": "opencode", "model": "m",
         "endpoint": "http://e", "gateway_quote_usd": 0.004, "gateway_authorised": True, "decided_at": DECIDED_AT,
         "gaps": [], "label_state": "pending", "label": None, "outcome": {},
         "schema_version": 2, "exploration_reason": "no_mechanism", "eligible_set": [],
@@ -1053,7 +1055,7 @@ def _rt_policy(validated=True, domain=None):
     """Same shape as `tests/test_serve.py`'s `policy()`: box below a capacity bound, api above it, api the
     declared default. `validated` (CONTRACT C1): the non-inferiority status, renamed from `certified` -- this
     keyword names the same judgment it always did, only the word changed."""
-    return dc.Policy(
+    pol = dc.Policy(
         family="agentic-coding",
         rules=(
             dc.Rule(guards=(dc.Guard(var="inflight:box", op="<", threshold=8.0,
@@ -1068,6 +1070,9 @@ def _rt_policy(validated=True, domain=None):
         validated=validated,
         note="a fixture",
     )
+    # CONTRACT C2: stamped the way `compile_policy` stamps it, so `route_once`'s digest confirmation
+    # (`policy_version` default reads `policy.policy_digest`) has one to read.
+    return dataclasses.replace(pol, policy_digest=dc.policy_digest(pol))
 
 
 def _rt_obs(**state):
@@ -1086,7 +1091,7 @@ def _rt_route(o, pol=None, **kw):
     for `explore.eligible`'s admissibility check, unused by the pre-C3 tests that helper serves) and whatever
     exploration keywords a caller supplies via `**kw`."""
     base = dict(policy=pol or _rt_policy(), observation=o, request_id="r1", feature_vector_version="fv1",
-               policy_version="p1", mechanism_version="0.2.0", agent="opencode", model="m",
+               mechanism_version="0.2.0", agent="opencode", model="m",
                endpoint="http://e", gateway_quote_usd=0.004, bounds={"box": 0.90, "api": 0.70},
                costs={"box": 0.01, "api": 0.012}, evidence_as_of=_as_of(STALE_AGE_DAYS), floor=FLOOR,
                bound_provenance=rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95),
