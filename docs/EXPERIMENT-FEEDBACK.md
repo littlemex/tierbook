@@ -383,9 +383,15 @@ the quantity is the budget each signal REQUIRES:
 **The bar of 126 is unreachable even by the oracle**, which needs 348. That is not a statement about any signal.
 
 **The cause is a condition mismatch I carried for several rounds.** The residual data is the TERSE condition,
-where the box scores 0.608 on dev. The floor of 0.90 and the budget of 126 were derived on the NORMAL condition,
-where the box scores 0.7597. Lifting 0.608 to 0.90 needs at least 205 net rescues, so 126 escalations cannot do it
-by construction — while lifting 0.7597 to 0.90 needs 141, which is where the original number came from.
+where the box scores 0.608 on dev. The floor of 0.90 and the budget of 126 were stated for the NORMAL condition,
+where the box scores 0.7597.
+
+> **Correction, same day.** The sentence that stood here said lifting 0.608 to 0.90 needs at least 205 net
+> rescues and lifting 0.7597 to 0.90 needs 141, "which is where the original number came from." Both figures
+> are wrong and the derivation is invented. Over 1,187 items the arithmetic minimum is `ceil(0.90 × 1187) −
+> p_box × 1187`: **347 from 0.608, and 167 from 0.7597.** The bar allowed 141, and 126 after its own 10%
+> reduction, so it was below the arithmetic minimum in BOTH conditions — see F17, which supersedes this
+> paragraph's account of the cause. The condition mismatch is real; it is not what made the bar unreachable.
 
 So "the adoption condition is unmet" was reported repeatedly by comparing a requirement computed on one condition
 against a measurement taken on another. This is F1 again, one level up: the prompt condition is not recorded with
@@ -398,6 +404,169 @@ comparison needs the normal condition's residuals, which is the extraction that 
 **What would discharge it.** The same thing F1 asks for, enforced rather than documented: a number carrying the
 condition it was measured under, so that a comparison between two conditions is refused instead of performed. Every
 economic threshold in this project is conditioned on a box accuracy, and none of them says which box.
+
+## F16 — A figure quoted as a property of the model was a property of the ridge
+
+**Where it bit.** The claim that opened this whole study and was carried through five rounds: the correctness
+direction occupies 0.081% of the activation variance and sits 120th by variance, which was read as this box
+confirming the paper's "J space is under 10% of activation variance."
+
+An adversarial round asked the obvious control I had never run — fit the same solver on PERMUTED labels and see
+where a direction with no signal in it lands. Two things came out, and both destroy the claim.
+
+**The geometry was not the one the claim is about.** The 0.081% was measured after applying the final RMSNorm
+weights, which rescale every coordinate and therefore change which directions are high-variance. In the raw
+residual stream — the activations the paper's claim is about — the correctness direction is among the TOP few:
+
+| layer | real share | rank | permuted share (median) | permuted rank (median) |
+|---|---|---|---|---|
+| L24 | 0.1926 | **2** | 0.0392 | 4 |
+| L28 | 0.1438 | **2** | 0.0245 | 5 |
+| L36 | 0.0618 | 4 | 0.0080 | 21 |
+| L40 | 0.0032 | 38 | 0.0095 | 19 |
+
+The permuted-label directions are LOWER in variance than the real one. Landing in the low-variance tail is the
+solver's default, so a low-variance finding was never evidence for anything; and the real direction does not land
+there.
+
+**The number moves with the regularisation alone.** Same data, same labels, same layer, only the ridge changing:
+
+| L28, ridge | raw: share / rank / dev AUC | RMSNorm-scaled: share / rank / dev AUC |
+|---|---|---|
+| 0.5 | 0.2424 / 2 / 0.7320 | 0.2351 / 2 / 0.3328 |
+| 20 | 0.1438 / 2 / 0.7695 | 0.0042 / 28 / 0.7419 |
+| 100 | 0.0556 / 4 / 0.7960 | 0.0014 / **75** / 0.5480 |
+
+Rank 2 to rank 75 by turning one knob, while dev AUC barely moves. **The variance share of a fitted direction is
+a property of the fit, not of the model,** and cannot be quoted as a measurement of where a model keeps its
+information. (The two smallest ridges diverge numerically — AUC 0.5549 — and those rows are void, not evidence.)
+
+**What it cost.** The first of the seven "settled" measurements, withdrawn. It was also the finding that made the
+paper look confirmed in this box, which is what gave the following four rounds their premise.
+
+**What would discharge it.** A quantity derived from a fitted model carrying the fitting hyper-parameters and the
+geometry it was computed in, the same way F1 asks a number to carry its prompt condition. This is the same defect
+class in a third place: a number whose meaning depends on an argument that is not stored beside it.
+
+## F17 — The adoption bar was never derived from the floor, and was infeasible in every condition
+
+**Where it bit.** Auditing F15's own arithmetic, at an adversarial round's insistence. F15 diagnosed a condition
+mismatch and then explained the bar's origin — and that explanation does not survive checking.
+
+The bar was "hold floor 0.90 with at most 126 escalations per 1,187," where 126 is a 10% reduction on 141. The
+arithmetic minimum of net rescues to reach a floor is `ceil(floor × N) − p_box × N`:
+
+| condition | floor 0.80 | floor 0.90 |
+|---|---|---|
+| terse, 0.608 | 228 | 347 |
+| normal, 0.7597 | 48 | **167** |
+
+**141 is below 167, so the bar was unsatisfiable in the normal condition too** — by any signal, by the oracle, by
+anything. It was unsatisfiable on the day it was written.
+
+Where 42 and 141 actually came from: they are the percentile bands 3.54% and 11.88% of 1,187, named in an earlier
+review round, with the labels "floor 0.80" and "floor 0.90" attached to them there. No derivation was ever given
+and I never asked for one; I inherited the numbers and their labels together and treated the labels as their
+provenance.
+
+The same audit shows the oracle column carried no information either. The oracle's 348 at floor 0.90 equals the
+arithmetic minimum of 347 — it is `(floor − p_box) × N` restated, not a measurement of how good an oracle can be.
+Two of the five rows in F15's table were identities.
+
+**What it cost.** The adoption criterion for the entire study, void. Every "not yet adopted" conclusion, including
+F15's own correction, was measured against a bar no policy could clear.
+
+**What would discharge it.** Two things, and the second is the one that generalises:
+
+- A floor expressed as headroom rather than as an absolute: `γ = (F − p_box) / (p_ceiling − p_box)`, with
+  `p_ceiling = p_box + (1 − p_box) · q_API`. In terse the floor of 0.90 was `γ > 1` — not merely hard but outside
+  what escalating every single item could reach. Stated in γ, the two conditions' bars are comparable and an
+  impossible one is visible on sight.
+- **Feasibility checked before a policy is scored.** When the oracle cannot reach the floor in the same condition,
+  the verdict belongs on the CONSTRAINT — infeasible — and not on the policy. This is a property of any evaluator
+  that carries a floor and a budget, so it is the one clause here that is about tierbook's mechanism rather than
+  about the study's bookkeeping.
+
+## F18 — What the escalation table was actually measuring, once the identities are removed
+
+**Where it bit.** F15's table survives F17 if it is read as the ratio each signal achieves against the arithmetic
+bound rather than as a pass/fail against a bar. `η(F) = N_oracle(F) / N_signal(F)`:
+
+| floor | free entropy | flip radius | KNOWN−UNKNOWN gap |
+|---|---|---|---|
+| 0.75 | 0.63 | 0.45 | 0.34 |
+| 0.80 | 0.61 | 0.41 | 0.31 |
+| 0.85 | 0.58 | 0.30 | 0.32 |
+| 0.90 | **0.41** | 0.30 | 0.30 |
+
+The free entropy runs at about 0.6 of the bound over most of the range and **falls to 0.41 at the top**. That is
+the finding the yes/no bar was hiding: the entropy ranks the middle of the difficulty distribution well and is bad
+at the last tenth, which is exactly the region a high floor is made of. It is also where an internal signal would
+have to earn its place, and where all three signals converge to 0.30.
+
+**What it cost.** Nothing yet — this is recovered from measurements already taken. It is recorded because it is the
+first statement in this study about WHERE a signal fails rather than whether it passes.
+
+**What would discharge it.** A comparison reported over the whole deferral curve rather than at one operating
+point. Signals cross: a ranking taken at one floor does not hold at another, and this table is an instance. The
+mechanism-level form is that a policy comparison must name its operating point or integrate over it.
+
+## F19 — Three things decide whether a floor is reachable, and the study checked none of them
+
+**Where it bit.** Taking F17's fix seriously — express a floor as headroom, and check feasibility before
+scoring a policy — and finding that "headroom" needs three inputs, not one. Fitting a two-parameter item
+response model to the response matrix already on disk (488 items × 16 systems: 7 API arms, 9 box arms across
+two prompt conditions) puts every arm and every condition on one scale and makes all three checkable.
+
+**First: the escalation target's own ceiling.** No cascade can exceed the fraction of items that the box or its
+escalation target solves. Measured:
+
+| cascade | ceiling |
+|---|---|
+| box + `claude-sonnet-4-6` | **0.8934** |
+| box + `claude-opus-5` | 0.9098 |
+| box + `claude-fable-5` | 0.9160 |
+| box + every API arm, best per item | 0.9590 |
+| every one of the 16 systems, best per item | 0.9672 |
+
+The simulations escalated to `claude-sonnet-4-6`. **Floor 0.90 is above that cascade's ceiling**, so it was
+unreachable for a reason that has nothing to do with the condition and nothing to do with a signal: the target
+could not supply it. With `claude-opus-5` the same floor is reachable. The floor and the target were chosen
+independently and never checked against each other.
+
+**Second: accuracy is not a sufficient statistic, so it misranks arms.** `qwen3-next-80b` scores 0.6230 and
+`qwen3.6@terse` scores 0.6537, yet the fitted abilities put them the other way round (θ = −0.588 against
+−0.961): the terse arm's successes sit on easier items. Ranking candidates by accuracy picks a different winner
+from ranking them by ability on the same items.
+
+**Third: a prompt condition is not a shift in ability — it changes which items are solved.** The model assumes
+responses are independent given item difficulty and system ability, so two arms sharing a model and a prompt
+should agree MORE than it predicts, and they do. The comparison that matters is where a prompt change falls:
+
+| pair | excess disagreement (observed − predicted) |
+|---|---|
+| two terse arms of the same box | **−0.1189** |
+| two normal arms of the same box | −0.0365 |
+| a normal arm against a terse arm | **+0.0147** |
+| the box against a different model entirely | +0.0877 |
+
+On that scale the prompt change sits **65% of the way from a re-run to a different model**. So F1 understates
+the problem: a signal fitted in one condition is not a mis-scaled version of the same signal in the other, and
+no amount of recalibration transfers it. The condition has to be part of the identity of the measurement, not a
+scale factor applied to it.
+
+**What it cost.** Nothing new was run — the response matrix was already on disk from the economics work, and the
+fit takes seconds. The cost was earlier: five rounds of signal comparison inside a cascade whose ceiling was
+below its own floor.
+
+**What would discharge it.** A floor accepted only alongside the escalation target it is claimed for, with the
+cascade's ceiling computed from recorded per-item outcomes and the floor refused when it exceeds it. This is the
+one clause in F17's discharge that has teeth, and F19 is why: the infeasibility was in the pairing of a floor
+with a target, which is exactly the kind of fact a policy artifact can hold and check.
+
+Two caveats on the fit itself. The weak prior shrinks the box's predicted accuracy to 0.6200 against a measured
+0.6537, so predicted escalation counts run conservative; and the discriminations hit both clip bounds, so
+individual item parameters are not to be quoted. The three comparisons above are ordinal and survive that.
 
 ## Not requirements, deliberately
 
