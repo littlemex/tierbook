@@ -1,0 +1,148 @@
+{
+ "engine": {
+  "endpoint": "http://127.0.0.1:8000",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "requests": 200,
+  "at": 1789172769.10728
+ },
+ "documented_path": {
+  "steps": [
+   {
+    "step": "validate",
+    "exit": 0,
+    "tail": [
+     "every record can be read; see any notes above for what they cannot support"
+    ],
+    "stderr": ""
+   },
+   {
+    "step": "compile",
+    "exit": 0,
+    "tail": [
+     "    WARNING: 20 items is below --min-items=100. This project compiled a wrong answer from 20."
+    ],
+    "stderr": ""
+   },
+   {
+    "step": "route",
+    "exit": 2,
+    "tail": [],
+    "stderr": "refused: the entry for 'agentic-coding' is 'provisional', not 'assigned': nothing was certified on the calibration fold either; the reference tier carries no cheaper claim to validate\nRouting it needs allow_unvalidated=True, which is deliberately awkward: on this project's own data a calibration fol"
+   },
+   {
+    "step": "route --allow-unvalidated",
+    "exit": 0,
+    "tail": [
+     "}"
+    ],
+    "stderr": ""
+   },
+   {
+    "step": "observe",
+    "exit": 3,
+    "tail": [
+     "}"
+    ],
+    "stderr": ""
+   },
+   {
+    "step": "observe --previous",
+    "exit": 3,
+    "tail": [
+     "}"
+    ],
+    "stderr": ""
+   }
+  ],
+  "table": "/home/ubuntu/results/documented/table.json",
+  "observation": "/home/ubuntu/results/documented/observation.json",
+  "first_observation_not_observed": [
+   "arrival_rate_per_hour",
+   "evidence_age_days"
+  ],
+  "second_observation_not_observed": [
+   "evidence_age_days"
+  ],
+  "an_arrival_rate_needs_a_previous_reading": {
+   "first": "absent",
+   "second": 372871.38178054855
+  }
+ },
+ "exploration_on_live_traffic": {
+  "requests": 200,
+  "declared_rate": 0.05,
+  "reasons": {
+   "not_diverted": 190,
+   "explored": 10
+  },
+  "draws_with_an_alternative_available": 200,
+  "traffic_actually_diverted": 10,
+  "diverted_share": 0.05,
+  "candidates_chosen": {
+   "api-strong-a": 190,
+   "api-cheap-a": 3,
+   "self-hosted-a": 7
+  },
+  "distinct_state_readings": 19,
+  "log": "/home/ubuntu/results/explore/decisions.jsonl"
+ },
+ "the_door_changes_a_verdict": {
+  "attached": 40,
+  "refused": [],
+  "an_outcome_for_a_request_that_does_not_exist": {
+   "exit": 1,
+   "stderr": "refused: 'no-such-request' is not a request_id this log holds a decision for. An outcome attached to a request the log never recorded joins to nothing, and this door only joins an "
+  },
+  "floor_compliance_before": "unsupported",
+  "floor_compliance_after": "unsupported",
+  "floor_compliance_detail_after": "certified traffic: 0 decisions and none of them labelled, so no realised rate exists. This needs the task's own oracle to have run and its verdict attached; all served traffic: the 95% lower bound on the realised rate is 92.8% over 40 labelled decisions, which clears the floor 80.0%",
+  "floor_compliance_numbers_after": {
+   "labelled": 0,
+   "successes": 0,
+   "rate": null,
+   "floor": 0.8,
+   "significance": 0.05,
+   "certified": 0,
+   "unlabelled_certified": 0,
+   "verdict": "unsupported",
+   "served": 200,
+   "served_labelled": 40,
+   "served_successes": 40,
+   "served_rate": 1.0,
+   "unlabelled_served": 160,
+   "served_verdict": "pass",
+   "served_p_below_floor": 1.0,
+   "served_lower_bound": 0.9278
+  },
+  "orphan_outcomes_in_the_report": {},
+  "criteria_reported": 10
+ },
+ "ceiling_and_digest_on_a_real_log": {
+  "accept_stderr": "",
+  "accept_exit_1_means_a_criterion_failed_not_an_error": [
+   "default_is_not_a_hiding_place"
+  ],
+  "all_verdicts": {
+   "floor_compliance": "unsupported",
+   "floor_is_reachable": "pass",
+   "bound_calibration": "unsupported",
+   "no_false_certification": "pass",
+   "default_is_not_a_hiding_place": "fail",
+   "slo": "unsupported",
+   "spend_regret": "unsupported",
+   "exploration_cost": "unsupported",
+   "adaptation": "unsupported",
+   "genericity_and_usefulness": "unsupported"
+  },
+  "the_artifacts_own_digest": "5eefad2fc8b6b8b8",
+  "digests_on_the_records": [
+   "5eefad2fc8b6b8b8"
+  ],
+  "every_record_names_this_artifact": true,
+  "floor_is_reachable": {
+   "verdict": "pass",
+   "detail": "the declared floor 0.8000 does not exceed 0.8609, the ceiling a 20-item cohort imposes"
+  },
+  "accept_exit": 1
+ }
+}

@@ -1,0 +1,238 @@
+{
+ "pairs": [
+  {
+   "entry": "C1",
+   "observation": "three claims about the same fabricated bound of 0.99",
+   "base_ref": "pre-c1",
+   "reproduce": {
+    "vocabulary": "bound_kind",
+    "verdicts": {
+     "lcb": {
+      "admissible": true,
+      "why": "chosen"
+     },
+     "point_estimate": {
+      "admissible": true,
+      "why": "chosen"
+     },
+     "asserted_by_operator": {
+      "admissible": true,
+      "why": "chosen"
+     }
+    },
+    "interchangeable": true
+   },
+   "verify": {
+    "vocabulary": "bound_provenance",
+    "verdicts": {
+     "honest": {
+      "admissible": true,
+      "why": "chosen"
+     },
+     "claims_a_correction_nothing_performed": {
+      "admissible": false,
+      "why": "unearned_correction"
+     }
+    },
+    "interchangeable": false
+   },
+   "differs": true
+  },
+  {
+   "entry": "C1",
+   "observation": "certified against validated and against the bound",
+   "base_ref": "pre-c1",
+   "reproduce": {
+    "the_policys_judgment_is_spelled": "certified",
+    "validated=True": true,
+    "validated=False": false,
+    "validated=True,bound_below_floor": true
+   },
+   "verify": {
+    "the_policys_judgment_is_spelled": "validated",
+    "validated=True": true,
+    "validated=False": false,
+    "validated=True,bound_below_floor": false
+   },
+   "differs": true
+  },
+  {
+   "entry": "C2",
+   "observation": "a record can name the artifact it came from",
+   "base_ref": "pre-c2",
+   "reproduce": {
+    "has_policy_digest_fn": false,
+    "policy_carries_a_digest_field": false,
+    "cli_policy_version_default_unversioned": true
+   },
+   "verify": {
+    "has_policy_digest_fn": true,
+    "policy_carries_a_digest_field": true,
+    "digest_is_a_function_of_content": true,
+    "digest": "d6fc094743afd124",
+    "cli_policy_version_default_unversioned": false
+   },
+   "differs": true
+  },
+  {
+   "entry": "C3",
+   "observation": "a family that declares no tenant scope",
+   "base_ref": "pre-c3",
+   "reproduce": {
+    "omission_accepted": true
+   },
+   "verify": {
+    "omission_accepted": false,
+    "refusal": "ConfigError: family 'agentic-coding' is missing ['tenant_scope']: a family object needs the candidate it falls back to, the floor its certified assignment must clear, how a future request's label will"
+   },
+   "differs": true
+  },
+  {
+   "entry": "C4",
+   "observation": "the verb on the documented surface",
+   "base_ref": "pre-c4b",
+   "reproduce": {
+    "cli_registers_attach_outcome": false,
+    "readme_documents_it": false
+   },
+   "verify": {
+    "cli_registers_attach_outcome": true,
+    "readme_documents_it": true
+   },
+   "differs": true
+  },
+  {
+   "entry": "C4",
+   "observation": "a changed label, and an outcome naming no decision",
+   "base_ref": "pre-c4b",
+   "reproduce": {
+    "through_the_primitive": {
+     "a_label_that_changes": {
+      "append_accepted": true
+     },
+     "an_outcome_naming_no_decision": {
+      "orphan_reported": false,
+      "reported": null
+     }
+    },
+    "through_the_documented_surface": {
+     "a_label_that_changes": {
+      "exit": 2,
+      "stderr": "usage: tierbook [-h] [--registry REGISTRY] [--version]\n                {validate,explain,compile,route,discover,preflight,export-vsr,logs,observe,assi"
+     },
+     "an_outcome_naming_no_decision": {
+      "exit": 2,
+      "stderr": "usage: tierbook [-h] [--registry REGISTRY] [--version]\n                {validate,explain,compile,route,discover,preflight,export-vsr,logs,observe,assi"
+     }
+    }
+   },
+   "verify": {
+    "through_the_primitive": {
+     "a_label_that_changes": {
+      "append_accepted": true
+     },
+     "an_outcome_naming_no_decision": {
+      "orphan_reported": true,
+      "reported": {
+       "count": 1,
+       "request_ids": [
+        "r1-typo"
+       ]
+      }
+     }
+    },
+    "through_the_documented_surface": {
+     "a_label_that_changes": {
+      "exit": 1,
+      "stderr": "refused: 'r1' already carries the label False and this call says True (labelled). A label that changes makes every criterion computed over this log a "
+     },
+     "an_outcome_naming_no_decision": {
+      "exit": 1,
+      "stderr": "refused: 'r1-typo' is not a request_id this log holds a decision for. An outcome attached to a request the log never recorded joins to nothing, and th"
+     }
+    }
+   },
+   "differs": true
+  },
+  {
+   "entry": "C5",
+   "observation": "the ceiling, and a criterion that reads it",
+   "base_ref": "pre-c5",
+   "reproduce": {
+    "has_floor_reachable": false,
+    "criteria_count": 9,
+    "floor_is_reachable_in_criteria": false
+   },
+   "verify": {
+    "has_floor_reachable": true,
+    "criteria_count": 10,
+    "floor_is_reachable_in_criteria": true,
+    "retail_at_20": {
+     "reachable": false,
+     "ceiling": 0.8608916593317348,
+     "cohort_needed": 36
+    },
+    "agentic_at_20": {
+     "reachable": true,
+     "cohort_needed": 14
+    }
+   },
+   "differs": true
+  },
+  {
+   "entry": "C5",
+   "observation": "what compile records for both shipped families",
+   "base_ref": "pre-c5",
+   "reproduce": {
+    "compile_returncode": 0,
+    "agentic-coding": "absent",
+    "tool-agent-user-retail": "absent"
+   },
+   "verify": {
+    "compile_returncode": 0,
+    "agentic-coding": {
+     "ceiling": 0.8608916593317348,
+     "cohort_size": 20,
+     "cohort_size_needed": 14
+    },
+    "tool-agent-user-retail": {
+     "ceiling": 0.8608916593317348,
+     "cohort_size": 20,
+     "cohort_size_needed": 36
+    }
+   },
+   "differs": true
+  },
+  {
+   "entry": "C6",
+   "observation": "the candidate set the shipped ledger produces",
+   "base_ref": "pre-c6",
+   "reproduce": {
+    "rules_in_the_artifact": 0,
+    "validated": false,
+    "candidates_key_in_the_artifact": "absent",
+    "candidate_set_size": 1,
+    "candidate_set_ids": [
+     "api-strong-a"
+    ]
+   },
+   "verify": {
+    "rules_in_the_artifact": 0,
+    "validated": false,
+    "candidates_key_in_the_artifact": [
+     "api-cheap-a",
+     "api-strong-a",
+     "self-hosted-a"
+    ],
+    "candidate_set_size": 3,
+    "candidate_set_ids": [
+     "api-cheap-a",
+     "api-strong-a",
+     "self-hosted-a"
+    ]
+   },
+   "differs": true
+  }
+ ],
+ "pairs_whose_two_sides_agree": []
+}
