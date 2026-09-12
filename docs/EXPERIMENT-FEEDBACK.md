@@ -1462,6 +1462,49 @@ the estimand was given several draws per item.
   action here is chosen by comparing `p_tier × V − cost` across tiers and that needs a probability per candidate.
   This is the concrete form of what F37 asks for, and the two would be discharged together.
 
+## F40 — The uplift is reliably measurable and almost nobody predicts it
+
+**Where it bit.** F39 found the residual indistinguishable from a permutation null on the uplift, and that has two
+explanations: the residual cannot see it, or the target is too noisy for anything to see it. The free signals
+reaching 0.1996 on the same target argues for the first, but an argument is not a measurement. Splitting each
+tier's arms in half and correlating the two halves' uplifts bounds what any predictor could reach:
+
+| quantity | split-half | Spearman-Brown | ceiling on any signal |
+|---|---|---|---|
+| box success | 0.9107 | 0.9532 | 0.9763 |
+| strong success | 0.6383 | 0.7792 | 0.8827 |
+| **uplift, strong minus box** | **0.7593** | **0.8632** | **0.9291** |
+| uplift, cheap minus box | 0.4513 | 0.6219 | 0.7886 |
+
+**The target is not the limit.** The uplift is reliable enough that a predictor could reach 0.93. Dividing the
+observed correlations by that ceiling:
+
+| signal | correlation with the TRUE uplift | share of the ceiling |
+|---|---|---|
+| the free signals | 0.2148 | **21.5%** |
+| the letter-cleaned residual | 0.0798 | **8.0%** |
+
+So the residual is about a third as good as free, and **the free signals themselves capture only a fifth of what
+is there.** Seventy-eight per cent of a reliably defined quantity is unpredicted by anything measured here.
+
+**This is the strongest statement the study can make, and it is not about the readout.** Put beside F38's EVPI —
+perfect difficulty knowledge is worth 100 to 1700 times a prefill readout — the shape is: **a quantity that is
+reliably defined, economically valuable, and essentially unpredicted.** Nine rounds of negative results about one
+signal are a small part of that; the open problem is the size of the unclaimed remainder.
+
+**What it cost.** Nothing to run. It converts the study's central negative result from "this signal failed" into a
+measured bound on how much room exists, which is a different and more useful claim.
+
+**What would discharge it.** Nothing in the mechanism, and this is the entry that says what the research should do
+next rather than what tierbook should hold. Two candidates the numbers point at, in order:
+
+- The uplift needs a signal from the STRONGER tier's side, not the box's. Every signal here is computed from the
+  box, and the box has no way to know what a different model would do with the item — which is the mechanism
+  behind F39. A cheap probe of the escalation target, rather than of the box, is the untried direction.
+- The reliability of the cheap-minus-box uplift is much lower (0.6219 against 0.8632), which is a measurement
+  problem rather than a modelling one: the cheap tier has two arms and the strong tier five. More arms per tier
+  would raise the ceiling before any signal work is worth doing.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
