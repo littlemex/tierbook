@@ -1442,6 +1442,22 @@ from cross-fitted tier probabilities, with the registered floor of `0.005 × V` 
 | $0.20 | 0.1779 | 0.1331 | 0.1640 | 0.1650 | +0.00101 [−0.00049, +0.00246] | FAIL | 69% → 71% |
 | $1.00 | 0.8968 | 0.6655 | 0.8411 | 0.8442 | +0.00313 [−0.00327, +0.00973] | FAIL | 76% → 77% |
 
+> **Correction, same session, in the diff form this ledger requires.**
+>
+> - **Claim withdrawn:** F39's economic pass at `V = $0.05` (+0.00093, interval above zero).
+> - **Invariant broken:** the policy chose a tier from estimated tier probabilities and was then scored
+>   with those same probabilities, so an estimate that happened to be optimistic about a tier both
+>   selected it and rewarded it.
+> - **Verified replacement:** each tier's arms were split into a fitting half and a scoring half fixed in
+>   advance; the predictor sees only the fitting arms and the reward comes from arms it never saw. Under
+>   that scoring the difference is FAIL at every one of six values of V, with every interval spanning
+>   zero: +0.00045, −0.00035, +0.00038, +0.00119, +0.00162, +0.00311 at V of 0.02, 0.05, 0.10, 0.20,
+>   0.50, 1.00 against floors of 0.005·V.
+> - **Blast radius:** the economic table below and the EVPI-capture column derived from it. The free
+>   signals' own gain over sending everything to the box survives and is large (0.8569 against 0.6639 at
+>   `V = $1.00`); what is withdrawn is the residual's increment on top of them. F40 is unaffected — it
+>   measures correlations against a split-half ceiling and never scores a policy.
+
 **The structure is the finding, not the pass.** Where a correct answer is worth little the strong tier is barely
 affordable, the free signals capture only 36% of the available value, and the residual adds nine points of that
 capture — about ninety-three cents per thousand items, significant under a criterion fixed in advance. Where a
