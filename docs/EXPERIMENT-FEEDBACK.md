@@ -1194,6 +1194,49 @@ that were caught by a check rather than by a reviewer noticing a hole.
 - A threshold or hyper-parameter chosen on the data it is scored on flagged automatically. This is the most
   common selection error in the study and it is detectable by inspection of the code path, not by judgement.
 
+## F33 — The gates can express all eight withdrawals, which is less than catching them
+
+**Where it bit.** F31 named the cause of the withdrawals and proposed five gates. A proposal is not a mechanism,
+and this study has spent enough rounds on findings that turned out to be about the measurement to be suspicious
+of one more claim about process. So the gates were written down as code and each withdrawn claim replayed as a
+record through them — mutation testing applied to the reporting pipeline rather than to the model, with a canary
+carrying a small real effect that must be ACCEPTED so that a gate set which rejects everything cannot score well.
+
+| withdrawn claim, replayed | rejected by |
+|---|---|
+| F16, the geometry swapped | control (the null reaches 0.0133 against the claim's 0.00081); perturbation (moves tenfold along the ridge) |
+| F17, a percentile band labelled a floor | reachability (budget 126 against an arithmetic minimum of 167) |
+| F19, a ceiling asserted below the floor | reachability (upper bound 0.9156 does not exclude 0.90); interval (a rate ruling something out with no n) |
+| F22, a union reported as one setting | control (aggregated differently from the claim) |
+| F22b, the control beating the claim | control (shuffled 0.0723 against real 0.0630) |
+| F23, a threshold selected on the scored set | selection |
+| F28, realised cost used before the call | worst row (only 12.8% of the gain survives) |
+| F30, a pass with no magnitude floor | magnitude floor |
+
+**Eight of eight rejected, and the canary accepted.**
+
+**And this is not an independent test, which is the point worth recording.** The mutations and the gates were
+written by the same person in the same sitting, so what it demonstrates is that the eight failures are
+EXPRESSIBLE as mechanical rules — not that a ninth, novel failure would be caught. The value is narrower and
+real: each of the eight is now a regression test that a future round cannot reintroduce silently, and the canary
+makes the type-II direction visible, which every previous version of this discipline in the ledger left
+unmeasured.
+
+**One limit is already visible from the matrix.** F16 was caught by the control and perturbation gates and NOT by
+the contract gate, because its `representation` field was filled in honestly. A contract catches an omitted
+argument; it cannot catch a misstated one. So the contract is a weaker instrument than F31 implied, and what
+actually did the work here is the pair of gates that recompute something — the control and the perturbation —
+rather than the pair that read what the author wrote.
+
+**What it cost.** Minutes. It is recorded because it changes what F31 should ask for: not a form to fill in, but
+the two or three gates that recompute a quantity a different way and compare. A field an author fills in is
+worth about as much as the author's care, which is what the eight withdrawals already measured.
+
+**What would discharge it.** The recomputing gates run as part of producing a number rather than as a check on it
+afterwards — the same argument the change-pipeline makes for running a mechanism in the cheapest available
+harness. The code is `gate/claim_gate.py` in the study's scratch tree, deliberately not in tierbook: it is a
+discipline for the research, and nothing in the mechanism has asked for it.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
