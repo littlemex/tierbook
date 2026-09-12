@@ -902,6 +902,59 @@ reach tierbook as a signal, and F21's observation contract is the only shape in 
 It is recorded as a requirement on the STUDY instead: a criterion fixed before the measurement, which is how
 both halves of this entry came to be reportable as failures rather than as trends.
 
+## F27 — A crashed capture reported success, and its own gate is what caught it
+
+**Where it bit.** The normal-condition capture, whose whole purpose was to make the two prompt conditions
+comparable. It failed twice over, and the two failures are different kinds of thing.
+
+**It crashed and the platform said it succeeded.** The job ran three hours, wrote 1,400 of 2,364 rows, died on
+`torch.OutOfMemoryError` inside `lm_head(hidden_states[:, slice_indices, :])` — full-vocabulary logits over every
+position of a batch of eight, 5.72 GiB in one allocation — and the Job's status read `Complete 1/1`. The cause is
+in the job's own command:
+
+```
+bash /opt/bench/entrypoint-jlens.sh "$@" 2>&1 | tee /results/jl-normal/run.log
+```
+
+A pipeline's exit status is the last command's, and `tee` always succeeds. Every capture job in this study was
+written this way, so **any of them could have reported success on a partial file**, and the only reason this one
+was caught is that the row count was checked against what was asked for.
+
+**And the data it did write failed its pre-registered gate.** The gate was: the letter distribution must not be
+degenerate, and accuracy must land near 0.74.
+
+| | value |
+|---|---|
+| rows | 1,400 of 2,364 |
+| rows with a parsed letter | 1,244 (88.9%) |
+| accuracy, all rows | 0.4107 |
+| accuracy, parsed rows only | 0.4622 |
+| terse accuracy **on the same 1,400 items** | 0.6293 |
+| top letter share / distinct letters | 0.139 / 11 |
+
+The distribution is fine — this is not the collapse of F5. But the condition that is supposed to score 0.7597
+scored below the terse condition on the same items, so the extraction is wrong, not merely lossy.
+
+**The rule was the defect, and it was mine, not the harness's.** It took the last standalone capital A–J in the
+last 400 characters. A model that explains mentions option labels while reasoning, so the last capital is often
+one it was rejecting; and when the budget truncates the reasoning there is no conclusion to find at all. The
+docstring said "the way the harness does" and the harness does no such thing — it grades a letter it is handed.
+
+**What it cost.** Three hours of GPU and a round of the transfer test that cannot be run yet. What it did not
+cost is a finding, because the gate refused the data. That is the first time in this study a criterion fixed in
+advance stopped bad data before it became a conclusion, and it is the direct payoff of the discipline F26 adopted.
+
+**What would discharge it.** Three things, and the first two are already done:
+
+- The letter read from an explicit `Answer:` cue appended after the reasoning, where the next token has one job,
+  with the regex reading kept alongside for comparison. Extraction stops being a guess about prose.
+- The tail of the generated text and its length stored on every row. The previous failure could not be diagnosed
+  from what was stored — the rows held a letter and no way to see where it came from. This is F5 in a sharper
+  form: it is not enough for the extraction rule to be recorded, the input to the rule has to be too.
+- `set -o pipefail` on any job whose real work is upstream of a `tee`, or the exit code is decoration. This is
+  the class the taxonomy calls silent corruption: the failure became a plausible value, so the run completed
+  wrong rather than stopping.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
