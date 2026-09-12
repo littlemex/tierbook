@@ -1390,6 +1390,31 @@ since a router that knows nothing sends everything to one place:
 | $0.20 | strong | 0.01358 | 445.7× | 4.7× |
 | $1.00 | strong | 0.05215 | **1712.1×** | 17.9× |
 
+> **Correction, same session, in the diff form this ledger requires.**
+>
+> - **Claim withdrawn:** F38's headline, that perfect difficulty knowledge is worth 100 to 1712 times a
+>   prefill readout, and the conclusion "the economics are not the barrier".
+> - **Invariant broken:** the maximum was taken over estimated tier probabilities, so
+>   `E[max_a mu_hat] >= max_a E[mu_hat]` and the oracle selects whichever tier happened to be
+>   over-estimated. The bias is asymmetric across tiers because the cheap tier has two arms where the
+>   others have five.
+> - **Verified replacement:** with each tier's arms split, the oracle built on one half and scored on the
+>   other half's raw outcomes, the gap is **+0.00198 at V=$0.02 (49.5% of the plug-in figure, 65x a
+>   prefill), +0.00011 at V=$0.05 (1.7%, interval spanning zero), and significantly NEGATIVE at
+>   V=$0.20 (−0.00927, [−0.01581, −0.00288]) and V=$1.00 (−0.05927, [−0.09097, −0.02850])**. Item-level
+>   routing built from finite data LOSES to the best fixed tier once a correct answer is worth
+>   $0.10 or more, because there the best fixed action is "always strong" and the estimates are not good
+>   enough to beat a constant.
+> - **Blast radius:** F38's ratio table and its "not the barrier" conclusion. The decision-point half of
+>   F38 is unaffected — it is an argument about when a signal becomes available, not a value estimate.
+>   F39's honest-scoring failure is retro-explained by this. F40's ceiling and share figures are
+>   correlations against a split-half bound and do not use the plug-in maximum, so they stand; what does
+>   not stand is F40's sentence putting them "beside F38's EVPI".
+>
+> The quantity F38 computed should be called a plug-in upper-envelope gap. What survives is narrower and
+> more useful: **there is one regime where item-level routing pays — where the strong tier is barely
+> affordable — and outside it a constant policy is better than anything this sample can learn.**
+
 **The economics are not the barrier.** A prefill readout costs about $0.000030 of L40S time and perfect
 difficulty knowledge is worth between $0.003 and $0.052 an item. Every signal this study has measured had room to
 pay, and none of them captured enough of the ceiling to do it. That is a statement about the signals, and it is
