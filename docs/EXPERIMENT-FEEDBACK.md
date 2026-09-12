@@ -1341,6 +1341,79 @@ not enough if it is fixed in ignorance of the null.
 data is opened. The gate set in F33 has the pieces for this and did not have this rule; it is the ninth failure
 and the first the gates could not have caught.
 
+## F37 — The target was one coin flip per tier, and difficulty is not one-dimensional across tiers
+
+**Where it bit.** A review's first correction to the corrected target. "Which rung first solves it" is built from
+one Bernoulli observation per system, so it carries the full measurement error of a coin flip and discards the
+items where a cheaper arm succeeds and a dearer one fails. A tier holding several arms gives several draws per
+item, so the tier's success probability is estimable instead. Grouping the sixteen arms into three tiers and
+shrinking each item's rate toward its tier's prior:
+
+| tier | arms | pooled accuracy | mean cost per item |
+|---|---|---|---|
+| box | 5 | 0.6656 | $0.000065 |
+| cheap | 2 | **0.5738** | $0.000307 |
+| strong | 5 | 0.8504 | $0.005796 |
+
+**Two things fall out that the ordinal target could not express.** The cheap tier is WORSE than the box, not
+cheaper-and-better — so a ladder ordered by price is not ordered by capability. And the tiers are only weakly
+aligned: box against strong correlates **+0.3805**, box against cheap +0.5144, cheap against strong +0.4830.
+**44 of 488 items have the cheap tier beating the strong tier by more than 0.05, and 56 have the box beating it.**
+Difficulty is not a single number that all tiers agree on, which is what both the ordinal ladder and the 2PL's
+single `b_i` assume.
+
+The allocation is also stable in the value of a correct answer, which answers an earlier adversarial objection
+about that parameter deciding the result: from `V = $0.05` to `V = $1.00` the optimal split moves only from
+303/40/145 to 299/36/153 across box/cheap/strong.
+
+**What it cost.** Every difficulty measurement before this one used a target with avoidable noise and a
+monotonicity assumption that about one item in ten violates.
+
+**What would discharge it.** A recorded outcome that can hold several draws per candidate, which is F4 asked for
+a second time and now with a use: without repeats there is no tier probability, only a coin flip, and the whole
+decision-theoretic form below needs probabilities.
+
+## F38 — The value of perfect difficulty knowledge is 100 to 1700 times what the observation costs
+
+**Where it bit.** A review pointed out that eight rounds measured signals without ever computing the ceiling on
+what a signal could be worth. The value of an observation is the improvement in DECISION value, and its upper
+bound is the value of perfect information — if EVPI is already below what the observation costs, no signal is
+worth measuring however good it is.
+
+`EVPI = E[max_a U(a | perfect knowledge)] − max_a E[U(a)]`, the second term being the best single fixed tier,
+since a router that knows nothing sends everything to one place:
+
+| V | best fixed tier | EVPI per item | against a prefill readout | against a full generation |
+|---|---|---|---|---|
+| $0.02 | box | 0.00309 | **101.6×** | 1.1× |
+| $0.05 | strong | 0.00637 | 209.2× | 2.2× |
+| $0.20 | strong | 0.01358 | 445.7× | 4.7× |
+| $1.00 | strong | 0.05215 | **1712.1×** | 17.9× |
+
+**The economics are not the barrier.** A prefill readout costs about $0.000030 of L40S time and perfect
+difficulty knowledge is worth between $0.003 and $0.052 an item. Every signal this study has measured had room to
+pay, and none of them captured enough of the ceiling to do it. That is a statement about the signals, and it is
+the first time this study can say so rather than suspecting it.
+
+**And it exposes a decision point this study never measured at.** The free entropy that beat every internal
+readout is the entropy of the answer distribution. In the terse condition the answer is the next token, so that
+entropy is a prefill quantity and the residual has no cost advantage over it — which is the comparison every
+round has run. **In the explaining condition it is not**: the answer distribution does not exist until the box
+has written its reasoning, so obtaining the free signal costs a full generation. At `V = $0.02` a generation
+costs nine tenths of the entire EVPI, and the prefill residual is about 97 times cheaper.
+
+So the honest form of the study's central negative result is narrower than it has been stated: **the internal
+readout adds nothing at the decision point where the free signal is also free.** At the decision point where
+the free signal costs a generation, it has never been measured — and that is the condition the box would
+actually be deployed in, since it is where it scores 0.7597 rather than 0.6244.
+
+**What it cost.** Nothing to compute; it is arithmetic over the tier target. What it changes is which measurement
+matters next, and the answer is the one that has failed twice on GPU: the explaining condition's residuals.
+
+**What would discharge it.** An observation carrying the availability F21 already asks for, used for the purpose
+this entry found: a policy compared against a baseline whose own signal is unavailable at the policy's decision
+point is not a fair comparison, and nothing in the record currently says when a signal becomes available.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
