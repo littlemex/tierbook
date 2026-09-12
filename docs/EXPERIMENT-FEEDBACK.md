@@ -1237,6 +1237,110 @@ afterwards — the same argument the change-pipeline makes for running a mechani
 harness. The code is `gate/claim_gate.py` in the study's scratch tree, deliberately not in tierbook: it is a
 discipline for the research, and nothing in the mechanism has asked for it.
 
+## F34 — Six rounds measured a logit lens and called it a J-lens
+
+**Where it bit.** Re-reading the paper (arXiv:2607.15495v1) after eight rounds of experiments built on it. Five
+things in this study were not what the paper describes, and the first is not a detail:
+
+| what this study did | what the paper defines |
+|---|---|
+| read `softmax(W_U · norm(h))` | `lens(h_l) = softmax(W_U · norm(J_l h_l))`, and a J-lens vector is a ROW of `W_U J_l` |
+| never computed `J` at all | `J_l = E_{t, t'≥t, prompt}[∂h_final,t' / ∂h_l,t]`, averaged over 1,000 prompts |
+| treated `J` as a same-position gradient | the expectation runs over **all subsequent positions** `t' ≥ t` |
+| added `α·d` along a fitted discriminant | **swapped lens coordinates**: `h + V(σ(c) − c)` with `V = [v_s v_t]`, `c = V†h` — substituting one concept for another |
+| intervened at L28, last position only | **all token positions**, across a **band** of intermediate layers |
+| recorded the band as normalised L38–92 | the band is roughly **30–80% of depth** — L12–L32 in a 40-layer box |
+
+So the readout in every round was a logit lens. `W_U` was extracted correctly and the wiring was verified, but
+`J` was implicitly the identity, which is exactly the object the paper's construction exists to replace. And the
+intervention was a different operation from the paper's in three ways at once: additive rather than
+substitutional, one position rather than all, one layer rather than a band.
+
+**What it cost.** It explains the shape of every negative result without excusing any of them. F22's withdrawn
+comparison of 15% against the paper's 59% was not merely a difference of measure — it was a different
+intervention. And the paper's reported numbers come from Claude Sonnet, Haiku and Opus 4.5/4.6, not from a 35B MoE,
+so even a correct replication would be a cross-model comparison.
+
+**What it does NOT explain, and this is the correction that matters most.** The paper states that next-token
+prediction is not workspace content, and it was tempting to conclude that the negative results were predicted:
+the readout was about the letter the box was on the point of emitting, and F25 measured 84.3% of the discriminant
+inside the letter span. But **the quantity this study actually needs is not next-token confidence — it is how hard
+the ITEM is**, meaning which tier can solve it. That is a property of the input and the paper's exclusion does not
+reach it. The probe was contaminated; the target was never the wrong kind of thing.
+
+**What would discharge it.** Computing `J`. It does not need backward passes, which is what made it look
+impractical on an FP8 MoE: patching `h_l` with `εv` and reading the change in `h_final` at subsequent positions
+gives `J_l v` from forward passes alone, so a few hundred random `v` over a few dozen prompts sketch a low-rank
+`J_l`, at three layers in the band rather than all forty. That the box's thirty Gated DeltaNet layers carry
+recurrent state does not obstruct it — the patch and the readout both act on the residual stream.
+
+## F35 — Item difficulty IS in the residual, and the free signal already has all of it
+
+**Where it bit.** The corrected target. Every previous round predicted whether the BOX is right; this one predicts
+how hard the ITEM is, on two estimands, with the letter span projected out of the residual first.
+
+| target | contaminated residual | letter span removed | category | free entropy | null 95th |
+|---|---|---|---|---|---|
+| tier depth (which rung first solves it) | 0.3242 | **0.2928** | 0.1382 | **0.4506** | 0.1670 |
+| 2PL difficulty | 0.5252 | **0.3354** | 0.1631 | **0.5922** | 0.1630 |
+
+**Difficulty survives the decontamination on both targets**, well clear of the permutation null — so the
+representation is there, and the six rounds of negative results were not because the quantity is absent.
+Removing the letter span costs a lot (0.5252 to 0.3354 on the 2PL target), which is F25 measured from the other
+side.
+
+**But the free entropy leads on both, and the residual adds nothing when capacity is matched.** Concatenating 2,048
+residual dimensions onto three free features made held-out performance FALL, which is a capacity failure rather
+than an information statement, so a separate test was registered in which the residual enters as its own
+cross-fitted prediction — one column against one column:
+
+| target | free entropy alone | plus the residual | difference |
+|---|---|---|---|
+| tier depth | 0.3276 | 0.3293 | +0.0017 [−0.0326, +0.0198] |
+| 2PL difficulty | 0.5523 | 0.5496 | −0.0027 [−0.0403, +0.0188] |
+
+Both fail a floor of 0.05. The residual alone reads 0.1887 and 0.3367 as a single column — real, and redundant.
+
+**What it cost.** It closes the last framing the readout had, on the target that is actually the routing question,
+with the contamination removed and the capacity matched. What died is the economics and not the existence, and
+those are different claims that this ledger has previously run together.
+
+**What would discharge it.** Nothing in the mechanism. Recorded because the next round should ask whether an
+external cue can INSTALL difficulty in the workspace rather than whether it can be decoded from an unprompted
+pass — the paper's directed modulation shows an instruction puts a concept into the workspace at positions that
+have nothing to do with it, and a decoding failure says nothing about that.
+
+## F36 — The fallback to A is not a verbalizable strategy either
+
+**Where it bit.** A mechanistic question with a prediction on both sides. The box answers `A` on 24% of items and
+is wrong on 61% of those. If that fallback is a STRATEGY — guess, skip, unsure — it is the kind of thing a model
+would say on reflection, so it should be workspace content and its direction should lie mostly OUTSIDE the
+answer-letter span. If it is noise in the choice of the next token, it should sit inside the span, as the
+correctness discriminant did at 84.3%.
+
+| | value |
+|---|---|
+| internal direction, held-out AUC separating escape-A from correct-A | 0.8285 |
+| category-preserving permutation null, 95th percentile | **0.7928** |
+| the free entropy on the same items | **0.8895** |
+| fraction of the direction inside the letter span | **75.4%** |
+
+**Criterion (i) passes and (ii) fails**, so the strategy reading is not supported: at 75.4% the escape direction is
+nearly as letter-bound as the correctness discriminant, and it loses to the free entropy on its own question.
+
+**And criterion (i)'s pass is thin for a reason worth recording.** The null sits at 0.7584 median because a
+category-stratified permutation preserves each category's escape rate, and category alone predicts the fallback
+well. Against that null the real direction gains 0.036. The threshold of 0.60 was set without reference to where
+the null would land, which is the same defect as F30's missing magnitude floor — a criterion fixed in advance is
+not enough if it is fixed in ignorance of the null.
+
+**What it cost.** Nothing to run. It removes the most promising remaining reading of the study's one free signal:
+"answered A" predicts errors, and the reason is not a strategy the model is holding.
+
+**What would discharge it.** A criterion registered together with its null, computed on a fixture before the real
+data is opened. The gate set in F33 has the pieces for this and did not have this rule; it is the ninth failure
+and the first the gates could not have caught.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
