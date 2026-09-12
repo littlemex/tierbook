@@ -1024,6 +1024,103 @@ study has produced and it is the one most likely to be misused.
 scalar derived from it at the point of use and never stored in its place. This is the same requirement as F21's
 `validity` field carrying the price ratio, seen from the measurement side rather than the policy side.
 
+## F30 — Where this study is at risk of killing a real effect, and the one test that was missing
+
+**Where it bit.** A review audited the withdrawals rather than the findings, and made a distinction this ledger
+had been eliding. `real ≤ control` does not mean "no effect"; it means specificity against THAT control is not
+shown. A p-value of 0.17 to 0.39 is not evidence of equivalence without an equivalence margin and power. And
+comparing a real quantity against the MAXIMUM of several controls puts a winner's curse on the control side.
+
+Ranked by how much each withdrawal may have over-killed:
+
+| withdrawal | over-kill risk | the defensible upper bound on what was shown |
+|---|---|---|
+| F23, the readout's incremental value | **highest** | worthless alone, at these prices, with static thresholds |
+| F16, the variance share | medium | the LOW-variance reading is unsupported; not that no competence direction exists |
+| F22, the answer movement | medium | the single-setting claim and the comparison to 59% fall; the logit monotonicity does not |
+| F17, the adoption bar | none | arithmetic, at the same floor, box and escalator |
+| F15's explanation | none | prose without provenance, not an effect |
+
+**And the highest-risk one had a test missing.** F23 compared signals one at a time. It never asked whether
+ADDING the readout to the best free policy helps — a signal can be worthless alone and still carry an increment.
+So: both policies are F28's ex-ante-cost rule, differing only in what predicts the box being right, cross-fitted
+over 5 folds, with a paired bootstrap over items. Registered before running.
+
+| λ | baseline | nested | difference | 95% interval |
+|---|---|---|---|---|
+| 0.02 | 0.8570 | 0.8573 | **+0.0003** | [+0.0001, +0.0005] |
+| 0.05 | 0.8270 | 0.8293 | +0.0022 | [−0.0068, +0.0111] |
+| 0.10 | 0.7888 | 0.7851 | −0.0037 | [−0.0156, +0.0081] |
+| 0.20 | 0.7164 | 0.7156 | −0.0008 | [−0.0099, +0.0081] |
+| 0.40 | 0.6465 | 0.6453 | −0.0012 | [−0.0264, +0.0199] |
+
+**Verdict: PASS**, by the letter of the criterion — the interval at λ = 0.02 excludes zero. And the win is
++0.0003 in accuracy-equivalent units, about three cents per two thousand requests, at the cheapest price only,
+with three of the other four point estimates negative and the cross-fitted AUC slightly WORSE with the readout
+than without it (0.7901 against 0.7913).
+
+**The registration was the defect this time.** "Significant at one or more of five λ" is a sign test with no
+magnitude floor and five chances, which is close to the shape it was written to prevent. It is reported as a PASS
+because relabelling it after seeing the number is the move that produced four withdrawals, and the honest
+correction is to the criterion, not to the verdict.
+
+**What it cost.** Nothing to run. What it bought is the strongest available statement about the readout: not
+"internal signals have no operational value", which the individual comparisons never licensed, but that adding
+this readout to the best policy available moves net value by three cents per two thousand requests at one price
+and not measurably anywhere else.
+
+**What would discharge it.** A registered criterion carrying a magnitude floor and an equivalence margin, not
+only a sign and an interval. A floor makes a negative result mean something — "the effect is smaller than X" —
+where a bare interval that contains zero means only that the study was too small to tell, and this ledger has
+several of those recorded as though they were refutations.
+
+## F31 — The common cause of every withdrawal is that a claim carries no provenance
+
+**Where it bit.** The process audit, asked to look at the withdrawals as a class rather than one at a time. Its
+answer is sharper than "the null was fixed after the effect", which was this study's own diagnosis:
+
+> The estimand, the representation space, the aggregation rule, the comparator, the operating condition and the
+> numeric source were never fixed in an executable form, so a **silent substitution of the subject** between the
+> result and the sentence about it could not be detected.
+
+Every withdrawal is an instance. F16 substituted the RMSNorm-scaled space for the raw residual stream. F22
+substituted a union over eight amplitudes for an effect at one. F17 substituted a percentile band for a floor.
+F23 substituted a single operating point for a range. F28 substituted a realised bill for a price knowable at
+decision time. In each case both quantities are real and the sentence names only one of them.
+
+The audit's proposed gates, in the order they would have paid here:
+
+1. **A typed claim contract** — every quantity fixed on one line as `sample / split / layer / representation /
+   normalization / fit / statistic / aggregation / comparator / operating-range / unit`, with
+   `aggregation=single_amplitude` and `aggregation=union_over_amplitudes` as DIFFERENT TYPES. A quantity whose
+   fields are not all filled, or whose noun phrase in the prose does not match its contract, is not reported.
+   This alone stops F16, F22 and F23.
+2. **An arithmetic and reachability gate** — before measuring, assert `target ≤ the escalator's ceiling` and
+   `k ≥ ceil(target × N) − correct_box`. F17 dies without the model ever being loaded.
+3. **A nearest-control gate** — the single most confusing control named in advance, computed in the same loop and
+   under the same aggregation. Failure to separate is reported as "specificity against this control not shown",
+   never as "no effect".
+4. **A one-axis perturbation gate** — at most three degrees of freedom that could move the conclusion, endpoints
+   and centre, minutes not hours. A quantity whose sign or rank flips is reported as a curve, never as a scalar.
+5. **A provenance and worst-row gate** — every numeric sentence carrying its command, artifact and denominator,
+   and automatically displaying its least favourable row: the strongest control, the worst λ, the weakest
+   amplitude. F22's "shuffled beats real" was in the data from the first run and nothing surfaced it.
+
+**Corrections get their own rule**, because F15 introduced a new error while fixing one. A correction is a diff,
+not an essay: old claim id, the invariant that failed, the verified replacement, the blast radius. **It adds no
+new number and no new causal story** — a hypothesis about why the error happened is a separate document marked
+unverified, and a correction needing a new number is a new claim that goes through the gates from the start.
+
+**What it cost.** Nothing new; this is the accounting of costs already paid. It is recorded because it replaces
+six separate ledger requirements — F1's prompt condition, F16's ridge and geometry, F19's fold, F22's amplitude
+and control, F28's availability, F29's operating range — with one structure. Those six are the same defect, and
+listing them separately made each look like an oversight rather than a missing mechanism.
+
+**What would discharge it.** The claim contract as the thing a measurement emits, so that a quantity without its
+arguments cannot be written down. Whether that belongs in tierbook or only in the study is an open question and
+the honest answer today is the study: tierbook's own version of it is F21's observation contract, and the two
+should be designed together if either is built.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
