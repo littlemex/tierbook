@@ -819,6 +819,89 @@ policy conclusions built on it.
   amplitude and the control): the number is fine, and the argument that fixes its meaning is not stored with it.
   Four instances now, which is enough to say the fix belongs in one place rather than four.
 
+## F25 — 84% of the "competence direction" lies in the span of the answer-letter directions
+
+**Where it bit.** A review's sharpest objection to F12: the direction may not be about competence at all, but
+about which letter the model is on the point of emitting, since it is more confident on easy items. Measured
+directly at L28, with the letter span built from ten one-vs-rest fits on the box's own answer:
+
+| direction | inside the letter span | inside a SHUFFLED-letter span |
+|---|---|---|
+| fitted on correctness | **84.3%** | 76.1% |
+| fitted on shuffled labels | 36.7% | 39.5% |
+| isotropic random | 5.9% | 7.3% |
+| data-shaped random | 34.8% | 44.7% |
+
+An isotropic unit vector puts 7.0% of its norm in any ten-dimensional subspace, so 84.3% is not an accident. But
+the shuffled-LETTER span captures 76.1%, so most of that overlap is structural — the subspace any fit on these
+residuals lands in — and only about 8 points are attributable to letter information as such.
+
+**What the letter component is worth.** Splitting the direction and scoring each part on held-out items:
+
+| | dev AUC | share of the norm |
+|---|---|---|
+| the full direction | 0.7695 | 1.0000 |
+| the letter component alone | 0.7437 | 0.8431 |
+| the letter component removed | 0.6921 | 0.5378 |
+
+So the letter component carries most of the predictive power, and what survives its removal is still well above
+chance. The direction is not merely a letter detector.
+
+**And the mechanism is a property of the box, cheaply available for free.** Accuracy by the letter the box itself
+emits: `A` 0.3899 on 572 items, and every other letter between 0.5979 and 0.7522. The box answers `A` about a
+quarter of the time and is wrong on three-fifths of those — it is the fallback. Which means **"the box answered
+A" is a routing signal on its own, at AUC 0.6302, with no residual, no probe and no cost** — better than the
+internal readout's 0.1762 skill in F23. Excluding `A` items the direction still reads 0.7294, and the free
+entropy still beats it at every stratum (0.8424 overall, 0.8159 on non-`A`).
+
+**What it cost.** F12's specificity claim narrows: what the intervention moves specifically is the verbaliser,
+and the direction it moves along is substantially the direction of the letter it is about to emit. The matched
+controls running on GPU test whether the verbaliser response survives the split; this entry is the geometry,
+which did not need them.
+
+**What would discharge it.** A direction reported with the fraction of it that lies in the span of directions
+for the obvious confound, and a probe compared against the free observation of its own output. The second is the
+cheaper habit and the one that would have caught this: the emitted letter was in every row of the capture from
+the first run.
+
+## F26 — The residual reads item difficulty, and the free signal already knows all of it
+
+**Where it bit.** The one route left for the readout after F23: stop asking it about the box's own competence,
+which it cannot report, and ask it about the ITEM, which is what the band demonstrably reads. Item difficulty
+`b_i` from the 2PL is a property of the input and is defined across systems, so it is the natural target.
+
+Registered before running, because four withdrawals in this study came from fixing the null after seeing the
+effect. Criterion: held-out Spearman beating the best baseline AND exceeding the 95th percentile of a 200-draw
+item-permutation null.
+
+| features | held-out Spearman |
+|---|---|
+| free entropy | **0.5357** |
+| residual L28 | 0.5353 |
+| residual band L16/24/28/36 | 0.5173 |
+| category one-hot | 0.3411 |
+| category + length | 0.3182 |
+| prompt length | 0.0516 |
+| permutation null: median +0.0074, 95th percentile | +0.1258 |
+
+**Verdict: FAIL, by 0.0004.** And the finding inside the failure is real: the residual predicts cross-system item
+difficulty at 0.5353 against a null of 0.1258 and a topic baseline of 0.3411, so it is reading difficulty and not
+merely the subject — which is what the band's verbalisability predicted. It is simply a dead tie with a signal
+that costs nothing.
+
+A second question was registered separately rather than allowed to rescue the first: does the residual carry
+difficulty information the entropy lacks? Entropy alone 0.5357, entropy plus residual 0.5382, difference +0.0026
+with a paired bootstrap interval of [−0.1027, +0.0696]. **FAIL.**
+
+**What it cost.** It closes the routing axis for the internal readout, on the last and most favourable framing
+available to it. Every version of the question has now been asked — self-competence (F23), answer movement (F22),
+item difficulty (here) — and the free output signal wins or ties each time.
+
+**What would discharge it.** Nothing in the mechanism. This is the entry that says the J-space work should not
+reach tierbook as a signal, and F21's observation contract is the only shape in which it could arrive at all.
+It is recorded as a requirement on the STUDY instead: a criterion fixed before the measurement, which is how
+both halves of this entry came to be reportable as failures rather than as trends.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
