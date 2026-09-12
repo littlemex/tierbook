@@ -780,6 +780,45 @@ rounds of "signal A beats signal B" were stated without the price or budget that
 a policy artifact that stores the price ratio it was chosen under — which is the `validity` field F21 asks for,
 used for the one purpose that has already changed an answer.
 
+## F24 — No API arm exists for a single held-out item, so the economics have never left the fold
+
+**Where it bit.** Checking, before a review could, how the 488 items carrying API outcomes were drawn from the
+2,364. The difficulty is representative and that was the worry; the fold is not, and that is worse:
+
+| | in the 488 | the other 1,876 |
+|---|---|---|
+| box accuracy | 0.6455 | 0.6189 |
+| final entropy | 0.5031 | 0.5071 |
+| answer margin | 3.6091 | 3.5870 |
+| **calibration fold** | **488** | 447 |
+| **test fold** | **0** | 1,429 |
+
+Category shares agree within ±25%. So the ceilings in F19 are sound as measurements — they are counts of what
+each system solved, and a subset matched on difficulty gives a representative one.
+
+**But every economic conclusion lives entirely inside the calibration fold.** F20's shadow-price comparison split
+the 488 in half and called one half held out; both halves are calibration items. F23's `U(λ)` table is on the
+same 488. The signal work has always been calibration-fit and test-evaluated; the money work never has been,
+because the API outcomes it needs do not exist outside the fold.
+
+This does not make F20 or F23 wrong — F20's finding is an ordering that holds across a quota sweep and a scenario
+set, and F23's crossing is between two signals measured the same way. It makes them unconfirmed in the sense the
+rest of the study uses that word, and the distinction was not visible anywhere because the fold was not recorded
+next to the number.
+
+**What it cost.** Nothing yet, and that is the point of catching it here rather than after another round of
+policy conclusions built on it.
+
+**What would discharge it.** Two things:
+
+- API outcomes for test-fold items. At roughly $0.0065 per item for `claude-opus-5`, the 1,429 test items cost
+  about $9. That is routine measurement spend for this project and it converts every economic conclusion here
+  from calibration-internal to out-of-fold, which no amount of re-analysis can do.
+- A recorded outcome that names its fold, so a policy tuned and scored inside one fold cannot be reported as
+  held-out. This is the same shape as F1 (the prompt condition), F16 (the ridge and the geometry) and F22 (the
+  amplitude and the control): the number is fine, and the argument that fixes its meaning is not stored with it.
+  Four instances now, which is enough to say the fix belongs in one place rather than four.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
