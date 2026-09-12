@@ -553,7 +553,12 @@ escalation target solves. Measured:
 
 The simulations escalated to `claude-sonnet-4-6`. **Floor 0.90 is above that cascade's ceiling**, so it was
 unreachable for a reason that has nothing to do with the condition and nothing to do with a signal: the target
-could not supply it. With `claude-opus-5` the same floor is reachable. The floor and the target were chosen
+could not supply it.
+
+> **See F32.** This paragraph is withdrawn as a claim about the population. 0.8934 is 436 of 488, whose
+> one-sided upper 95% bound is 0.9156, so no cascade's ceiling here can be distinguished from 0.90. What
+> stands is the empirical union on the observed items, and it is an oracle over outcomes known after the
+> fact rather than an operational ceiling. With `claude-opus-5` the same floor is reachable. The floor and the target were chosen
 independently and never checked against each other.
 
 **Second: accuracy is not a sufficient statistic, so it misranks arms.** `qwen3-next-80b` scores 0.6230 and
@@ -755,6 +760,10 @@ items that carry an API arm, escalating to `claude-opus-5`:
 | 0.10 | 0.6537 | 0.7770 | **0.8066** | 0.8045 | 0.7832 | 0.7781 | 0.8842 |
 | 0.20 | 0.6537 | 0.6770 | **0.7500** | 0.7496 | 0.7262 | 0.6791 | 0.8586 |
 | 0.40 | 0.6537 | 0.4770 | 0.6676 | 0.6689 | **0.6758** | 0.6537 | 0.8074 |
+
+> **See F32.** The crossing below is withdrawn. Each signal's threshold was chosen on the same items that
+> scored it; chosen on a validation half instead, decision depth is worse than the entropy at both
+> λ = 0.20 and λ = 0.40, with intervals spanning zero.
 
 **The crossing is real and it is in the table.** At every λ up to 0.20 the free entropy wins. At λ = 0.40 the
 decision depth wins, and the entropy is third. A signal that is worse over the whole curve (skill 0.3342 against
@@ -1120,6 +1129,70 @@ listing them separately made each look like an oversight rather than a missing m
 arguments cannot be written down. Whether that belongs in tierbook or only in the study is an open question and
 the honest answer today is the study: tierbook's own version of it is F21's observation contract, and the two
 should be designed together if either is built.
+
+## F32 — Two of the surviving conclusions were finite-sample artifacts, and the third design fix is null
+
+**Where it bit.** An adversarial round applied to the conclusions that were left standing after the earlier
+withdrawals, rather than to the withdrawn ones. Three checks, all registered with a magnitude floor this time, all
+cheap. Two of them overturn a live conclusion.
+
+**The cascade ceiling is not established below the floor.** F19 explained the unreachable floor by saying the
+cascade's ceiling was 0.8934, under 0.90. That is 436 successes in 488:
+
+| cascade | successes | rate | one-sided upper 95% |
+|---|---|---|---|
+| box + `claude-sonnet-4-6` | 436/488 | 0.8934 | **0.9156** |
+| box + `claude-opus-5` | 444/488 | 0.9098 | 0.9303 |
+| box + `claude-fable-5` | 447/488 | 0.9160 | 0.9357 |
+
+**No cascade's ceiling can be distinguished from 0.90 at this sample size.** So F19's headline — the floor was
+above the target's ceiling — is withdrawn as a claim about the population and narrows to: on the observed 488
+items the empirical oracle union is 0.8934. F17's arithmetic is untouched, because 126 is below 167 regardless of
+any ceiling; what falls is the causal story F19 attached to it. The empirical union is also an oracle over
+outcomes known after the fact, so it was never an operational ceiling in the first place.
+
+**The price crossing was selection on the test set.** F23 reported decision depth beating the free entropy at
+λ = 0.40, and F29 was written on the strength of it. The threshold for each signal was chosen on the same 488
+items that scored it. Choosing on a validation half and scoring on the other, over 400 splits:
+
+| λ | free entropy | decision depth | depth − entropy | verdict |
+|---|---|---|---|---|
+| 0.20 | 0.7012 | 0.6826 | **−0.0187** [−0.0855, +0.0500] | FAIL |
+| 0.40 | 0.6424 | 0.6387 | **−0.0037** [−0.0814, +0.1101] | FAIL |
+
+Decision depth is WORSE at both prices once its threshold is chosen honestly, and both intervals span zero. The
+crossing is withdrawn. The reviewer's first hypothesis — a boundary effect on a difference worth about four
+correct answers in 488 — is what the data support.
+
+**What that does to F29.** Its requirement stands and its evidence does not. Storing the curve rather than the
+scalar is still right, because a scalar cannot express an operating point; but the demonstration that rankings
+actually cross in this data is gone, and F29 should not be cited as showing that they do.
+
+**And the design fix the reviewer proposed is null here.** Every readout in this study predicted whether the BOX
+is right. The quantity that decides an escalation is the uplift `Y_api − Y_box`: detecting a failure the API also
+fails is worth nothing, and the base rates differ (box wrong 0.3463, uplift positive 0.2561). Trained on the same
+free features with the same protocol, targeting the uplift instead:
+
+| λ | uplift minus box-wrong | verdict |
+|---|---|---|
+| 0.05 | −0.0003 [−0.0119, +0.0107] | FAIL |
+| 0.10 | −0.0013 [−0.0138, +0.0083] | FAIL |
+| 0.20 | −0.0003 [−0.0151, +0.0195] | FAIL |
+| 0.40 | +0.0008 [−0.0257, +0.0324] | FAIL |
+
+Right in principle, worth nothing at this sample size — recorded so it is not proposed again as an untried idea.
+
+**What it cost.** Two live conclusions. Both were mine and both had the same shape as the earlier withdrawals: a
+statistic computed on a sample and written down as a property of the world, with the selection step that produced
+it left out of the sentence. This is the fifth and sixth instance of F31's provenance defect, and the first two
+that were caught by a check rather than by a reviewer noticing a hole.
+
+**What would discharge it.** Two mechanical rules, both of which the earlier entries can be re-run against:
+
+- A rate reported with its sample size and interval, never as a bare number, whenever it is used to rule
+  something out. F19's 0.8934 would never have carried its conclusion if 0.9156 had been printed beside it.
+- A threshold or hyper-parameter chosen on the data it is scored on flagged automatically. This is the most
+  common selection error in the study and it is detectable by inspection of the code path, not by judgement.
 
 ## Not requirements, deliberately
 
