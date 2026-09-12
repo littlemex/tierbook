@@ -441,6 +441,23 @@ Rank 2 to rank 75 by turning one knob, while dev AUC barely moves. **The varianc
 a property of the fit, not of the model,** and cannot be quoted as a measurement of where a model keeps its
 information. (The two smallest ridges diverge numerically — AUC 0.5549 — and those rows are void, not evidence.)
 
+**The clean version of the control, which the adversarial round asked for, refutes it in every cell.** My first
+control fitted the direction and measured its variance in the same sample; the correct form fits on train,
+measures against the held-out covariance, and permutes labels WITHIN category so that a direction which merely
+predicts the field earns no credit. 200 permutations:
+
+| geometry, layer | real share | null median | one-sided p that real is unusually LOW |
+|---|---|---|---|
+| raw residual, L28 | 0.1311 | 0.1432 | 0.225 |
+| raw residual, L36 | 0.0623 | 0.0310 | **1.000** — above all 200 nulls |
+| RMSNorm-scaled, L28 | 0.0049 | 0.0133 | 0.170 |
+| RMSNorm-scaled, L36 | 0.0115 | 0.0150 | 0.390 |
+
+In three cells the real direction is indistinguishable from the null, and in the fourth it is significantly
+HIGHER in variance. Nothing supports "the correctness direction is unusually low-variance." A second reading
+falls out of the stratified null: at L28 in the raw stream the real direction is not distinguishable from a
+direction that only knows the item's category.
+
 **What it cost.** The first of the seven "settled" measurements, withdrawn. It was also the finding that made the
 paper look confirmed in this box, which is what gave the following four rounds their premise.
 
@@ -567,6 +584,94 @@ with a target, which is exactly the kind of fact a policy artifact can hold and 
 Two caveats on the fit itself. The weak prior shrinks the box's predicted accuracy to 0.6200 against a measured
 0.6537, so predicted escalation counts run conservative; and the discriminations hit both clip bounds, so
 individual item parameters are not to be quoted. The three comparisons above are ordinal and survive that.
+
+## F20 — The escalation rule has to contain the per-item price, and that is the whole gain
+
+**Where it bit.** Testing a proposal to price the scarce resource online — treat the API quota as expiring
+inventory, carry a shadow price `λ`, update it by `λ ← [λ + η(used − pace)]₊`, and escalate when the expected
+gain exceeds price plus `λ`. It was put forward as the framework for deriving an allocation from observed state
+rather than from a threshold someone tuned, which is what this project says it is for.
+
+**The first run appeared to confirm it** — the shadow price beat a confidence threshold in all four scenarios,
+including against the threshold re-tuned for each scenario with hindsight. But it won with *less accuracy and
+half the cost*, which is the signature of picking cheap items, not of pricing a scarce resource. So the shadow
+rule was run again with `λ` frozen at the single constant that performs best on the nominal scenario. Whatever
+separates the two is `λ`:
+
+| quota | binding | confidence threshold | frozen `λ` | shadow price |
+|---|---|---|---|---|
+| 800 | yes | 78.55 / 0.8580 | **81.31** / 0.8555 | 75.54 / 0.7860 |
+| 400 | no | 74.42 / 0.7940 | **77.08** / 0.7930 | 72.28 / 0.7400 |
+| 250 | yes | 71.83 / 0.7445 | **75.00** / 0.7650 | 71.48 / 0.7265 |
+| 150 | yes | 70.43 / 0.7195 | **72.79** / 0.7365 | 69.74 / 0.7050 |
+| 80 | yes | 69.62 / 0.7065 | **71.00** / 0.7150 | 69.11 / 0.6960 |
+| 40 | yes | 69.05 / 0.6955 | **69.64** / 0.6985 | 68.75 / 0.6905 |
+
+(net value in dollars over 2,000 requests / accuracy.) With a demand spike the tuning never saw, at quotas 400,
+150 and 80, the ordering is identical.
+
+**The shadow price loses at every level of scarcity, binding or not.** The reason is structural rather than a
+tuning failure: within the day the item stream is i.i.d., and for i.i.d. arrivals against a fixed quota the
+optimal dual IS a constant. Updating it online only adds tracking error — it spends quota early while `λ` is
+low and prices itself out later. `λ` could only pay if the *composition* of arrivals moved, which is the
+scenario this simulation does not contain and the one the idea would need in order to get another hearing.
+
+**What survived is one term.** The per-item API price belongs in the escalation rule, and a confidence threshold
+cannot express it. The mechanism, measured on the same items:
+
+- the per-item API cost spans **7.1×** between its 10th and 90th percentiles — it is a real billing figure that
+  moves with output length, not a constant;
+- and it correlates **+0.2313** with the box being wrong. The items most worth escalating are also the expensive
+  ones, so a confidence-only rule spends most where it is least efficient.
+
+The failure this fixes is visible without any scarcity at all: when the API price tripled mid-day, the confidence
+threshold's spend went from $4.98 to $9.94 while it escalated the same 381 items, because the rule cannot see a
+price. The cost-aware rule cut to 250 escalations and $1.79 on its own, with no re-tuning and no `λ`.
+
+**What it cost.** Nothing — this ran on outcomes already on disk. It is recorded because it is the first result in
+this study where the mechanism improved with no internal signal involved at all, and because it refutes the idea
+it was built to test.
+
+**What would discharge it.** An escalation decision that takes the candidate's price for THIS request rather than
+a tier-level average, with the observation carrying its own acquisition cost. That is close to what the
+observation contract in F21 asks for, and the two should be discharged together.
+
+**Two caveats.** This is a resampling simulation over 244 held-out items with a per-request value fixed at $0.05,
+not real traffic; the ordering above is stable across the quota sweep but the magnitudes are not a forecast. And
+the escalation target is `claude-opus-5`, chosen because F19 showed `claude-sonnet-4-6`'s cascade ceiling sits
+below the floor this study had been using.
+
+## F21 — An observation is not a feature; it has a cost, an availability and a condition
+
+**Where it bit.** Asking what, if anything, five rounds of J-space work should put into the mechanism. The answer
+from the review is that it should put in **no J-space-specific feature at all**, and instead make an observation
+a thing with properties, so that an internal readout is admissible without being privileged:
+
+- `value` — scalar, vector, trajectory or category. Entropy, an internal readout, a price and a load are the
+  same kind of thing.
+- `availability` — before prefill, during compute, after prefill, after generation. A layer number is
+  provider-specific detail below this.
+- `acquisition_cost` — money, GPU time, added latency, memory, a synchronisation stall.
+- `provenance` — model, version, **prompt condition**, readout version.
+- `validity` — the condition it was calibrated under, its freshness, whether it is missing.
+
+Two consequences that this study's own results force, and which are the reason this is not merely tidy:
+
+- **The intervention must not be registered as a control action.** F12 showed that moving the direction moves
+  the words about competence; F14 showed it moves only 15% of the answers. A mechanism that could register "I
+  can move this readout" as a lever on output quality would be acting on a 15% effect as though it were the 59%
+  the paper reports. Passive observation, active probe and control action are three different registers and the
+  middle one is where this belongs — priced by its acquisition cost, like any other observation.
+- **`provenance` has to carry the prompt condition**, which is F1, and `validity` has to carry the condition it
+  was calibrated under, which is F19 — because a signal fitted in one condition does not transfer to the other
+  by recalibration, it is about different items.
+
+**What it cost.** Nothing directly. It is the shape the previous nineteen entries were circling: F1, F3, F5, F9,
+F16 and F19 are each a case of a number stored without the argument that gives it meaning.
+
+**What would discharge it.** One structure, replacing six separate requirements. It is also the only entry here
+that would let the J-space work reach the mechanism at all — as an optional observation with a price, which is
+what the measurements support, rather than a signal the mechanism knows the name of.
 
 ## Not requirements, deliberately
 
