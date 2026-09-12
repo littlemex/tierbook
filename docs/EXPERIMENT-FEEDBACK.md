@@ -1414,6 +1414,54 @@ matters next, and the answer is the one that has failed twice on GPU: the explai
 this entry found: a policy compared against a baseline whose own signal is unavailable at the policy's decision
 point is not a fair comparison, and nothing in the record currently says when a signal becomes available.
 
+## F39 — The residual reads difficulty and not uplift, and uplift is what decides
+
+**Where it bit.** Asking the routing question on the quantity that actually chooses the action. Every round so far
+predicted something adjacent to the decision — whether the box is right, how hard the item is, which rung solves
+it. What decides an escalation is the UPLIFT: how much more likely the stronger tier is to be right. With tier
+probabilities estimated from several draws per item (F37) the uplift is a difference of probabilities rather than
+a difference of coin flips, so it can be predicted.
+
+| target | clean residual alone | free signals | free + residual | permutation null, 95th |
+|---|---|---|---|---|
+| uplift, strong minus box | **0.0741** | 0.1996 | 0.1725 | **0.0778** |
+| uplift, cheap minus box | **0.0740** | 0.2217 | 0.2238 | **0.0702** |
+
+**The residual does not see the uplift at all.** It is indistinguishable from a permutation null on both, where the
+same residual reads item difficulty at 0.2928 to 0.3354 (F35). So the internal state knows "this item is hard" and
+does not know "a stronger model would fix it", and those are different facts. **This explains six rounds of
+negative results mechanically** rather than by exhaustion: a signal that detects a failure the dearer tier also
+fails is worth nothing, and difficulty is largely that kind of signal.
+
+**And the economics show a first significant gain, at one operating point.** Choosing a tier by expected utility
+from cross-fitted tier probabilities, with the registered floor of `0.005 × V` and a paired bootstrap:
+
+| V | oracle | all box | free | free + residual | difference | verdict | share of EVPI captured |
+|---|---|---|---|---|---|---|---|
+| $0.05 | 0.0431 | 0.0332 | 0.0368 | 0.0377 | **+0.00093** [+0.00015, +0.00173] | **PASS** | 36% → **45%** |
+| $0.20 | 0.1779 | 0.1331 | 0.1640 | 0.1650 | +0.00101 [−0.00049, +0.00246] | FAIL | 69% → 71% |
+| $1.00 | 0.8968 | 0.6655 | 0.8411 | 0.8442 | +0.00313 [−0.00327, +0.00973] | FAIL | 76% → 77% |
+
+**The structure is the finding, not the pass.** Where a correct answer is worth little the strong tier is barely
+affordable, the free signals capture only 36% of the available value, and the residual adds nine points of that
+capture — about ninety-three cents per thousand items, significant under a criterion fixed in advance. Where a
+correct answer is worth a lot the free signals already capture 76% and there is almost nothing left to add. So
+the internal readout's value is not zero and not general: it is concentrated in the regime where escalation is
+marginal, which is exactly the regime a single reported number would average away.
+
+**What it cost.** Nothing new to run. It is the first economically significant result the internal readout has
+produced in nine rounds, and it arrived only after the target was changed from box correctness to tier uplift and
+the estimand was given several draws per item.
+
+**What would discharge it.** Two things, and the first is a warning rather than a request:
+
+- **This is one operating point out of three and it is small.** F29's rule applies to it as much as to anything
+  else: it is a point on a curve, and quoting "+$0.93 per thousand" without `V = $0.05` beside it would repeat
+  the defect this ledger has recorded six times.
+- A policy able to hold a per-candidate success probability rather than a single quality estimate, since the
+  action here is chosen by comparing `p_tier × V − cost` across tiers and that needs a probability per candidate.
+  This is the concrete form of what F37 asks for, and the two would be discharged together.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
