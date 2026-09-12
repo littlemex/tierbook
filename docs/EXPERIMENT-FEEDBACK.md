@@ -331,6 +331,11 @@ does that.
 **Where it bit.** The full injection run, 2,364 items at five doses in both directions with two controls. F12 had
 established the causal link to vocabulary on 60 items; this scores it as a routing signal on all of them.
 
+> **See F22.** The conclusion of this entry stands and its explanation does not. The flips are confined to items
+> whose pre-intervention margin is small, the controls flip nearly as often as the real direction, and the 15% is
+> a union over eight amplitudes rather than an effect at one. The comparison against the paper's 59% below is
+> withdrawn there.
+
 The perturbation radius at which the answer flips, over the whole corpus:
 
 | smallest dose that flips the answer | items |
@@ -672,6 +677,108 @@ F16 and F19 are each a case of a number stored without the argument that gives i
 **What would discharge it.** One structure, replacing six separate requirements. It is also the only entry here
 that would let the J-space work reach the mechanism at all — as an optional observation with a price, which is
 what the measurements support, rather than a signal the mechanism knows the name of.
+
+## F22 — The answer movement was not caused by the direction, and 15% was a union over a sweep
+
+**Where it bit.** A review named the cheapest rival explanation for "the direction moves the words but only 15% of
+the answers": the answer logits may move on nearly every item, with the argmax turning over only where the
+pre-intervention margin was smaller than the movement. That predicts flips concentrate at low margin. It is
+checkable without another GPU run, because the intervention outcomes and the pre-intervention margins are both on
+disk for the same 2,364 items. Both halves of the prediction hold, and a third thing falls out that is worse.
+
+**Flips exist only where the margin is small.** Flip rate at the strongest amplitude, by margin quintile:
+
+| margin quintile | n | margin range | real | shuffled labels | random |
+|---|---|---|---|---|---|
+| 1 | 440 | 0.00–0.75 | **0.1932** | 0.2182 | 0.1750 |
+| 2 | 503 | 0.88–2.12 | 0.1093 | 0.1133 | 0.0736 |
+| 3 | 475 | 2.25–4.12 | 0.0189 | 0.0337 | 0.0105 |
+| 4 | 448 | 4.25–6.00 | **0.0000** | 0.0045 | 0.0022 |
+| 5 | 498 | 6.12–12.38 | **0.0000** | 0.0000 | 0.0000 |
+
+Above the median margin, **nothing flips at any amplitude in any direction.** So the quantity measured is how many
+items were sitting near a decision boundary, not whether the direction reaches the decision.
+
+**The controls flip nearly as often, so the flipping is not specific to the direction.** At the strongest
+amplitude the shuffled-label direction flips MORE than the real one (0.0723 against 0.0630), with random at
+0.0508. Taking the union over all eight amplitudes — which is where the 15% came from — real is 0.1531, shuffled
+0.1299, random 0.0990. The specificity that F12 established is about the KNOWN/UNKNOWN verbaliser logits, and it
+does not extend to the answer: **the answer movement is what any perturbation of that size does to items near a
+boundary.**
+
+**And 15% was a union over a sweep quoted as an effect.** At the strongest single amplitude the real direction
+flips 6.30%. The 15.31% is the fraction flipped by at least one of eight amplitudes across two signs. Those are
+different quantities and F14 compared the union against the paper's single-setting 59%.
+
+**What this does to F14.** F14's claim that the direction moves the words but barely moves the answer survives,
+and its reason changes completely. It is not a dissociation between a report pathway and a decision pathway that
+this measurement can see. The answer barely moves because the answer is mostly not close, and what movement there
+is is not attributable to the direction. The comparison against the paper's 59% is withdrawn: a free-generation
+change rate and a ten-way argmax turnover are not the same measurement, and the latter is capped by the margin
+distribution of the benchmark.
+
+The flipped items are also the ones the box was failing anyway — median margin 0.688 and accuracy 0.2983, against
+median margin 4.000 and accuracy 0.6713 for the rest — so nothing here is a candidate for improving answers.
+
+**What it cost.** Nothing to run; the join was already possible. The cost was carrying "15% against the paper's
+59%" as a finding through two rounds, and building a mechanistic story on a number that was a union over a sweep
+and not specific to its own treatment.
+
+**What would discharge it.** A recorded effect saying whether it is the effect at one setting or the union over a
+sweep, and carrying the control's value beside it. Both are the same defect as F1 and F16 in a third place: a
+number stored without the argument that fixes its meaning, next to which a control is not stored at all.
+
+## F23 — Signals cross, so a ranking without an operating point is not a ranking
+
+**Where it bit.** F18's own discharge, done: report over the whole deferral curve instead of at one point. Two
+summaries, both over all 2,364 items where they can be.
+
+**The oracle-normalised skill score** (E-AURC rescaled — Geifman & El-Yaniv, NeurIPS 2017) over every coverage:
+
+| signal | AURC | skill against the oracle |
+|---|---|---|
+| free entropy | 0.1636 | **0.7197** |
+| answer margin, negated | 0.1704 | 0.6967 |
+| decision depth | 0.2764 | 0.3342 |
+| **UNKNOWN − KNOWN gap** | 0.3227 | **0.1762** |
+| layer flips | 0.3494 | 0.0847 |
+| random ranking | 0.3742 | 0.0000 |
+| oracle | 0.0816 | 1.0000 |
+
+**And the economic form**, `U(λ) = accuracy − λ · escalation rate` at the best threshold for each λ, on the 488
+items that carry an API arm, escalating to `claude-opus-5`:
+
+| λ | all box | all API | free entropy | answer margin | decision depth | UNKNOWN − KNOWN | oracle |
+|---|---|---|---|---|---|---|---|
+| 0.02 | 0.6537 | 0.8570 | **0.8601** | 0.8600 | 0.8574 | 0.8573 | 0.9047 |
+| 0.05 | 0.6537 | 0.8270 | **0.8377** | 0.8355 | 0.8281 | 0.8276 | 0.8970 |
+| 0.10 | 0.6537 | 0.7770 | **0.8066** | 0.8045 | 0.7832 | 0.7781 | 0.8842 |
+| 0.20 | 0.6537 | 0.6770 | **0.7500** | 0.7496 | 0.7262 | 0.6791 | 0.8586 |
+| 0.40 | 0.6537 | 0.4770 | 0.6676 | 0.6689 | **0.6758** | 0.6537 | 0.8074 |
+
+**The crossing is real and it is in the table.** At every λ up to 0.20 the free entropy wins. At λ = 0.40 the
+decision depth wins, and the entropy is third. A signal that is worse over the whole curve (skill 0.3342 against
+0.7197) is the better choice in the regime where the API is barely worth using at all. So "the free entropy is
+the best free signal" is a statement about a price range, not about the signal, and every ranking in this study
+that omitted its operating point was underdetermined.
+
+**The internal readout has no economic value at any price.** The `UNKNOWN − KNOWN` gap scores 0.1762 in skill,
+and at λ = 0.40 its best policy is to escalate nothing — its `U` equals the all-box value to four decimals. It is
+not that it is beaten narrowly; across the price range there is no threshold on it that is worth setting.
+
+**On F18's numbers.** They are not withdrawn but they measure something narrower than they appeared to. The
+0.6-falling-to-0.41 figures are the oracle's escalation COUNT divided by the signal's at fixed floors — a
+high-escalation quantity. The skill score of 0.7197 integrates the whole curve, and the kept-set error at 5%
+escalated is 0.3491 against the oracle's 0.3428, nearly identical. Both are true: the entropy tracks the oracle
+closely when little is escalated and falls away as more is, which is why a high floor reads worse than the curve
+as a whole.
+
+**What it cost.** Nothing to run. It is recorded because it retires a class of claim rather than a claim: eight
+rounds of "signal A beats signal B" were stated without the price or budget that decides it.
+
+**What would discharge it.** A signal comparison that either names its operating point or reports the curve, and
+a policy artifact that stores the price ratio it was chosen under — which is the `validity` field F21 asks for,
+used for the one purpose that has already changed an answer.
 
 ## Not requirements, deliberately
 
