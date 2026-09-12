@@ -955,6 +955,75 @@ advance stopped bad data before it became a conclusion, and it is the direct pay
   the class the taxonomy calls silent corruption: the failure became a plausible value, so the run completed
   wrong rather than stopping.
 
+## F28 — 87% of the price term's value was leakage, and what survives is the tier's price, not the item's
+
+**Where it bit.** F20's requirement, which was the only positive result this study has produced. A review pointed
+out what should have been obvious: the per-item cost it reads is the REALISED bill for a call already made, and it
+correlates +0.2313 with the box being wrong. No production system knows it before deciding. So the rule may have
+been reading difficulty through a price-shaped hole.
+
+Re-run with three cost models, one policy family, the same tuning protocol, and the bill always charged at the
+realised rate — only what the RULE is allowed to see changes:
+
+| | correlation with the box being wrong | nominal | price ×3 | demand ×3 | quota halved |
+|---|---|---|---|---|---|
+| realised bill (what F20 used) | **+0.2313** | +2.658 | +4.749 | +2.680 | +1.375 |
+| tier mean, no per-item information | — | +0.000 | **+1.565** | +0.000 | +0.000 |
+| ex ante, from the input length | **+0.0100** | +0.198 | +1.367 | +0.230 | +0.086 |
+
+(net value against the confidence threshold, dollars over 2,000 requests.)
+
+**The leak is confirmed and it was most of the effect.** The realised bill is barely predictable before the call —
+held-out correlation with input length 0.1864, R² 0.0347 — so an honest ex-ante estimate carries almost none of
+its per-item variation, and its correlation with the box being wrong drops from +0.2313 to +0.0100. **Only 12.8%
+of the margin survives** (7.5%, 28.8%, 8.6%, 6.2% by scenario).
+
+**The pre-registered criterion still passes, and the requirement changes anyway.** The ex-ante rule beats the
+confidence threshold in 4 of 4 scenarios, so the finding is not withdrawn. But look at the tier-mean row: it is
+exactly +0.000 in three scenarios — it collapses into the threshold, as a constant must — and **+1.565 when the
+price triples.** So the value that matters under a moving environment comes from the tier's CURRENT PRICE, which
+is a single scalar the provider publishes, and not from any per-item estimate.
+
+That is a smaller requirement than F20's and a much better one. A price table cannot leak, needs no predictor, and
+is the thing that actually changes when the environment moves. F20's framing — put the item's price in the rule —
+would have had the mechanism carrying a cost model whose only measurable contribution here is 0.2 dollars per
+2,000 requests, while the effect it was credited with came from a variable that does not exist at decision time.
+
+**On the general shape.** What made the threshold fail under a price change is not that it lacked a signal: it is
+that its decision statistic has the wrong units. A confidence threshold thresholds a belief about quality; the
+right statistic is quality improvement per unit of the constrained resource, so a resource coupling items appears
+twice and only twice — as consumption on the item side, and as one scalar multiplier on the mechanism side.
+Anything else that varies with the environment is tuning, and tuning breaks when the environment moves. This is
+also why F20's rejection of online shadow-price updating and this entry's conclusion agree: the multiplier is a
+constant per epoch, and it is the PRICE TABLE that changes.
+
+**What it cost.** The magnitude of the study's only positive result, reduced eightfold, before it reached the
+mechanism. Caught by a review, not by me, and the shape is one this ledger has recorded four times: a number whose
+meaning depends on when it becomes knowable, stored without that fact.
+
+**What would discharge it.** A candidate's price as a current, tier-level quantity that the escalation rule reads,
+and an `availability` field on it — F21's word — that makes "realised after the call" unusable as an input to a
+decision made before it. The second half is the general fix: an observation whose availability is `after_the_call`
+cannot be an argument to a policy that runs before it, and that is checkable rather than a matter of care.
+
+## F29 — Store the curve, not the scalar
+
+**Where it bit.** The same review, on F23's discharge. F23 reported oracle-normalised skill scores as well as the
+`U(λ)` table, and the scalar is the part that will get quoted. But the crossing F23 measured is not only in the
+cost term: at a high `λ` only the far tail of the distribution is being asked about, and the ranking in the tail
+differs from the ranking overall. A signal's scalar summary averages exactly the thing that decides which signal
+to use.
+
+So the ranking of signals is part of the allocation function, not an input chosen once before it. Selecting on
+area under the curve is the same error F23 already named, one level up: it potentiates the operating point away.
+
+**What it cost.** Nothing yet. It is recorded because F23's skill-score column is the most quotable artifact this
+study has produced and it is the one most likely to be misused.
+
+**What would discharge it.** A signal's recorded performance being its `U(λ)` curve over the price range, with any
+scalar derived from it at the point of use and never stored in its place. This is the same requirement as F21's
+`validity` field carrying the price ratio, seen from the measurement side rather than the policy side.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
