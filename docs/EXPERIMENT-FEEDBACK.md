@@ -1521,6 +1521,48 @@ next rather than what tierbook should hold. Two candidates the numbers point at,
   problem rather than a modelling one: the cheap tier has two arms and the strong tier five. More arms per tier
   would raise the ceiling before any signal work is worth doing.
 
+## F41 — Difficulty transfers between tiers, more to a near neighbour than a distant one
+
+**Where it bit.** A review objected that correlations of 0.38 to 0.51 between tiers describe the data without
+rejecting one-dimensionality, and that the test is a held-out model comparison. Two versions were run and the
+first one's failure was informative about the estimator rather than the structure.
+
+**The latent-index version failed, and its own estimator is why.** Fitting one difficulty per item and letting
+each tier respond to it monotonically, then estimating a held-out item's difficulty from the box's five
+Bernoulli draws and predicting the other tiers, is WORSE than using the tier means: −1.099 nats per draw against
+−0.477, and worse still with two indices. A maximum-likelihood difficulty from five draws saturates at 0/5 and
+5/5, so extrapolating it amplifies noise. Registered criterion: FAIL, reported as such.
+
+**With the estimate shrunk, the transfer is there.** Same question without the latent machinery: shrink the box's
+success rate by an empirical-Bayes prior fitted on train items, and predict each other tier's draws.
+
+| predicting | tier mean alone | the box's shrunk rate | gain | permuted null |
+|---|---|---|---|---|
+| the cheap tier | −0.68174 | −0.60708 | **+0.07466** | +0.00015 |
+| the strong tier | −0.41837 | −0.38793 | **+0.03044** | +0.00003 |
+
+Both clear the registered floor of 0.005 nats per draw; the null does not move. Adding the free entropy takes
+cheap to +0.10439 and strong to +0.03622, and adding category as well takes strong to +0.04410.
+
+**The magnitudes are the finding.** Transfer to the cheap tier is **2.5 times** transfer to the strong tier. So
+what the box knows about an item's difficulty is informative about a model of similar capability and much less
+informative about a much stronger one — and the uplift is a DIFFERENCE, which subtracts the shared component and
+leaves precisely the part the box knows least about.
+
+**That makes F39's null mechanistically expected rather than merely observed**, and it is the third independent
+route to the same place: the residual reads difficulty and not uplift (F39); the free signals reach only 21.5% of
+a 0.93 ceiling on the uplift (F40); and the box's own accuracy transfers to a near neighbour 2.5 times better
+than to a distant one (here). None of the three involves the residual's coordinate system, so none depends on the
+readout being a J-lens.
+
+**What it cost.** Nothing to run. It replaces a description of correlations with a held-out model comparison,
+which is what the objection asked for, and it corrects a failure of my own estimator rather than letting the
+first FAIL stand as a statement about the data.
+
+**What would discharge it.** Nothing in the mechanism directly, but it sharpens what F40 asked for: a signal for
+the uplift has to come from the escalation target's side, and this says why in a quantity rather than an argument
+— the shared component is what a box-side signal can see, and the uplift is what remains after it is removed.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
