@@ -1420,6 +1420,25 @@ difficulty knowledge is worth between $0.003 and $0.052 an item. Every signal th
 pay, and none of them captured enough of the ceiling to do it. That is a statement about the signals, and it is
 the first time this study can say so rather than suspecting it.
 
+> **Second correction, same session.** The paragraph below is a HYPOTHESIS, not a measurement, and it was
+> written as though it were measured.
+>
+> - **Claim narrowed:** "the internal readout adds nothing at the decision point where the free signal is
+>   also free, and at the decision point where the free signal costs a generation it has never been
+>   measured."
+> - **Invariant broken:** the broad form implies there is no free signal at prefill in the explaining
+>   condition. There is — the first generated token's distribution, the prefill residual, and the logits
+>   of a forced answer suffix all exist before generation. What is unavailable is specifically the ANSWER
+>   distribution's entropy.
+> - **Verified replacement:** in the terse condition the answer IS the first generated token, so the two
+>   decision points COINCIDE and this capture cannot separate them. Every comparison in this study is of
+>   that kind. Whether the first-token distribution carries comparable information in the explaining
+>   condition is unmeasured.
+> - **Blast radius:** the paragraph below and the "97 times cheaper" figure, which compares against a
+>   generation the router may not need. The claim survives only if, in the explaining capture, the
+>   at-prefill entropy is materially worse than the after-generation entropy — registered at 0.05 in
+>   held-out Spearman. If it is as good, a router uses it and the timing argument is void.
+
 **And it exposes a decision point this study never measured at.** The free entropy that beat every internal
 readout is the entropy of the answer distribution. In the terse condition the answer is the next token, so that
 entropy is a prefill quantity and the residual has no cost advantage over it — which is the comparison every
