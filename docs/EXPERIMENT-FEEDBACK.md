@@ -1629,6 +1629,54 @@ be: the free output signals already carry 0.3478 about the stronger model's succ
 matter, and no internal readout of the box has been shown to add to that. Any further work on box-side internal
 signals for escalation now has to beat this number, on this subset, before it is worth measuring at all.
 
+## F43 — Two of the tier claims survive, the non-monotonic counts do not, and the capture condition is the odd one out
+
+**Where it bit.** A review rated three of F37's claims high-risk on the grounds that the tiers have 5, 2 and 5
+arms, so shrinkage pulls them by different amounts, and that counting non-monotonic items by comparing point
+estimates counts noise. Each was re-run with equal arm counts, raw rates and no shrinkage at all, over 200 random
+two-arm subsets.
+
+**Survives.** The cheap tier is weaker than the box in **200 of 200** subsets, and the correlations barely move:
+box-strong +0.3428 [+0.2946, +0.3828], box-cheap +0.5051, cheap-strong +0.4426, against the shrunk figures of
+0.3805, 0.5144 and 0.4830.
+
+**Does not survive.** Counting non-monotonic items from a beta-binomial posterior rather than from point estimates:
+
+| | point estimates | confident at 95% |
+|---|---|---|
+| the cheap tier beats the strong tier by >0.05 | 44 | **1** |
+| the box beats the strong tier by >0.05 | 56 | **20** |
+
+**So F37's 44 and 56 were mostly noise**, as the review predicted. The honest figures are 1 and 20 of 488. The
+qualitative point — the price ladder is not a capability ladder — rests on the accuracy comparison and the
+correlations, which do survive; the per-item counts were overstated by a factor of forty and three.
+
+**And the arm-level correlation matrix, which contains no grouping decision at all, shows something the tier
+summary hid:**
+
+| | mean correlation |
+|---|---|
+| among the box's five prompt variants | **+0.8720** |
+| among the five frontier arms | **+0.5710** |
+| between groups | +0.3281 |
+
+**One model under five different prompts agrees on items more than five different frontier models agree with each
+other.** Prompt variation within a model is a smaller perturbation of item-level outcomes than model identity
+among strong models — which is a fact about what "the same capability" means and is worth stating on its own.
+
+**The part that matters for this study is narrower and uncomfortable.** `qwen3.6@terse` correlates 0.75 to 0.77
+with its own four prompt variants, while those four correlate 0.93 to 0.96 among themselves. **The condition the
+residuals were captured under is the outlier of the box's own family.** Every internal-signal result rests on it,
+and the arm that carries the residuals is the least representative arm available.
+
+**What it cost.** One overstated count, corrected by a factor of forty. What it bought is the arm-level matrix as
+the primary object, which is what the review asked for and which needed no grouping judgement.
+
+**What would discharge it.** A recorded outcome carrying the arm rather than a tier label, so a correlation
+between arms is computable without a grouping decision, and a grouping declared as an analysis choice rather than
+baked into what is stored. F37's request for several draws per candidate and this are the same requirement seen
+from two sides: the draws have to remain distinguishable after they are stored.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
