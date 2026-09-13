@@ -1764,8 +1764,25 @@ central-difference response at amplitude `a`, 90% of (direction, prompt) pairs h
 | the same perturbation twice | output moves by **0.000e+00** | the forward is fully deterministic; there is no stochastic noise floor |
 | expert sets under the patch | **16.28% of tokens change, up to 50.72% in one layer** | this is the cause |
 
-At a perturbation of 5% of the residual norm, a sixth of all tokens are routed to different experts. The function
-is piecewise linear and the perturbation moves the pieces.
+> **Correction, in the diff form this ledger requires.**
+>
+> - **Claim withdrawn:** the third control's figure — 16.28% of tokens changing their expert set, up to
+>   50.72% — and the reading that routing flips make the function piecewise linear.
+> - **Invariant broken:** the module hooked was `mlp.gate`, which in this family is not the top-k router.
+>   Substituting its output on 40 of 40 calls left the final hidden state **bit-identical**
+>   (`max |clamped − free| = 0.000000e+00`, against `max |free − clean| = 4.30`), and a forward hook's
+>   return value does replace the output the caller sees. A tensor whose substitution changes nothing is
+>   not the routing tensor, so the flip fraction was the top-8 of the wrong quantity.
+> - **Verified replacement:** none yet. The flip fraction is unmeasured, and the router-clamp comparison
+>   that appeared to exonerate routing measured nothing either.
+> - **Blast radius:** the third control's row, the sentence below it, and this entry's diagnosis. What
+>   still stands is controls 1 and 2 (the patch machinery is correct; the forward is exactly
+>   deterministic), the amplitude sweep, and the gate's FAIL — none of those involve the gate module.
+>
+> So the cause of the linearity failure is now **unknown**, not routing. The candidates that remain are
+> the Gated DeltaNet recurrence carrying a perturbation through thirty of forty layers, the RMSNorm
+> non-linearity, and the curvature of a forty-layer network. The next step is identifying the real
+> router by what its output looks like rather than by its name.
 
 **And the amplitude sweep runs the opposite way to the usual one:**
 
