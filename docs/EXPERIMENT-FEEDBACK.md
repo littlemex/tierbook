@@ -2303,6 +2303,51 @@ requirement and provisioning are two readings of one comparison, so the contract
 Ornith is bf16 in the same family, so if the reading is right its linear window extends much further down. That run
 is in flight.
 
+## F57 — Two models agreed on every declarable field, and their representations were further apart than two different questions
+
+**Where it bit.** F56 derived a compatibility contract by enumerating what breaks, and named a tokenizer hash as
+the fix for the fact that equal vocabulary size proves nothing. Running it found the contract still too weak, and
+found it in the direction that matters.
+
+Two models loaded into one process: `ornith-ai/Ornith-1.5-9B` and `empero-ai/Qwen3.8-9B-Distill`. They agree on
+`model_type`, `d_model` (4096), depth (32), `vocab_size` (248320), the tied-embedding flag, dtype (bf16), the
+attention period, the weight file size — **and on `len(tokenizer)`, at 248077 exactly.** The only fields that
+differ are the name and the weights themselves, whose first-layer statistics differ in the fifth decimal
+(mean 5e-06 against 6e-06, std 0.015346 against 0.015420). So a statistical fingerprint is fragile too.
+
+**The number that decides it.** Residuals at the same layer index, same prompts:
+
+| comparison | cosine |
+|---|---|
+| **same prompt, different model** | **0.5995, 0.6102, 0.5711, 0.5625** |
+| different prompt, same model | 0.8983, 0.8995, 0.8750 |
+
+**The between-model distance exceeds the between-question distance.** A judge carried across would read in a space
+further from where it was fitted than two unrelated questions are from each other. And the residual rms is 0.4511
+against 0.4694 — a ratio of 1.04 — so **no scale or sanity check on magnitudes would catch it.** The distill likely
+shares lineage with its sibling, which makes 0.57 an upper bound on similarity and the conclusion conservative.
+
+**What co-hosting does NOT break.** The two models' blocks are distinct Python objects and a hook registered on one
+fires zero times during a forward through the other (1 against 0). **Hooks belong to the module tree, not to the
+engine.** One engine holding several models does not mix observations, so the entity that owns a hook is the model
+instance — which is what the four-level entity model needs in order to say who a resident `J` belongs to.
+
+**Two other measured facts from the same pair.** Ornith is **dense**: `found 0 MoE gate modules`, so the input-side
+router clamp that was indispensable on the box has nothing to clamp. A judge declaring "requires a clampable router"
+is declaring a property some models in the same family do not have. And the amplitude at which the Jacobian is
+linear is **not portable**: on Ornith the cosine peaks at α = 0.05 (0.9913) and has already fallen to 0.9084 by
+α = 0.5, which is the box's operating point and where the box is at its best (0.9965 at L32). F56 argued the
+amplitude was a silent-failure row; this measures it.
+
+**A withdrawal.** F56 predicted the small-amplitude floor was a property of the box's FP8 weights and would not
+appear in bf16. It does: α = 0.001 gives cosine −0.0531 on Ornith against −0.0026 on the box, and two identical
+patched passes differ by 0.000e+00, so it is deterministic rounding of a small perturbation rather than run-to-run
+noise. The floor is a small-signal property of the arithmetic, not of the quantisation format.
+
+**What would discharge it.** The contract keys on a **weight digest**, not on shapes, not on vocabulary size, not on
+`len(tokenizer)`, and not on weight statistics. Everything weaker than a digest is satisfied by two models whose
+representations are further apart than two different questions.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
