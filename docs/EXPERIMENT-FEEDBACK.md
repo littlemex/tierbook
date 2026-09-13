@@ -1860,6 +1860,55 @@ and its usability is decided by internal checks registered before it finished: s
 ordering with depth, the leakage outside the activation subspace, and the paper's variance-share claim computed
 with the logit lens as a control.
 
+## F47 — J exists, it is a stable estimate, and the paper's variance claim is true and uninformative
+
+**Where it bit.** The thing this study skipped for eight rounds. `J_22` is now built from forward passes with the
+router clamped by its input, and the checks registered before it existed have been run on it.
+
+| check | result | criterion |
+|---|---|---|
+| split-half entry correlation | **0.9612** | ≥ 0.70 — **PASS** |
+| split-half relative Frobenius | **0.3355** | ≤ 0.60 — **PASS** |
+| diagonal mass share | 0.108134 | a random matrix gives 1/2048 = 0.00049, so **220×** that |
+| leakage outside the activation subspace | 0.8282 | reported, not gated |
+
+**So the estimate is stable**: two disjoint halves of the probe prompts agree at 0.9612, which is the first time
+this study has had a verified `J` rather than an assumption about one. The diagonal carries 220 times the mass a
+random matrix would, which is the structure a Jacobian of a residual network should have.
+
+**And the paper's headline claim, measured with its nulls for the first time:**
+
+| k | J-lens | logit lens | random k-subspace | top-k PCA |
+|---|---|---|---|---|
+| 16 | **1.75%** | 1.34% | **0.78%** | 67.88% |
+| 25 | 2.47% | 1.93% | 1.22% | 72.99% |
+| 64 | 5.68% | 4.35% | 3.12% | 82.08% |
+
+**"Under 10% of activation variance" is true, and it is true of the null as well.** A random k-dimensional
+subspace holds 0.78% to 3.12%; the leading principal directions hold 68% to 82%. The J-lens subspace holds about
+2.2 times the random subspace and a twelfth of the PCA subspace. So the claim as stated is satisfied by
+essentially any subspace not aligned with the leading principal directions, and on its own it is not evidence
+about where a model keeps information.
+
+**The ordering is the informative part, and it runs the other way.** `J-lens > logit lens > random` at every k.
+Applying `J` moves the readout subspace AWAY from random and TOWARD holding more variance — the opposite
+direction from "the information sits in a low-variance subspace, which is why it is special". This is measured on
+the right object, unlike F16's withdrawn 0.081%, which was the variance share of a fitted discriminant and a
+property of the ridge.
+
+**What it cost.** Nothing that was not already spent. What it produced is the first quantitative statement this
+study can make about the paper rather than about its own probes, and the shape of it is that a number can be
+reproduced and still carry no evidence — which is the same lesson as F16 arriving from the opposite side.
+
+**Two caveats, stated rather than buried.** The activations are the terse condition's residuals at one position
+per item, not a general corpus, so the variance shares are shares of THAT distribution. And what is estimated is
+`J P_V`, the Jacobian restricted to the probe basis; the leakage ratio of 0.8282 says the part of `J`'s row space
+outside where activations live responds at 83% of the strength of the part inside it, so the restriction is not a
+formality.
+
+**What is still pending.** L32 and L39 are still building, so the depth-ordering check — the one that would show
+the plumbing is right by reproducing what the architecture forces — has only one layer to work with so far.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
