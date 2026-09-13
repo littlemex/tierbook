@@ -1748,6 +1748,57 @@ mechanism this study was going to inform has, on the data available, no allocati
 where the value is — 78% of a reliably defined uplift is unpredicted — and until something predicts it there is
 nothing for a policy to act on.
 
+## F45 — The Jacobian the J-lens needs is not defined on this box, and the reason is the router
+
+**Where it bit.** Building `J_l` for real, which F34 identified as the thing eight rounds of this study had
+skipped. It does not need backward passes: patching `h_l` with `eps*v` and reading the change in the final block's
+output gives `J_l v` from forward passes alone. A pre-registered linearity gate ran first — with `r(a)` the
+central-difference response at amplitude `a`, 90% of (direction, prompt) pairs had to satisfy
+`cos(r(a), r(a/2)) >= 0.995` and a norm ratio in [0.90, 1.10].
+
+**It failed 0 of 96 at every amplitude.** Three controls then settled why, and it was not what I assumed:
+
+| control | result | what it rules out |
+|---|---|---|
+| a zero perturbation | output moves by **0.000e+00** | the patch machinery is correct |
+| the same perturbation twice | output moves by **0.000e+00** | the forward is fully deterministic; there is no stochastic noise floor |
+| expert sets under the patch | **16.28% of tokens change, up to 50.72% in one layer** | this is the cause |
+
+At a perturbation of 5% of the residual norm, a sixth of all tokens are routed to different experts. The function
+is piecewise linear and the perturbation moves the pieces.
+
+**And the amplitude sweep runs the opposite way to the usual one:**
+
+| alpha | cos median | norm ratio | ‖r‖ median |
+|---|---|---|---|
+| 0.001 | **−0.0026** | 0.4696 | 1.229e-01 |
+| 0.005 | 0.0521 | 0.5065 | 2.798e-02 |
+| 0.020 | 0.4184 | 0.6573 | 9.767e-03 |
+| 0.050 | 0.8170 | 0.8802 | 8.736e-03 |
+| 0.200 | **0.9765** | 0.9714 | 8.051e-03 |
+| 1.000 | 0.9593 | 0.9820 | 7.547e-03 |
+
+**Small amplitudes are pure noise, not precision.** At 0.001 the two responses are uncorrelated and the response
+norm divided by epsilon BLOWS UP — the signature of a quantisation floor, since FP8 activations round a
+small perturbation into the same bucket and the difference is a rounding artefact. The cosine peaks at 0.9765
+around alpha 0.2 and falls again by 1.0, so there is a best amplitude and it does not reach the registered 0.995.
+
+**Registered gate: FAIL, and it is not a matter of choosing epsilon better.** Below the quantisation floor there
+is no signal; above it the routing has already moved. The derivative the J-lens is built from is not defined on
+this box at any amplitude that clears the numerics, and that is an obstruction specific to a fine-grained MoE
+rather than a tuning problem.
+
+**What it cost.** The J construction, in its literal form. It is also the answer to a question this study has been
+carrying since F34 — whether measuring on a MoE with linear-attention layers is a contribution or a confound. It
+is neither: it is an obstruction to the method, and that is a more useful thing to have found than either.
+
+**What would discharge it.** A different object, well defined, stated as different: the Jacobian of the network
+with the **routing held fixed** to the unperturbed pass. Freezing every expert assignment makes the remaining map
+smooth, and it is what the paper's construction computes on a dense model. That test is written and registered
+with the same two-amplitude criterion plus a control that the expert-flip fraction is exactly 0 once clamped, and
+the unclamped numbers reported beside it at the same amplitudes. If it passes, this study gets a `J` and can say
+precisely which `J` it is; if it fails, the J-lens is not computable here by any route available to me.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
