@@ -2073,6 +2073,39 @@ which is where the uplift question actually lives — needs residuals from the e
 that passed its gate (888 rows, accuracy 0.7928) stored readouts and labels but **not the residual vectors**. That
 capture has to be re-run with the hidden states kept.
 
+## F51 — The gate works in the condition it would be deployed in, and J transfers across conditions
+
+**Where it bit.** F50 measured the free prefill gate on the terse condition, where the answer is the next token so
+the "post-generation" signal is not really post-generation. The explaining condition is the one the design exists
+for: there the answer distribution does not exist until the box has written its reasoning, so the readout at L32 is
+the only signal available at the moment the decision is made. The explaining capture's residuals turned out to have
+been stored all along — my earlier statement that it held "readouts and labels but not the residual vectors" was
+wrong, from reading a truncated directory listing — so no re-run was needed.
+
+| let through | J-lens, using the TERSE-estimated J | logit lens | random J, matched norm |
+|---|---|---|---|
+| 40% | **0.8592** | 0.7606 | 0.8028 |
+| **50%** | **0.8571** | 0.7744 | 0.8008 |
+| 60% | 0.8558 | 0.7900 | 0.8088 |
+| 70% | 0.8333 | 0.7903 | 0.8038 |
+
+The box scores 0.7853 on the 531 held-out items. **At 50% passed the gate reaches 0.8571, beating the logit lens by
++0.0827 and the null by +0.0564** — both clear the registered floor of 0.03.
+
+**And `J_32` was estimated on terse prompts and works on the explaining condition unchanged.** That is a different
+fact from F19's finding that a prompt condition reorders items: the OUTCOMES move between conditions, and the
+matrix does not. `J` is a property of the weights, estimated by averaging over prompts, so it should transfer —
+and it does, which is the first cross-condition transfer anything in this study has achieved after F19 showed
+signals fitted in one condition do not carry to the other.
+
+**What it cost.** Nothing; the data existed. What it settles is that the cascade design holds in the deployment
+condition rather than only in the condition the residuals happened to be captured in, which was the caveat hanging
+over every internal-signal result since F43 found the terse arm to be the outlier of the box's own family.
+
+**What would discharge it.** The second stage, which remains unmeasured: reading the J-lens again after generation,
+where the uplift question lives. The residuals for that exist now at both stored positions, so it is an analysis
+rather than another capture.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
