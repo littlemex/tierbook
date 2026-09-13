@@ -1696,6 +1696,58 @@ between arms is computable without a grouping decision, and a grouping declared 
 baked into what is stored. F37's request for several draws per candidate and this are the same requirement seen
 from two sides: the draws have to remain distinguishable after they are stored.
 
+## F44 — What the free signals know is the subject, and even that does not change the allocation
+
+**Where it bit.** F42's positive control needed opening up. The free signals predict the stronger tier's success
+at 0.3543 on the 173 items the box got wrong, and a router needs to know which component carries it.
+
+| component | alone | the set without it | what the set loses |
+|---|---|---|---|
+| **category** | **+0.3522** | **+0.0817** | **+0.2726** |
+| answer entropy | +0.1277 | +0.3362 | +0.0181 |
+| answer margin | +0.1150 | +0.3040 | +0.0503 |
+| answered A | −0.0295 | +0.2917 | +0.0626 |
+| prompt length | −0.1553 | +0.3100 | +0.0443 |
+| decision depth | +0.1464 | +0.3265 | +0.0278 |
+
+The whole set reaches +0.3543 against a permutation null of +0.1610. **Category alone reaches +0.3522, and
+removing it drops the set to +0.0817 — below the null.** So on the items where escalation is the question, what
+predicts whether a stronger model will succeed is the SUBJECT, and no per-item quantity contributes.
+
+**And the prescription that follows from that fails too.** If the only real signal is the subject, the right
+router chooses one tier per category and nothing per item. Scored honestly — the choice made from one half of each
+tier's arms on train items, the reward taken from the other half on held-out items:
+
+| V | one global fixed tier | one tier per category | per item, free signals | per-category minus global |
+|---|---|---|---|---|
+| $0.02 | 0.01301 | 0.01360 | 0.01426 | +0.00059 [−0.00027, +0.00149] |
+| $0.05 | 0.03962 | 0.03948 | 0.03954 | −0.00015 [−0.00101, +0.00055] |
+| $0.20 | 0.17065 | 0.16869 | 0.17149 | −0.00195 [−0.00550, +0.00101] |
+| $1.00 | 0.86944 | 0.86944 | 0.86944 | +0.00000 |
+
+Every V fails the registered floor, and above $0.50 the policies are identical because everything goes to the
+strong tier. At `V = $0.05` the per-category policy sends only `health` to the box and the other six subjects to
+the strong tier, and that single deviation is worth nothing.
+
+**A signal that correlates with the target need not change the allocation, and here it does not.** The decision is
+dominated by the cost-benefit comparison at the tier level, and per-category variation in success does not move
+any item across a boundary. This is the point a review made in general form — a gain in Spearman or AUC that does
+not change a route has zero value of information — and it is now measured rather than asserted.
+
+**So the honest conclusion for this benchmark, these tiers and these prices is that the best policy this sample
+supports is a single fixed tier.** Per-item routing loses to it above `V = $0.10`, per-category routing does not
+beat it at any V, and the residual adds nothing to either. That is a complete negative result about routing on
+this setup rather than a negative result about one signal, and it is worth more than the nine rounds that produced
+it because it says where the remaining value is not.
+
+**What it cost.** Nothing to run. It closes the prescription the previous three entries were converging on, which
+is better than leaving it as an untested recommendation.
+
+**What would discharge it.** Nothing. This entry is why the ledger's requirements should not be built yet: the
+mechanism this study was going to inform has, on the data available, no allocation to make. F40's remainder is
+where the value is — 78% of a reliably defined uplift is unpredicted — and until something predicts it there is
+nothing for a policy to act on.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
