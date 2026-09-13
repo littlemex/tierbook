@@ -2429,6 +2429,52 @@ second time the same class of defect has been caught by measuring the base rate 
 and a judge's output is inadmissible until the base rate is above a declared floor. This is a **block tierbook owns**,
 not a manifest field, which is the useful conclusion: some of what makes a bought judge safe cannot be sold with it.
 
+## F60 — A judge carried to the wrong model still beat no judge, and that withdraws F57's conclusion
+
+**Where it bit.** F57 measured that two models agreeing on every declarable field have residuals whose cosine for
+the same prompt (0.56–0.61) is *lower* than two different prompts within one model (0.88–0.90), and concluded that a
+judge carried across would be reading in the wrong space, so the contract must key on a weight digest. That is an
+argument from geometry to behaviour, and the behaviour was not measured. It is now.
+
+Both models in one process, same 712 items, `J` built on each at L18 with α = 0.2 and 256 directions, the four
+J-lens features computed on **B's** residuals under each `J`, and the logistic head fitted on **B's** outcomes in both
+arms. Held-out half, gate at 50% pass:
+
+| gate | AUC | accuracy on the passed half |
+|---|---|---|
+| **native** — `J` built on B, gating B | 0.6206 | **0.7529** |
+| **foreign** — `J` built on A, gating B | 0.5740 | **0.7176** |
+| none — every item passes | — | 0.6667 |
+
+**native − foreign = +0.0353, 95% CI [−0.0294, +0.0824] → FAIL** against the pre-registered floor of 0.03 with the
+interval above zero.
+
+**The foreign judge still works.** It adds **+0.0509** over no gate. The point estimate favours the native judge and
+meets the magnitude floor, but at n = 356 held-out items the interval crosses zero, so the claim that a carried judge
+is worse cannot be made. The geometry is confirmed — the flattened `J_A`·`J_B` cosine is **0.5744**, matching the
+residual cosine — and it does not reach the behaviour.
+
+**Why it survives, and it is the same fact as an earlier finding.** The foreign arm carries A's Jacobian and **B's
+refitted head**. F56 observed that the fitted head takes four scalars, so nothing checks their provenance, and called
+that a hole in type safety. It is the same property that absorbs the mismatch here: four numbers is a narrow enough
+channel that refitting downstream recovers most of what the wrong Jacobian cost. **The reduction that destroys type
+safety is what makes the mismatch survivable** — one fact, two consequences, and I had written up only the one that
+sounded like a warning.
+
+**What this does to the design.** Refusing loudly on a digest mismatch is now the *strict* option rather than the
+obviously correct one, and the evidence does not support it as the only admission rule. A second rule is defensible
+and better matched to what was measured: **admit with the mismatch declared, and require re-measurement of the base
+rate and the gate's own increment on the buyer's items before the judge's output is trusted.** F59 already argues the
+runtime must measure a base rate that no manifest can declare; this extends it — the runtime must also measure the
+*increment*, because that is the quantity a digest mismatch actually moves, and it moves it by an amount too small
+for a declaration to predict.
+
+**What I got wrong, plainly.** F57's headline sentence — that a judge carried across reads in a space further away
+than two unrelated questions, therefore the contract must key on a weight digest — used a true measurement to reach
+a conclusion about behaviour that the behaviour does not support. The digest is still the right key for the *measured*
+constants of F58, where a mismatch has no downstream refit to absorb it. It is not established as a ground for refusal
+of the judge as a whole.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
