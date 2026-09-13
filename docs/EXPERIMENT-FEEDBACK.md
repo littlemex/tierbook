@@ -2250,6 +2250,59 @@ ledger has recorded, in a new form.
 L32, and the deeper layers are for verifying that the construction behaves as the architecture forces rather than
 for deployment.
 
+## F56 — A shape check catches half a cross-model judge's errors, and the silent half is the dangerous one
+
+**Where it bit.** The interface work needs a compatibility contract that refuses a judge built for one model when
+it is pointed at another. Before designing it, the cheap thing is to find out what happens WITHOUT one. Two real
+models make the test sharp: `ornith-ai/Ornith-1.5-9B` is the same architecture family as the box (`qwen3_5`) and
+shares its 248,320-token vocabulary exactly, and `google/gemma-4-12B-it` differs in every axis.
+
+| | box: Qwen3.6-35B-A3B | Ornith-1.5-9B | gemma-4-12B-it |
+|---|---|---|---|
+| d_model | 2048 | **4096** | **3840** |
+| depth | 40 | **32** | **48** |
+| vocabulary | 248320 | **248320** | 262144 |
+| tied embeddings | no | no | **yes** |
+| dtype | **FP8** | bf16 | bf16 |
+
+Enumerating every artefact the stage-1 judge carries and pointing it at each target:
+
+| artefact | at Ornith | at gemma-4 |
+|---|---|---|
+| `J` applied to a residual | fails loudly | fails loudly |
+| the layer index 32 | fails loudly, only 32 layers exist | **silently wrong**, exists but is 67% of depth not 80% |
+| verbaliser token ids | **silently wrong** | loudly or silently |
+| `W_U` | shape mismatch | **silently wrong**, tied so the readout is a different map |
+| the fitted logistic on 4 features | **silently wrong** | **silently wrong** |
+| the amplitude α | **silently wrong** | **silently wrong** |
+| | 2 loud, **3 silent** | 2 loud, **4 silent** |
+
+**A contract keyed on shapes lets the judge run and quietly produce a worse gate than no gate.** Two of the silent
+failures are worth naming because I would not have predicted either:
+
+- **Equal vocabulary size is not safety.** Ornith shares the box's family and its vocabulary size exactly, and
+  that establishes nothing about whether token id 12345 means the same string. A **tokenizer hash** is required
+  where I would have written "vocab_size".
+- **Reduction destroys type safety.** The fitted head takes four scalars, so nothing checks their provenance —
+  four numbers from any model's residual are accepted. The further a pipeline reduces, the less a type system can
+  protect, which is the opposite of the intuition that narrow interfaces are safer.
+
+**The minimum contract that makes every row above fail loudly**, derived from the enumeration rather than guessed:
+a model identity hash, `d_model`, depth, a **tokenizer hash** rather than a vocabulary size, the tied-embedding
+flag, and **the dtype the amplitude was calibrated against**.
+
+**What it cost.** Nothing; it is arithmetic over three published configs. It replaces a guessed contract with one
+derived from what actually fails, and it found two failure modes that a shape-based design would have shipped.
+
+**What would discharge it.** The contract as the thing a judge's manifest carries, checked at admission. It is also
+the same matching that lets a judge BIND to an already-standing shared box rather than provisioning its own —
+requirement and provisioning are two readings of one comparison, so the contract does double duty.
+
+**One prediction now testable.** The FP8 quantisation floor that dominated the amplitude sweep — cosine −0.0026 at
+α = 0.001 with the response norm blowing up — should be a property of this box's weights rather than of the method.
+Ornith is bf16 in the same family, so if the reading is right its linear window extends much further down. That run
+is in flight.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
