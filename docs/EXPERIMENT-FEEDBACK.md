@@ -2106,6 +2106,75 @@ over every internal-signal result since F43 found the terse arm to be the outlie
 where the uplift question lives. The residuals for that exist now at both stored positions, so it is an analysis
 rather than another capture.
 
+## F52 — Stage 2 works, and the free thing beats it
+
+**Where it bit.** The half of the cascade that had never been measured. Stage 1 is a free prefill gate; stage 2
+decides, among the items stage 1 held back, whether to escalate — and that is the uplift question every earlier
+attempt found the null on. Two things are different here: the readout goes through `J` and the vocabulary, and the
+capture stored TWO positions, the later of which sits inside the model's own reasoning rather than before it.
+
+On the 265 held-out items stage 1 held back, where the box scores 0.7698:
+
+| stage-2 signal | AUC |
+|---|---|
+| the J-lens at the EARLIER position, the one stage 1 used | **0.4703** |
+| the J-lens at the LATER position, inside the reasoning | **0.6293** |
+| both positions | 0.6301 |
+| generation length, free once the generation exists | **0.6978** |
+
+**Re-reading the residual after generation carries genuinely new information: +0.1590 over the position stage 1
+already used, PASS.** The earlier position is at chance on this subset, which is what it should be — stage 1 spent
+that information, and what is left is what it could not separate. So the design's premise holds: there is a second
+look worth taking.
+
+**And the second look is beaten by the cheapest thing in the room.** Generation length alone reaches 0.6978. Once
+the generation has been paid for, its length is free, and it is better than the J-lens readout at the same
+decision. So stage 2's first choice is the token count, and the J-lens is a candidate for adding to it rather than
+for replacing it.
+
+**What it cost.** Nothing; the residuals existed at both positions. What it settles is the shape of the cascade:
+the J-lens earns stage 1, where nothing else is available, and has to compete at stage 2 against quantities that
+generation hands over for free.
+
+**What would discharge it.** Whether the J-lens adds to generation length rather than losing to it, which is an
+increment test with a floor and is not yet run.
+
+## F53 — All three Jacobians verify, and the paper's variance claim breaks outside the band
+
+**Where it bit.** The full three-layer verification, with the depth-ordering check finally having enough layers to
+be a test rather than a table.
+
+| layer | ‖J−P_V‖/‖P_V‖ | diagonal mass | split-half correlation | leakage ratio |
+|---|---|---|---|---|
+| 22 | 0.9956 | 0.108134 | 0.9612 | 0.8282 |
+| 32 | 0.9927 | 0.153264 | 0.9824 | 0.9444 |
+| 39 | **0.9924** | **0.206121** | — | 0.9933 |
+
+**Both orderings PASS**: distance to the projected identity falls with depth and the diagonal carries monotonically
+more mass, 0.108 → 0.153 → 0.206. These are what the architecture forces, so reproducing them is what shows the
+estimate is of the thing it claims to be rather than of an artefact.
+
+**And at L39 the paper's headline number fails:**
+
+| layer | k=64 J-lens | logit lens | random | top-k PCA |
+|---|---|---|---|---|
+| 22 | 5.68% | 4.35% | 3.12% | 82.08% |
+| 32 | 7.59% | 4.08% | 3.09% | 80.34% |
+| **39** | **11.40%** | 5.84% | 3.18% | 73.41% |
+
+At sixty-four directions the J-lens subspace holds **11.40%** of activation variance, above the paper's "never more
+than 10%". **L39 is outside the band the paper reports** — depth 98% against its 30–80% — so this is a measurement
+beyond the claim's stated scope rather than a contradiction of it. What it shows is that the claim is not a general
+property of the construction: it holds inside the band and stops holding just outside it, which is consistent with
+the band being where the workspace is and is a sharper statement than reproducing the number inside.
+
+The ratio to the null also rises with depth at every k — 2.2×, 3.0×, 3.6× at k=16 — so `J`'s effect on the readout
+subspace strengthens monotonically toward the output, matching the linearity, the split-half stability, and the
+prediction margin. Five independent quantities now move the same way with depth.
+
+**What it cost.** Nothing beyond the four and a half hours of build. It is the first time this study has said
+something about the paper's claim that the paper does not already say.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
