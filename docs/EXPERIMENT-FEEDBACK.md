@@ -2393,6 +2393,42 @@ second measurement campaign, not a configuration change.
 **What would discharge it.** The manifest carries `measured_on: <weight digest>` beside every measured constant, and
 admission refuses when the digest does not match rather than assuming a shape match licenses the constant.
 
+## F59 — The two failures that appeared only on running it, and neither is in any contract
+
+**Where it bit.** F56, F57 and F58 derived a compatibility contract from configuration files and from residual
+geometry. Actually running the J construction on a second and third model produced two failures that no field in
+that contract mentions, and they have opposite characters.
+
+**One fails loudly, in code that had worked for weeks.** The construction adds `epsilon * v` to the residual leaving
+a block. On the FP8 box the activations arrive dequantised to float32 and a float32 perturbation adds cleanly; on a
+bf16 model the residual is bf16 and the next matmul refuses the mixed pair — `expected mat1 and mat2 to have the
+same dtype, but got: float != c10::BFloat16`. The method is unaffected; the *implementation* carried an assumption
+about the box's numeric representation that nothing declared and no reviewer had reason to look for.
+
+**One fails quietly enough to have produced a published number.** The letter is read from the next token at the last
+prompt position, which is correct for a model that complies with "answer with the option letter only". On
+`empero-ai/Qwen3.8-9B-Distill` — matching its sibling on `model_type`, `d_model`, depth, vocabulary,
+`len(tokenizer)`, tied flag, dtype and attention period — it gave **accuracy 0.0899 against a 0.10 random floor.**
+The labels were noise. A gate comparison run on them would have compared two orderings of noise and reported a
+number, and nothing in the compatibility contract of F56–F58 has a field that would have refused it: the model is
+the right shape, the right dtype, the right tokenizer length, and the weight digest would have matched the model
+the judge was being built FOR.
+
+**What this adds to the contract.** A third category beside declared and measured (F58): **conventions**. The
+readout convention is not a field of the model and not a constant measured on its weights — it is an assumption
+about how the model behaves under an instruction, and it transfers no better than the Jacobian does. A manifest
+cannot check it and a digest cannot license it. What catches it is a **base-rate floor measured on the buyer's own
+items before the judge's output is used at all**, which is a measurement the runtime must perform, not a declaration
+the seller can make.
+
+That floor is now pre-registered in the harness at 0.20 for a ten-option task, and the run refuses rather than
+reporting. It is the same shape as the sanity gate that caught the 1,822-of-2,364 collapse earlier, which is the
+second time the same class of defect has been caught by measuring the base rate and no other way.
+
+**What would discharge it.** The measurement block computes a base rate per candidate before any judge is consulted,
+and a judge's output is inadmissible until the base rate is above a declared floor. This is a **block tierbook owns**,
+not a manifest field, which is the useful conclusion: some of what makes a bought judge safe cannot be sold with it.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
