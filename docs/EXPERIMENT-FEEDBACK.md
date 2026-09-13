@@ -2523,6 +2523,51 @@ upstream of the verbaliser, by a margin that survives three controls chosen to k
 and F50–F53 (gates in the deployment condition), the mechanism is established well enough that the remaining
 questions are about magnitude and cost, not about whether the quantity is real.
 
+## F62 — An intervention moves the readout but adds no information, and the difficulty signal is not in the verbaliser plane
+
+**Where it bit.** F61 established the swap works: exchanging two J-lens coordinates moves the KNOWN−UNKNOWN gap 4.7x
+more than moving the same vectors' non-J part. That is a fact about the mechanism, and it does not answer the question
+routing needs — **can an intervention make the readout MORE informative about whether the item is hard?** A swap moves
+the readout by construction; a gate needs the *ordering over items* to sharpen. An intervention that moves every item
+by the same amount improves nothing.
+
+So a gain rather than a swap: `h ← h + (g−1)·V(V⁺h)` at every position, at L22 and L32, router clamped, same
+machinery. The gain was chosen on the calibration fold and scored on the test fold, because choosing on the scoring
+fold is the failure this project has recorded twice.
+
+| basis | gain | calib AUC | **test AUC** | accuracy at 50% passed |
+|---|---|---|---|---|
+| lens | 0.0 — the coordinate removed entirely | **0.7767 (best on calib)** | **0.7938** | 0.8214 |
+| lens | 0.5 | 0.7626 | 0.8128 | 0.8214 |
+| **lens** | **1.0 — untouched** | 0.7664 | **0.8054** | 0.8304 |
+| lens | 2.0 | 0.7515 | 0.8243 | 0.8482 |
+| lens | 4.0 | 0.7193 | 0.8098 | 0.8571 |
+| lens | 8.0 | 0.6024 | 0.7203 | 0.7679 |
+| rand | 0.0 | 0.7557 | **0.8227** | 0.8214 |
+| rand | 2.0 | 0.7700 | **0.8220** | 0.8393 |
+
+**FAIL** against the pre-registered floor. Calibration chose g = 0.0, which is 0.0116 AUC *worse* than untouched on
+test. The gains that look good on test (2.0, 4.0) are matched by the covariance-matched random plane at 0.8220 and
+0.8227, so what improves there is perturbation magnitude, not the lens coordinate.
+
+**What this settles, and it is a real answer rather than a null.** The question was whether an external intervention
+can CREATE the routing signal in J-space. It can move the readout — F61 measured that at 4.7x over the non-J control
+— and moving it adds no information about difficulty. **The information was already there; perturbing does not add
+any.** For a gate, that means the design space is reading, not steering, and the effort belongs in what to read and
+when rather than in how to intervene.
+
+**A second finding from the g = 0.0 row.** Removing the KNOWN/UNKNOWN 2-plane from the residual *entirely* costs only
+0.0116 AUC (0.8054 → 0.7938). **The difficulty signal is not concentrated in the verbaliser plane.** That is not in
+tension with the earlier result that the verbaliser log-odds is the feature which made the J-lens readout beat the
+logit lens (0.7629 against 0.5011): the readout runs the residual through the whole of `J` and the whole of `W_U`, so
+the verbaliser *log-odds* can carry the signal while the two-dimensional span of two `W_U J` rows does not. Reading a
+wide readout and steering a narrow plane are not inverse operations, and this run is the measurement that separates
+them.
+
+**What would discharge it.** Nothing further on interventions for the gate. The remaining questions on the mechanism
+are about where and when to read, which the deployment-condition results already address, and the intervention line is
+closed with a negative that has a control behind it.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
