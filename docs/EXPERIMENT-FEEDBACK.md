@@ -2475,6 +2475,54 @@ a conclusion about behaviour that the behaviour does not support. The digest is 
 constants of F58, where a mismatch has no downstream refit to absorb it. It is not established as a ground for refusal
 of the judge as a whole.
 
+## F61 — The intervention passes: moving the J-lens coordinates moves what the model would say, 4.7x more than moving the rest
+
+**Where it bit.** Every round until now READ the workspace. The paper's own strongest evidence is causal — exchanging
+a concept's J-space coordinates changed the output 88% of the time for a pure swap, 59% for the J-component alone,
+5% for the rest of the variance — and it had never been run here. What was run earlier was an ADDITION of one fitted
+direction, at ONE position, in ONE layer, with the router free, which is a different operation whose negative result
+says nothing about this one.
+
+The operation as defined: `V = [v_s v_t]` two rows of `W_U J`, `c = V⁺h`, `h ← h + V(σ(c) − c)` with σ swapping the
+coordinates, applied at **every token position**, at L22 and L32 (both inside the paper's 30–80% band, both passing
+the linearity criterion), with the router clamped on its **input** — 40 gates recorded on an unperturbed pass and
+substituted on the perturbed one, so routing is held and the measured change is the swap alone.
+
+| arm | change in the KNOWN−UNKNOWN gap | answer changed |
+|---|---|---|
+| **real** — the KNOWN/UNKNOWN pair | **1.1988** | 0.0471 |
+| `rand_vocab` — two random vocabulary rows of the same `W_U J` | 0.6844 | 0.0388 |
+| `rand_plane` — a covariance-matched random 2-plane | 0.2332 | 0.0471 |
+| `nonJ` — the same two vectors with their J-component removed | **0.2550** | 0.0388 |
+
+**real − strongest control = +0.5144 nats, 95% CI [+0.4430, +0.5849] → PASS** against the pre-registered floor of
+0.30 with the interval above zero.
+
+**real : nonJ is 4.7 : 1**, which is the paper's qualitative structure. F48 showed the J-lens readout PREDICTS
+difficulty better than the logit lens; this is the causal complement — moving those coordinates moves what the model
+would say about its own answerability, and moving the part of the same vectors that lies outside J's column space
+barely does.
+
+**Three limitations, none of which the headline should hide.**
+
+- **`rand_vocab` reaches 0.6844, more than half of real.** A random vocabulary pair is far above a random plane
+  (0.6844 against 0.2332), so **being a vocabulary direction of `W_U J` carries as much of the effect as being the
+  right one.** The concept pair wins significantly, and most of the effect is the general property.
+- **The answer changes 4% of the time in every arm, not 88%.** The swap was applied at two layers, not across the
+  whole 20-layer band, so this is a much weaker operation than the paper's. For a routing gate that is the *desirable*
+  direction — the readout moves while the answer does not, and the answer is the thing being gated — but it means the
+  paper's headline number is not reproduced and this run does not claim it.
+- **`J` here has effective rank 448**, equal to the number of probe directions, so it is a rank-limited estimate of the
+  paper's expectation. The "non-J component" is therefore confounded with "the part of the space that was never
+  probed", and the 4.7 ratio is an upper bound on the true contrast. Notably the non-J share falls from 0.813 at L22
+  to 0.667 at L32, so the deeper Jacobian captures more of the verbaliser direction — consistent with the earlier
+  finding that linearity and predictive quality both improve with depth inside the band.
+
+**What it settles for routing.** The J-lens coordinates are not an epiphenomenon of the readout: they are causally
+upstream of the verbaliser, by a margin that survives three controls chosen to kill it. Combined with F48 (predicts)
+and F50–F53 (gates in the deployment condition), the mechanism is established well enough that the remaining
+questions are about magnitude and cost, not about whether the quantity is real.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
