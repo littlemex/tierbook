@@ -1957,6 +1957,51 @@ are still building and the deep layers are where linearity is best. And the four
 seeing any of these numbers but they are four of many possible ones — the combined figure is not a ceiling on what
 a J-lens readout could do.
 
+## F49 — At L32 the J-lens readout beats both controls, and the mechanism is a clean reversal
+
+**Where it bit.** F48 measured the J-lens readout at L22 and it beat the null but fell 0.0064 short of the floor
+against the logit lens. L32 is the layer at the deep end of the paper's band whose Jacobian passes even the
+original 0.995 linearity criterion, so it is where the estimate should be best. Same four features, same two
+controls, same registered floor of 0.05, nothing changed but the layer.
+
+| readout | entropy | max probability | verbaliser log-odds | answer-letter rank | four combined |
+|---|---|---|---|---|---|
+| **J-lens** | 0.5741 | 0.5779 | **0.7629** | 0.5119 | **0.7626** |
+| logit lens | **0.6721** | **0.6220** | 0.5011 | 0.5974 | 0.6729 |
+| random J, matched norm | 0.6102 | 0.6213 | 0.5277 | **0.6406** | 0.6797 |
+
+**Both criteria PASS: +0.0897 over the logit lens and +0.0829 over the null.** So the J-lens readout predicts, and
+it predicts better than the readout that needs no Jacobian — which is the question this study was set up to answer
+and had never asked on a real `J`.
+
+**And the mechanism is a complete reversal, sharper at L32 than at L22.** On the verbaliser question — whether the
+model is poised to say something uncertain — the J-lens reads **0.7629** and the logit lens reads **0.5011**, which
+is chance. On entropy and maximum probability the logit lens wins, 0.6721 and 0.6220 against 0.5741 and 0.5779.
+The two lenses are not better and worse at one thing; they are about different things, and applying `J` moves the
+readout **off the next token and onto what the model would say**. That is the property the paper's construction
+exists to isolate, and at L32 the separation is near-total: one lens is at chance exactly where the other is
+strongest.
+
+**Depth strengthens it, consistently with the linearity measurements.** From L22 to L32: the combined margin over
+the logit lens goes +0.0436 → +0.0897, the verbaliser gap goes +0.1127 → +0.2618, the split-half correlation of
+`J_hat` goes 0.9612 → 0.9824, and the J-lens share of activation variance rises 1.75% → 2.33% while the logit
+lens's FALLS 1.34% → 1.07%. Four independent quantities move the same way with depth.
+
+**What it cost.** The eight rounds that measured a logit lens while calling it a J-lens, and the four hours of GPU
+to build `J` properly. What it produced is the study's first result that is about the paper's object rather than
+about a probe of my own.
+
+**Two caveats, and one of them limits the claim.** The random-`J` control beats the logit lens on the
+answer-letter rank (0.6406 against 0.5974) and nearly matches it overall (0.6797 against 0.6729), so at L32 a
+random dense mixing is as good as the identity for this feature set — the null is not weak here, which makes the
+J-lens margin over it the meaningful number rather than the margin over the logit lens alone. And the four
+features were fixed before any of these numbers were seen, but they are four of many; the combined figure is not
+a ceiling.
+
+**What would discharge it.** Nothing in the mechanism. The research step it points at is the intervention: the
+paper establishes the same separation causally by swapping lens coordinates across all positions and the whole
+band, and that operation — with the router clamped, which F46 showed is necessary — has still never been run here.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
