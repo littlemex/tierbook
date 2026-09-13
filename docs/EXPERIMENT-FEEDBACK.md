@@ -1588,6 +1588,47 @@ first FAIL stand as a statement about the data.
 the uplift has to come from the escalation target's side, and this says why in a quantity rather than an argument
 — the shared component is what a box-side signal can see, and the uplift is what remains after it is removed.
 
+## F42 — On the items where escalation is the question, the residual knows nothing about the other model
+
+**Where it bit.** The decomposition a review named as the only route to a mechanistic claim. The uplift is, near
+enough, `P(strong right | box wrong) x P(box wrong)`, and the second factor IS difficulty, which the residual
+reads. So a null on the product cannot distinguish "the residual knows nothing about the strong tier" from "the
+product is hard to predict". Conditioning on the box being wrong removes the factor the residual already has.
+
+| subset | target | residual | free signals | null, 95th | residual − null |
+|---|---|---|---|---|---|
+| **the box was wrong, n=173** | P(strong right) | **+0.1620** | **+0.3478** | +0.1767 | **−0.0146** |
+| the box was right, n=315 | P(strong right) | +0.3135 | +0.2774 | +0.0966 | +0.2169 |
+| all items, n=488 | P(strong right) | +0.3407 | +0.2739 | +0.0668 | +0.2739 |
+
+**Two things, and together they are the sharpest result this study has.**
+
+**On the items where escalation is the question, the residual is at the null and the free signals are far above
+it.** Where the box has already failed — the only items an escalation decision is about — the residual carries
+nothing about whether a stronger model will succeed, and the free signals carry a substantial amount, 0.3478
+against a null of 0.1767. That is the positive control a review demanded: the target is predictable, and the
+residual is not what predicts it.
+
+**And the residual's apparent knowledge of the strong tier is entirely the shared difficulty component.** Over all
+items it reads 0.3407; conditioned on the box being wrong, which is exactly where the shared component is removed,
+it drops to the null. So "the internal state knows something about the other model" was reading the item's
+difficulty twice, once through each tier.
+
+**The asymmetry criterion also failed, and that one is a measurement limit rather than a finding.** Inside the
+box-wrong subset there is little variation in `P(box wrong)` left to predict — the subset is conditioned to have
+it high — so the residual reads it at 0.1264 against a null of 0.1288. The comparison that would establish "knows
+its own failure, not the other's competence" needs a target that survives the conditioning, and this one does not.
+Registered criterion: FAIL, reported as such and not reinterpreted.
+
+**What it cost.** Nothing to run. It converts the study's central claim from a correlation on a product to a
+conditional statement with a positive control, which is the form a reviewer asked for and the form that can be
+defended.
+
+**What would discharge it.** Nothing in the mechanism. It is the entry that says what the routing signal has to
+be: the free output signals already carry 0.3478 about the stronger model's success on exactly the items that
+matter, and no internal readout of the box has been shown to add to that. Any further work on box-side internal
+signals for escalation now has to beat this number, on this subset, before it is worth measuring at all.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
