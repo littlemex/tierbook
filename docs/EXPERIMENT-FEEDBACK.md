@@ -1816,6 +1816,50 @@ with the same two-amplitude criterion plus a control that the expert-flip fracti
 the unclamped numbers reported beside it at the same amplitudes. If it passes, this study gets a `J` and can say
 precisely which `J` it is; if it fails, the J-lens is not computable here by any route available to me.
 
+## F46 — The Jacobian is computable at the deep end of the band and not at the shallow end
+
+**Where it bit.** F45 concluded that the derivative the J-lens is built from is not defined on this box at any
+amplitude clearing the numerics. That was measured with the four probe layers pooled into one pass fraction, and
+pooling was the error: `J_l` is a separate object per layer, so the criterion belongs to each layer. Applied per
+layer, with the router clamped by its input and the flip fraction verified at exactly 0.0000:
+
+| layer | depth | α=0.2 pass | cos median | α=0.5 pass | cos median | cos min |
+|---|---|---|---|---|---|---|
+| L12 | 30% | **0.050** | 0.9689 | 0.150 | 0.9744 | 0.9467 |
+| L22 | 55% | 1.000 | 0.9924 | 1.000 | 0.9919 | 0.9865 |
+| L32 | 80% | 1.000 | 0.9981 | 1.000 | **0.9965** | **0.9942** |
+| L39 | 98% | 1.000 | 0.9999 | 1.000 | **0.9990** | **0.9977** |
+
+**Monotone in depth, and the pooled failure was entirely L12.** At L39, one block from the readout, the response
+is linear to four decimal places — exactly what the architecture forces, which is the canary working. At L32 and
+L39 the **original** 0.995 criterion is met (minimum cosines 0.9942 and 0.9977). At L22 it is not (0.9865) but 0.98
+is. At L12 neither.
+
+> **Correction to F45, in the diff form this ledger requires.**
+>
+> - **Claim withdrawn:** "the derivative the J-lens is built from is not defined on this box at any amplitude
+>   that clears the numerics", and with it the framing that this is an obstruction to the method as such.
+> - **Invariant broken:** the pass fraction pooled four layers, so one failing layer sank three passing ones.
+>   A criterion has to be applied at the granularity of the object it judges.
+> - **Verified replacement:** with the router clamped, the original criterion is met at L32 and L39 and failed
+>   at L12; L22 sits between. Linearity degrades monotonically with distance from the output.
+> - **Blast radius:** F45's headline and its conclusion about MoE architectures. What stands from F45: the FP8
+>   quantisation floor at small amplitudes, the determinism controls, the amplitude sweep at L22, and the fact
+>   that routing is part of the limit.
+
+**What this says about the paper's construction on this box.** The band the paper reports as the workspace is
+30–80% of depth, which here is L12 to L32. **The Jacobian is usable at the deep end of that band and not at the
+shallow end** — so a J-lens built at L32 rests on a linear response, and one built at L12 does not. That is a
+statement about where the method applies rather than whether it applies, and it is the opposite of what F45 said.
+
+**What it cost.** One over-broad conclusion, withdrawn within the day. It is the fourth time in this study that a
+claim of mine was too general for its evidence, and the third that a granularity choice was the cause.
+
+**What would discharge it.** Nothing in the mechanism. The build is now running for L22, L32 and L39 with α=0.5,
+and its usability is decided by internal checks registered before it finished: split-half agreement, the identity
+ordering with depth, the leakage outside the activation subspace, and the paper's variance-share claim computed
+with the logit lens as a control.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
