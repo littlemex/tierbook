@@ -2002,6 +2002,77 @@ a ceiling.
 paper establishes the same separation causally by swapping lens coordinates across all positions and the whole
 band, and that operation — with the router clamped, which F46 showed is necessary — has still never been run here.
 
+## F49 — At L32 the J-lens readout beats both controls, and the mechanism is a clean reversal
+
+**Where it bit.** F48 measured the J-lens readout at L22 and it beat the null but fell 0.0064 short of the floor
+against the logit lens. L32 is the layer at the deep end of the paper's band whose Jacobian passes even the
+original 0.995 linearity criterion, so it is where the estimate should be best. Same four features, same two
+controls, same registered floor of 0.05, nothing changed but the layer.
+
+| readout | entropy | max probability | verbaliser log-odds | answer-letter rank | four combined |
+|---|---|---|---|---|---|
+| **J-lens** | 0.5741 | 0.5779 | **0.7629** | 0.5119 | **0.7626** |
+| logit lens | **0.6721** | **0.6220** | 0.5011 | 0.5974 | 0.6729 |
+| random J, matched norm | 0.6102 | 0.6213 | 0.5277 | **0.6406** | 0.6797 |
+
+**Both criteria PASS: +0.0897 over the logit lens and +0.0829 over the null.** The J-lens readout predicts, and
+better than the readout that needs no Jacobian — the question this study was set up to answer, asked for the first
+time on a real `J`.
+
+**The mechanism is a near-total separation, sharper at L32 than at L22.** On whether the model is poised to say
+something uncertain the J-lens reads **0.7629** and the logit lens reads **0.5011**, which is chance. On entropy
+and maximum probability the logit lens wins. Applying `J` moves the readout **off the next token and onto what the
+model would say**, which is the property the paper's construction exists to isolate.
+
+**Depth strengthens it, consistently with the linearity measurements.** From L22 to L32 the combined margin over
+the logit lens goes +0.0436 → +0.0897, the verbaliser gap +0.1127 → +0.2618, `J_hat`'s split-half correlation
+0.9612 → 0.9824, and the J-lens variance share 1.75% → 2.33% while the logit lens's FALLS 1.34% → 1.07%.
+
+**One caveat that limits the claim.** The random-`J` control beats the logit lens on the answer-letter rank and
+nearly matches it overall (0.6797 against 0.6729), so a random dense mixing is as good as the identity for this
+feature set. The J-lens margin over the NULL is therefore the meaningful number, not the margin over the logit
+lens alone.
+
+## F50 — Read as a cascade rather than a competitor, the readout works, and my comparison was the error
+
+**Where it bit.** I reported F49 to the user as "no, this cannot be used for routing", on two grounds. Both were
+wrong, and the user identified the error before any further measurement.
+
+- **I counted the prefill as a cost.** If the box is going to answer, the prefill is paid regardless, so a gate
+  reading the residual at L32 costs **nothing extra**. I had been comparing the J-lens (0.7626) against the answer
+  entropy (0.8424) as though they competed for one slot; they are two stages, and the first is free.
+- **I demanded uplift of the first gate.** F39 and F42 established that box-side signals do not read whether a
+  stronger model would fix an item, and I applied that to the wrong decision. The first gate only decides whether
+  to BUY MORE OBSERVATION; the uplift question arises at the final escalation, where the generation already exists
+  and the stronger signal is available.
+
+**Measured as a cascade, on held-out items, with the box scoring 0.6221 overall:**
+
+| let through | accuracy on what passed | left for stage 2 | accuracy there | ceiling: the post-generation gate |
+|---|---|---|---|---|
+| **50%** | **0.8070** | 50.0% | 0.4370 | 0.8755 |
+| 60% | 0.7760 | 40.0% | 0.3916 | 0.8355 |
+| 70% | 0.7330 | 30.0% | 0.3636 | 0.7810 |
+| 80% | 0.6964 | 20.0% | 0.3252 | 0.7253 |
+| 90% | 0.6672 | 10.0% | 0.2168 | 0.6796 |
+
+**Half the corpus can be passed straight to decoding at 0.8070**, eighteen and a half points above the box's own
+average, for no additional compute. The half that is held back sits at 0.4370, which is the population worth
+spending a generation on. And the post-generation signal reaches 0.8755 on the same 50% — so **the free gate
+captures most of a ceiling that costs a full generation to reach.**
+
+The right comparison is therefore "0.8070 for nothing against 0.8755 for a generation", not "0.7626 against
+0.8424". Same numbers, different question, opposite conclusion.
+
+**What it cost.** A wrong recommendation, corrected within the conversation. The defect is one this ledger has
+recorded from the other side in F38: a signal's value depends on when it becomes available, and I had the
+principle written down and still compared two signals from different decision points as competitors.
+
+**What would discharge it.** The second stage has not been measured. Reading the J-lens again AFTER generation —
+which is where the uplift question actually lives — needs residuals from the explaining condition, and the capture
+that passed its gate (888 rows, accuracy 0.7928) stored readouts and labels but **not the residual vectors**. That
+capture has to be re-run with the hidden states kept.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
