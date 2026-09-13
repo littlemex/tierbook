@@ -2213,6 +2213,43 @@ been justified by an increment that its own null exceeds.
 what generation hands over — length first — and any residual-based addition has to clear a matched-norm random
 mixing, not merely the free baseline.
 
+## F55 — The deepest Jacobian is the worst gate, and the band is where J earns its keep
+
+**Where it bit.** My own prediction, and it was wrong. Five quantities strengthen monotonically with depth —
+linearity, split-half stability, diagonal mass, the variance-share ratio to the null, and the prediction margin —
+so I expected `J_39` to make the best stage-1 gate. Same measurement as F51, same condition, same controls, one
+layer deeper:
+
+| at 50% passed | L32 | L39 |
+|---|---|---|
+| **J-lens** | **0.8571** | 0.7932 |
+| logit lens | 0.7744 | **0.8271** |
+| random J, matched norm | 0.8008 | 0.8120 |
+| verdict | both PASS | **both FAIL** (−0.0338, −0.0188) |
+
+**At L39 the J-lens is the worst of the three and the logit lens is the best.** The gate does not improve with
+depth; it peaks inside the band and degrades outside it.
+
+**The explanation is the one the architecture gives.** L39 is one block from the readout, so its residual is
+already nearly the output — which is exactly why its Jacobian is linear to four decimal places (cos 0.9999) and
+close to the identity. Applying `J` there has nothing to add, and reading the residual directly through `W_U` is
+the right thing. **`J` earns its keep only where the residual is not yet the output.**
+
+So the paper's band, depth 30–80%, is confirmed as the place the construction applies — and confirmed by my
+prediction failing rather than by reproducing a number inside it. L32 sits at the deep end of the band and is the
+best gate; L39 is outside it and the plain readout wins. This is the second thing this study can say about the
+paper that the paper does not say itself, the first being F53's finding that the variance claim breaks just outside
+the band.
+
+**What it cost.** A wrong prediction, stated as wrong. Five monotone quantities do not license a sixth: they are
+all properties of the ESTIMATE getting better with depth, and the gate depends on what there is to estimate, which
+gets smaller. Extrapolating a trend across a change of subject is the same defect as the granularity errors this
+ledger has recorded, in a new form.
+
+**What would discharge it.** Nothing in the mechanism. For the research it fixes the operating point: stage 1 reads
+L32, and the deeper layers are for verifying that the construction behaves as the architecture forces rather than
+for deployment.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
