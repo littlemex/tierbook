@@ -1909,6 +1909,54 @@ formality.
 **What is still pending.** L32 and L39 are still building, so the depth-ordering check — the one that would show
 the plumbing is right by reproducing what the architecture forces — has only one layer to work with so far.
 
+## F48 — The J-lens readout beats its null and not the logit lens, and it changes what the readout is about
+
+**Where it bit.** The question the whole study was set up to answer, asked for the first time on a real `J`. One
+design consequence had to be settled first: a linear probe on `norm(J h)` is a linear function of `h`, so by linear
+closure it cannot beat a linear probe on `h`, and every negative result already recorded covers it. What is not
+covered is a readout passing through the VOCABULARY and the SOFTMAX, which is what the paper's lens is. So the
+features are non-linear functions of `softmax(W_U norm(J h))`, registered before running, with two controls.
+
+| readout | entropy | max probability | verbaliser log-odds | answer-letter rank | four combined |
+|---|---|---|---|---|---|
+| **J-lens** | 0.6364 | 0.5976 | **0.6870** | 0.5788 | **0.7439** |
+| logit lens | **0.6838** | **0.6645** | 0.5743 | 0.5631 | 0.7002 |
+| random J, matched norm | 0.5004 | 0.5161 | 0.6097 | 0.5720 | 0.6257 |
+
+**Against the null: +0.1182, PASS.** The J-lens readout carries real information — a random matrix of the same
+Frobenius norm gets 0.6257 where `J` gets 0.7439. This is the first controlled positive result for the J-lens in
+this study, and it required building `J` to obtain.
+
+**Against the logit lens: +0.0436, FAIL** on the registered floor of 0.05. Reported as a failure; the criterion
+is not moved.
+
+**The per-feature structure is the finding, and it is the paper's own distinction appearing in this box.** The two
+readouts are not better and worse at the same thing:
+
+- the logit lens wins on the next-token-shaped features — entropy 0.6838 against 0.6364, maximum probability
+  0.6645 against 0.5976 — which is what it is, the next-token distribution;
+- the J-lens wins decisively on the verbaliser question, whether the model is poised to say something uncertain:
+  **0.6870 against 0.5743, a gap of +0.1127**, and +0.0773 over the null on that feature alone.
+
+So applying `J` does not sharpen a readout, it **moves it from the next token to what the model would say** —
+which is precisely the property the paper's construction exists to isolate, and it shows up here as a reversal in
+which feature each lens is good at rather than as a uniform improvement.
+
+**What it cost.** Nothing that was not already spent building `J`. What it settles is the question the user's
+instruction named: the J-lens readout can predict, above a null, and it does not beat the free next-token readout
+at the combined task on this data.
+
+**What would discharge it.** Nothing in the mechanism. What the RESEARCH should do next follows from the
+per-feature split: the verbaliser gap is where `J` earns its keep, so the next measurement is the intervention —
+swapping lens coordinates across all positions and the whole band, with the router clamped — since that is the
+operation the paper uses to establish the same point causally, and the one this study has never performed
+correctly.
+
+**Two caveats.** This is L22, the shallowest layer whose Jacobian passed even the relaxed criterion; L32 and L39
+are still building and the deep layers are where linearity is best. And the four features were chosen before
+seeing any of these numbers but they are four of many possible ones — the combined figure is not a ceiling on what
+a J-lens readout could do.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
