@@ -2348,6 +2348,51 @@ noise. The floor is a small-signal property of the arithmetic, not of the quanti
 `len(tokenizer)`, and not on weight statistics. Everything weaker than a digest is satisfied by two models whose
 representations are further apart than two different questions.
 
+## F58 — Some of a judge's constants cannot be declared, only measured, and the manifest has to say which
+
+**Where it bit.** F56 and F57 built toward a compatibility contract of declared fields, checked at admission. If
+every constant a judge carries were derivable from a declaration, that contract would close. This tests one
+constant that looked derivable and finds it is not.
+
+The amplitude α at which the forward-difference Jacobian stays linear, swept at the same depth fraction:
+
+| α | box, Qwen3.6-35B-A3B FP8, L32 = 80% | Ornith-1.5-9B bf16, L18 = 56% | Qwen3.8-9B-Distill bf16, L18 = 56% |
+|---|---|---|---|
+| 0.001 | −0.0026 | −0.0531 | 0.0557 |
+| 0.005 | — | 0.6398 | 0.7253 |
+| 0.02 | — | 0.9351 | 0.9741 |
+| **0.05** | — | **0.9913 (peak)** | 0.9950 |
+| **0.2** | — | 0.9848 | **0.9986 (peak)** |
+| 0.5 | **0.9965 (peak)** | 0.9084 | 0.9850 |
+
+**The last two columns hold structure, dtype and depth fraction identical** — both are `qwen3_5`, d_model 4096,
+32 layers, bf16, read at 18/32 — and the peak still differs by a factor of four. So α is a property of the
+**weights**, not of the architecture, and no declaration can derive it.
+
+**What this does to the contract.** F56 and F57 converged on "admission is a comparison of declared fields against
+a resident implementation." That is necessary and **not sufficient**: a judge also carries constants that were
+*measured* on the model it was built for, and a measured constant has no derivation to check. The manifest therefore
+needs two kinds of entry, and the distinction is not cosmetic:
+
+| kind | example | how admission checks it | what a mismatch costs |
+|---|---|---|---|
+| **declared** | d_model, depth, tokenizer digest, tied flag | compare to the resident model | refusal, loudly |
+| **measured** | the linear amplitude, the calibrated layer, the fitted head's scaling | **cannot be compared** — only re-measured | silent degradation |
+
+**The consequence for the marketplace.** A seller shipping a judge for model X ships measured constants that are
+valid for X's weights. The buyer's admission check can confirm the weights are X's, and that is exactly what makes
+the measured constants trustworthy — **the weight digest is what licenses the measured half of the manifest.** With
+a weaker key (shapes, vocabulary size, `len(tokenizer)`, all of which F57 showed two different models share) the
+declared half passes and the measured half is quietly wrong, which is the worst combination: it looks admitted.
+
+**The corollary for building a judge for a new model.** It is not a port. Every measured constant has to be
+re-established on the new weights, so "this judge supports models of shape S" is not a claim anyone can make. The
+unit a seller can honestly sell is **a judge for a specific weight digest**, and supporting a second model is a
+second measurement campaign, not a configuration change.
+
+**What would discharge it.** The manifest carries `measured_on: <weight digest>` beside every measured constant, and
+admission refuses when the digest does not match rather than assuming a shape match licenses the constant.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
