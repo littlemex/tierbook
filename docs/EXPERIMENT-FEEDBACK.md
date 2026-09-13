@@ -2175,6 +2175,44 @@ prediction margin. Five independent quantities now move the same way with depth.
 **What it cost.** Nothing beyond the four and a half hours of build. It is the first time this study has said
 something about the paper's claim that the paper does not already say.
 
+## F54 — At stage 2 the Jacobian is not the reason, and the null says so
+
+**Where it bit.** F52 left one question: the later-position J-lens loses to generation length, but losing to a free
+quantity does not settle whether it ADDS to it, and that is what decides whether stage 2 should read the residual
+at all. Registered before running, with the random-`J` null that F49 established is necessary.
+
+On the 265 held-out items stage 1 held back:
+
+| model | AUC | against length alone |
+|---|---|---|
+| generation length alone | 0.6978 | — |
+| length + **J-lens** at the later position | 0.7356 | +0.0378 [−0.0030, +0.0754] |
+| length + **random J**, matched norm | **0.7521** | +0.0542 [−0.0004, +0.1044] |
+
+**The J-lens clears the increment floor and the null clears it by more.** +0.0378 passes 0.03; the random matrix
+reaches +0.0542, so the J-lens is −0.0165 against its own null and FAILS. What helps at stage 2 is passing the
+residual through a dense mixing and into the vocabulary at all — the Jacobian specifically is not the reason. And
+both intervals span zero, so at 265 items even the increment over length is not established.
+
+**So the two stages want different things, and this is the sharpest practical result of the study:**
+
+| stage | is `J` needed? | evidence |
+|---|---|---|
+| **1**, at prefill, free | **yes** | +0.0827 over the logit lens and +0.0564 over the null, both passing |
+| 2, after generation | **no** | the null beats it; generation length is the first choice |
+
+The asymmetry has a reading. At prefill the only thing available is the residual, and `J` is what turns it from a
+next-token readout into a what-would-be-said readout — the distinction F49 measured as a near-total reversal. After
+generation the model has already said things, so the quantity `J` was recovering is observable directly, and a
+random mixing suffices to extract whatever is left.
+
+**What it cost.** Nothing; it is the same data. It stops a wrong recommendation: reading `J` at stage 2 would have
+been justified by an increment that its own null exceeds.
+
+**What would discharge it.** Nothing in the mechanism. For the research, stage 2's signal set should be built from
+what generation hands over — length first — and any residual-based addition has to clear a matched-norm random
+mixing, not merely the free baseline.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
