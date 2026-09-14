@@ -3411,6 +3411,51 @@ than 64 → 256 has a wider oracle gap, because a transition where the oracle be
 the only place a selector can earn accuracy rather than only tokens. That is a sweep over pairs, and the confirmation run
 in flight gives the sample to do it on.
 
+## F78 — Accuracy lives in predicting HARM, the room exists at every pair, and no fitted selector claims any of it
+
+**Where it bit.** F77 found that a perfect selector at probe 64 / extend 256 is worth 0.007 accuracy points over
+extending everything, and asked whether some other budget pair has more room. The question has an exact answer rather
+than an empirical one, and stating it first is what makes the sweep readable.
+
+**A selector can only earn accuracy where extending HURTS.** If extension never hurts, "extend everything" already
+captures every item extension fixes, and the best a selector can do is match that accuracy while spending less. So the
+oracle's advantage over always-extend equals exactly the share of items that extension **breaks** — right at the probe
+budget and wrong at the extended one. Room for a selector is not a property of the signal; it is a property of the pair.
+
+Sweeping all 26 pairs over the eight budgets:
+
+| probe → extend | fixes | **breaks** | always-extend | oracle | **oracle advantage** | **fitted selector achieved** |
+|---|---|---|---|---|---|---|
+| 256 → 1024 | 28 | **13** | 0.7286 | 0.7929 | **+0.0643** | — |
+| 0 → 64 | 9 | **15** | 0.5071 | 0.5714 | **+0.0643** | **−0.0071** |
+| 16 → 128 | 19 | 12 | 0.5786 | 0.6286 | +0.0500 | +0.0000 |
+| 256 → 512 | 17 | 12 | 0.7143 | 0.7643 | +0.0500 | **+0.0000** (the best of any pair) |
+| 64 → 256 | 42 | **4** | 0.6857 | 0.6929 | +0.0071 | — |
+
+**The room exists — up to 6.4 accuracy points — and no fitted selector claims any of it.** The best achieved advantage
+at any pair is **±0.0000**, and several are negative. Meanwhile the same readout predicts the *helping* direction at
+AUC 0.7149 (F76). So the asymmetry is sharp: **the readout can tell that more thinking will help; it cannot tell that
+more thinking will hurt** — and accuracy gains live entirely in the second.
+
+**Why that asymmetry is not surprising once stated.** "This is still unsettled, keep going" is a property of the current
+state, which is what a readout of the current state can see. "Continuing will talk this model out of a correct answer" is
+a property of a computation that has not happened yet, and nothing in the present state distinguishes an item that will
+be reasoned into a mistake from one that will be reasoned into a correction. The helping direction asks about the
+model's uncertainty now; the harming direction asks about a future trajectory.
+
+**The sample caveat is large and must be stated with the claim.** Breaks number 3 to 15 out of 230 items, which leaves
+roughly 6 in the calibration fold — **no fitting procedure can work on six positives**, so the honest claim is not "the
+readout is blind to harm" but "**at this sample size the harm direction cannot be fitted at all**". The confirmation run
+in flight has 529 items and will bring breaks to roughly 30, of which about 12 in calibration. That is still small, and
+if the harm direction is to be tested properly it needs a dataset built for it — items selected for being near the
+boundary where extension flips them — rather than a uniform sample where they are 2% of the data.
+
+**What this settles about the design, provisionally.** A budget gate is a **token-saving device** with a measured price
+(F77: 36% fewer tokens for 2.9 accuracy points at the best operating point). It is not an accuracy device, and the
+reason is not a weak signal but a missing one: the quantity that would buy accuracy is unobserved at decision time and
+unfitted at this scale. Any claim that a thinking-budget router improves quality needs to produce the harm predictor
+first, and this ledger does not have it.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
