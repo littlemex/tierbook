@@ -2647,6 +2647,64 @@ split; no internal observation, extra API call or extra inference is used; there
 requirement for a third-party detector; and outcome feedback feeds only ordinary scheduler tuning. Everything this
 project has measured lives outside that set, which is the honest form of the claim.
 
+## F64 — The engine-side gate runs on a real server, and four of its five obstacles were invisible from the design
+
+**Where it bit.** F63 chose speculative dispatch, which makes one assumption load-bearing: **a running vLLM can, per
+request, expose the residual at a chosen layer at prefill time and act on it before decode, through supported
+extension points and without a fork.** Designing on top of an unverified assumption of that size is how a phase-5
+failure invalidates the work built on it, so this was checked on real hardware with a real server and real HTTP
+requests before anything else was built.
+
+**It works.** A `vllm.general_plugins` entry wraps the model runner's `load_model` to install a forward hook, and a
+class loaded through `--logits-processors` reads what the hook captured on a request's first step. Real requests
+through the OpenAI-compatible endpoint produced, per request, a residual of shape `[37, 4096]` at layer 18 against a
+logits tensor of 1 row.
+
+**Four of the five obstacles were not visible from the design, and each cost a run.**
+
+| what failed | what it means |
+|---|---|
+| `--disable-log-requests` was removed in this version | trivial, but a design that names flags is dated the day it is written |
+| the runner's `self.model` is a `CUDAGraphWrapper` | `self.model` is not the model. It forwards attribute access, so a walk following `.model` lands back on the wrapper |
+| after unwrapping, the model exposes no `.layers` at all | guessing attribute paths does not converge across families; the fix is to find the decoder stack **by structure** (the longest `ModuleList`), which landed on `language_model.model.layers`, 32 blocks |
+| a wall-clock read inside the hook raised | the hook body runs inside traced user code |
+| **`torch.compiler.disable` on the capture also raised** | **the model is compiled as a full graph, so a graph break is a hard failure at engine start rather than a slowdown** |
+
+**The fifth is the one that constrains the design.** A side-effecting forward hook and a fully compiled model are
+incompatible, and no care inside the hook changes that. The run that produced the measurement therefore has
+compilation disabled. That is the right shape for establishing what the gate can see, and it names the production
+requirement exactly: either the capture becomes a **traceable write into a preallocated buffer**, or the engine offers
+an observation point of its own. The second is the upstream ask that F63 anticipated, and it is now backed by a
+failure rather than a preference.
+
+**The row correspondence, derived from data rather than assumed.** This is the part that would have failed silently.
+
+| batch | residual rows | logits rows | rows at first step | sum of prompt lengths |
+|---|---|---|---|---|
+| 1 | **37** | 1 | 1 | **37** |
+| 6 | **163** | 6 | 5 | **162** |
+
+`163 = 162 + 1`: the residual's rows are the step's **scheduled tokens** — five prefills totalling 162 tokens plus one
+decode token belonging to a sixth request already past its first step. **Prefill and decode share a step.** So a
+request's last prompt position sits at the cumulative sum of the preceding requests' scheduled token counts, minus
+one — **not at its batch index, and not derivable from its prompt length**, because a long prompt is split across
+steps by chunked prefill and the two stop agreeing.
+
+**A concrete gap follows.** `BatchUpdate` carries prompt token ids but **not the per-step scheduled token count**, so
+the quantity needed to locate the row is not in what the extension point provides. Short prompts make the two agree
+by coincidence, which is the worst case: it works in a demo and misattributes every decision once prompts get long.
+Either the count comes from the model runner by another route, or it is the second thing to ask upstream for.
+
+**One measurement-hygiene defect worth recording.** The gate's log is opened in append mode on a persistent volume,
+so a first read of it mixed two runs and showed 5 initialisation records with the hook absent alongside 8 with it
+present. Nothing was concluded from the mixture, but a run-scoped file would have made the mistake impossible rather
+than merely visible.
+
+**What would discharge it.** The row selection implemented against scheduled-token counts rather than prompt lengths,
+verified with a prompt long enough to be chunked; the four readout features computed on the worker; escalation
+expressed as an immediate end-of-sequence; and the throughput cost measured against the same server with the gate
+absent. The compiled-mode question is separate and is an upstream conversation, not a workaround.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
