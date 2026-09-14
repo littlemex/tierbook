@@ -2770,6 +2770,58 @@ which is why the first attempt reported zero maps with no error at all.
 set by hand; and the escalation's other half — the caller re-issuing, with the child-request fields that stop loops
 and double billing — measured end to end against a second tier.
 
+## F66 — Both halves of speculative dispatch run end to end, and the engine has no channel for returning an action
+
+**Where it bit.** F65 measured the engine's half: the gate reads the residual after prefill and stops the request. The
+caller's half was untested, and it is where the accidents live — a re-issue that loops, one billed twice, one that
+re-runs the stage it just left. This runs both halves against **two real servers on two devices**, so an escalation is
+a network hop whose cost is measured rather than a function call that would hide it.
+
+| | |
+|---|---|
+| cheap tier | `ornith-ai/Ornith-1.5-9B`, device 0, gate loaded, threshold 0.85 |
+| upper tier | `empero-ai/Qwen3.8-9B-Distill`, device 1, no gate |
+| requests | 32 over 4 rounds |
+| **escalated to the upper tier** | **12 (37.5%), every one detected by the explicit signal** |
+| refused by the hop bound | 0 |
+| median latency | cheap 1722.6 ms, upper 1723.1 ms |
+| **a full escalation** | **3445.7 ms at the median — cheap plus upper, paid in full** |
+| duplicate idempotency keys across different requests | **0** |
+
+The child request carries `parent_request_id`, `decision_id`, `policy_version`, `target_profile`, `hop_count` and
+`idempotency_key`, and `target_profile` is the **caller's** choice: the engine said only that it should not answer,
+never where the work should go. The hop bound and the key collision check are verified rather than asserted — the keys
+were checked for collisions across distinct requests and there are none, so a retry cannot be counted as a second
+escalation.
+
+**The finding that changes the upstream ask.** A logits processor cannot set a response header, so **the engine has no
+channel for returning an action** and the action has to be encoded in what the model emits. The first attempt used a
+single rare token as the signal — and none of four candidate rare strings encoded to a single token in this
+248,320-entry vocabulary, so it fell back to an end-of-sequence and the caller read the escalation from an empty
+completion. That reading is **ambiguous**: a zero-token completion with a normal stop reason is indistinguishable from
+a request the model genuinely answered with nothing. The run reported `by signal: {'empty-stop (ambiguous)': 12}` and
+the number was right for the wrong reason.
+
+The fix removes the vocabulary dependency rather than working around it: a fixed string spread across successive steps,
+one token per step, then a stop. `TIERBOOK_ESCALATE` becomes `[51, 15810, 35413, 29287, 47868, 2260]` and the rerun
+reported `by signal: {'sentinel': 12}` with zero ambiguous detections. **So an unambiguous out-of-band signal is
+achievable but it is a workaround**: it spends six decode steps to say one bit, and it depends on the caller agreeing
+on a magic string. The clean form is an action in the response metadata, which is the second concrete thing to ask
+upstream for, alongside the outcome observer of F63 and the per-step scheduled-token counts of F65.
+
+**What the latency says about the economics, stated as a bound rather than a conclusion.** An escalation costs the
+cheap tier's full latency on top of the upper tier's, because the cheap prefill and the cheap tier's own decode of the
+sentinel are both paid before the upper tier starts. At these medians that is 3445.7 ms against 1723.1 ms for going
+straight to the upper tier — **a 2.0x latency penalty on every escalated request.** The design's claim was never that
+escalation is free; it was that **the common path is free**, and that holds: a request the gate passes flows from
+prefill into decode with no extra hop. Whether the arithmetic closes depends on the pass rate and on the tiers' price
+difference, and this run measures neither — the two models here are the same size, chosen to make the plumbing
+observable rather than to represent a real price gap.
+
+**What would discharge it.** Repeats to bound the gate's compute cost (F65 leaves it unmeasurable at n=1); the
+threshold chosen on a calibration fold rather than by hand; and a genuine price gap between the tiers so the
+escalation's latency penalty can be weighed against what it saves.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
