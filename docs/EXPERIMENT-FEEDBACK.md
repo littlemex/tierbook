@@ -2705,6 +2705,71 @@ verified with a prompt long enough to be chunked; the four readout features comp
 expressed as an immediate end-of-sequence; and the throughput cost measured against the same server with the gate
 absent. The compiled-mode question is separate and is an upstream conversation, not a workaround.
 
+## F65 — Speculative dispatch works on a real server, and the row-mapping failure it was built to avoid reproduced on cue
+
+**Where it bit.** F63 chose speculative dispatch and F64 established the engine-side observation is reachable. What
+remained was whether the whole path runs: locate the right residual row, compute the readout, express an escalation,
+and cost something bounded. All four are now measured on a real vLLM server driven over HTTP.
+
+**The readout runs with the real Jacobian.** `norm=yes lm_head=yes J=yes`, verbaliser sets resolved to 9 and 8
+single-token forms, and the four features computed on 48 of 82 first-step records. The verbaliser log-odds spread
+across requests — min −0.070, median 0.845, max 1.223 — so the gate is reading something that varies rather than a
+constant.
+
+**Two engine guards had to be respected rather than worked around.** The unembedding cannot be called: it raises
+`RuntimeError: LMHead's weights should be used in the sampler`, because the engine wires the head through its own
+sampling path. So the readout uses `lm_head.weight` as a weight and applies the normalisation as arithmetic — the
+engine's RMSNorm takes an optional residual and returns a tuple when given one, so calling it as a module is the same
+class of mistake. Both are deliberate guards, and a plugin that patched around them would be lying about what it is.
+
+**The row-mapping failure reproduced exactly as predicted, which is the result worth having.** F64 argued that
+locating a request's last prompt position by cumulative prompt length works while prompts are short and misattributes
+decisions once chunked prefill splits them. Both methods were computed on every step and compared:
+
+| requests in flight | steps with a scheduled-token row map | the two methods agree |
+|---|---|---|
+| light | 9 of 43 | **7 of 9** |
+| under load | 48 of 82 | **15 of 48** |
+
+The disagreement, printed verbatim from the run: `sched=[2048]`, `from_len={'0': 2205}`, `map={'0': 2047}`. The
+prompt-length method points at **row 2205 of a 2048-row residual** — a row that does not exist. And agreement falls
+from 7/9 to 15/48 as load rises, because decode rows share a step with prefill rows. **The convenient method is right
+only in the simplest case**, which is the shape of failure that ships.
+
+**Escalation works through an immediate end-of-sequence.** With the threshold at 0.85, **27 of 48 requests escalated**
+— the request stops before producing a token and the caller re-issues to the upper tier. The engine never names the
+upper endpoint, so the standard's division of labour is untouched.
+
+**The first throughput comparison was invalid and I caught it before reporting it.**
+
+| arm | req/s | completion tokens | tok/s |
+|---|---|---|---|
+| gate off | 4.666 | **1536** | **149.3** |
+| **gate on, threshold unreachable** | 4.590 | **1536** | **146.9** |
+| gate on, threshold 0.85 | **6.134** | 916 | 117.1 |
+
+The third arm looks like a 31% throughput *gain*, and it is nothing of the kind: 27 requests ended instantly, so the
+server did less decode. **Requests per second is not comparable between arms that do different amounts of work.** The
+valid comparison needed a third condition — the gate running and never escalating — so that both arms produce
+identically 1536 tokens and the only difference is the gate's own compute. That gives **149.3 against 146.9 tok/s, a
+1.6% difference.**
+
+**And 1.6% is not a bound.** Each arm is a single run with no repetition, so there is no interval, and a 1.6%
+difference on one run of 48 requests is well inside what run-to-run variation can produce. The honest statement is
+that **no cost is measurable at this resolution**, and that bounding it needs repeats — which is a cheap experiment
+and the right next one, not something to assert past.
+
+**Two remaining constraints, both named rather than worked around.** The run has compilation disabled, because a
+side-effecting forward hook and a fully compiled model are incompatible (F64); the production form needs either a
+traceable write into a preallocated buffer or an engine-provided observation point. And the per-step scheduled-token
+counts had to be taken by wrapping `execute_model` — read on entry they are empty, because the input batch's row
+order is populated inside the call, and an empty order produces a **silently absent** row map rather than a wrong one,
+which is why the first attempt reported zero maps with no error at all.
+
+**What would discharge it.** Repeats to bound the gate's cost; the threshold chosen on a calibration fold rather than
+set by hand; and the escalation's other half — the caller re-issuing, with the child-request fields that stop loops
+and double billing — measured end to end against a second tier.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
