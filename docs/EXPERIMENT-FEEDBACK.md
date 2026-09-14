@@ -2822,6 +2822,65 @@ observable rather than to represent a real price gap.
 threshold chosen on a calibration fold rather than by hand; and a genuine price gap between the tiers so the
 escalation's latency penalty can be weighed against what it saves.
 
+## F67 — On real serving hardware the gate does not beat random escalation, and the reason is already in this ledger
+
+**Where it bit.** F65 and F66 established that speculative dispatch runs: the gate reads the residual, stops the
+request, the caller re-issues, nothing loops or double-bills. None of that asks whether escalating the items the gate
+picks is better than escalating the same number at random. This does, on both real servers, over 239 labelled items
+with both tiers answering every one.
+
+**Two evaluation errors of mine, in order, before the result.**
+
+The readout convention failed for the third time in this project. A chat request with a terse instruction and a short
+budget returned **no letter at all on 239 of 239 items** — the model writes prose regardless and the budget cuts it
+before a letter appears — so both tiers scored 0.0000 and the script went on to report a threshold and a criterion
+anyway. **The base-rate floor that catches exactly this was written into F59 and I did not apply it here.** It is now
+in the harness, the raw completion text is stored so the next failure is diagnosable, and the convention is an
+explicit `Answer:` cue rather than a scan of prose.
+
+Then the threshold selection degenerated. Choosing it to maximise accuracy picked a threshold that escalates
+**100%**, because the upper tier is better and with no cost term "escalate everything" is optimal — at which point the
+random control becomes the same policy and the comparison has no content. The question with content is
+coverage-constrained: at a fixed rate, does the gate pick better items than chance?
+
+**The result, at fixed escalation rates, threshold chosen on calibration and scored on test:**
+
+| escalation rate | gate | **oracle at the same rate** | random mean | random 97.5th | gate verdict |
+|---|---|---|---|---|---|
+| 9.7% | 0.5172 | **0.5724** | 0.5184 | 0.5310 | FAIL |
+| 20.0% | 0.5103 | **0.5724** | 0.5198 | 0.5379 | FAIL |
+| 30.3% | 0.5034 | **0.5724** | 0.5209 | 0.5448 | FAIL |
+| 40.0% | 0.5103 | **0.5724** | 0.5229 | 0.5448 | FAIL |
+| 49.7% | 0.5241 | **0.5724** | 0.5243 | 0.5517 | FAIL |
+
+**FAIL at every rate.** And the oracle column is what makes the negative readable: a perfect selector passes at every
+rate, so **the setup had the power to detect a good selector and the gate is not one.** This is a statement about the
+signal, not about the sample size.
+
+**The explanation is already in this ledger, and that is the point.** F39 recorded that the residual reads difficulty
+rather than uplift, and F42 that on box-wrong items the residual sits at the null. The gate predicts *whether the cheap
+tier will be wrong* — F48 and F51 measured that and it holds. Escalation needs a different quantity: *whether the upper
+tier will be right where the cheap tier is wrong.* On this pair that class is **8 of 145 test items**, and picking
+difficulty does not find them.
+
+**What the setup could and could not have shown.** Cheap 0.5169, upper 0.5424, oracle over the two 0.5805 — so the most
+any router can add over cheap-only is **6.36 points** while the upper tier *breaks* 9 items for the 15 it fixes. The
+two models are the same size, chosen in F66 to make the plumbing observable rather than to represent a capability gap.
+A wider pair would raise the ceiling; it would not change what the readout is reading.
+
+**What this does and does not withdraw.** It does not touch F48 (the J-lens readout predicts difficulty better than a
+logit lens and a random Jacobian), F61 (the coordinates are causally upstream of the verbaliser), or F65–F66 (the
+mechanism runs, the escalation channel works, the common path costs nothing extra). It does withdraw any reading of the
+cascade as an accuracy play routed on difficulty: **on this pair, at every rate, choosing by difficulty is
+indistinguishable from choosing at random.** The cascade's remaining case is economic rather than accuracy-driven — a
+cheap tier that is much cheaper and a threshold set to spend the upper tier only where the cheap one is likely wrong —
+and that case needs a real price gap and an uplift signal, neither of which this run has.
+
+**What would discharge it.** A tier pair with a genuine capability gap, so the fixable class is large enough to route
+on; and a signal fitted to **uplift** rather than to difficulty, which F40 already bounds at a 0.9291 ceiling with 78%
+of it unpredicted. Until one of those changes, the honest position is that the mechanism works and the quantity it
+reads is the wrong one for choosing when to escalate.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
