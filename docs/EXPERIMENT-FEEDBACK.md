@@ -2881,6 +2881,62 @@ on; and a signal fitted to **uplift** rather than to difficulty, which F40 alrea
 of it unpredicted. Until one of those changes, the honest position is that the mechanism works and the quantity it
 reads is the wrong one for choosing when to escalate.
 
+## F68 — Uplift is predictable and the Jacobian is not the reason: the plain logit lens wins at every rate
+
+**Where it bit.** F67 failed to beat random escalation and named the reason — the readout reads difficulty, escalation
+needs uplift — but could not separate the two, because its tier pair left 8 fixable items in the test fold. A free pair
+with 15 times the signal was already in hand: the same box answering the same 888 questions **terse** (0.6171) and
+**explaining** (0.7928). The explaining path **fixes 195 items and breaks 39**, so the oracle is 0.8367 and the test
+fold holds **123 fixable items**. The observation is the terse prefill's residual, which is what a router actually has
+before it chooses.
+
+Threshold chosen on calibration, scored on test, at fixed escalation rates, against random selection of the same
+number of items:
+
+| rate | **J-lens** | **logit lens** | random J | free (length + letter) | random 97.5th | oracle |
+|---|---|---|---|---|---|---|
+| ~10% | 0.6252 **FAIL** | **0.6497 PASS** | 0.6384 PASS | 0.6271 FAIL | 0.6309 | 0.6987 |
+| ~20% | 0.6497 **FAIL** | **0.6930 PASS** | 0.6648 PASS | 0.6855 PASS | 0.6535 | 0.7985 |
+| ~30% | 0.7062 PASS | **0.7194 PASS** | 0.6836 PASS | 0.7100 PASS | 0.6723 | 0.8305 |
+| ~40% | 0.7458 PASS | **0.7495 PASS** | 0.6987 PASS | 0.7269 PASS | 0.6949 | 0.8305 |
+| ~50% | 0.7608 PASS | **0.7684 PASS** | 0.7175 PASS | 0.7458 PASS | 0.7119 | 0.8305 |
+
+**Two results, and the second is the consequential one.**
+
+**Uplift is predictable.** F67's failure was not a property of the quantity — with enough fixable items, a readout at
+the cheap prefill picks which ones a better path will fix, well above random selection at the same coverage. At a 20%
+escalation rate the logit lens reaches 0.6930 against a random ceiling of 0.6535 and a terse-only baseline of 0.5989.
+
+**The Jacobian is not the reason, and at low coverage it is worse than nothing.** The logit lens beats the J-lens at
+**all five rates**, and at the two lowest rates the J-lens fails while the logit lens passes. The J-lens does beat a
+random Jacobian of matched norm everywhere, so its readout is not noise — it simply loses to the identity.
+
+**This is the exact reversal of F48**, where the J-lens beat the logit lens on difficulty, 0.7626 against 0.6729, and
+the mechanism there was the verbaliser log-odds moving from chance to 0.7629. The interpretation that survives both
+results: **`J` moves the readout off the next token and onto what the model would say, which is the right move for
+"will this model be wrong" and the wrong move for "will a different computation succeed".** Uplift is a question about
+another path, and the plain next-token distribution reads it better than the workspace projection does.
+
+**What this removes from the design, which is most of the apparatus.** F56, F57 and F58 exist to ship a Jacobian
+safely: the weight digest that must key on published rather than loaded weights, the `measured_on` provenance for
+constants that cannot be declared, the amplitude that differs by a factor of four between structurally identical
+models, the refusal on digest mismatch. **All of it is machinery for distributing `J`.** If the decision that matters
+is read by a logit lens, then the judge carries no Jacobian, needs no amplitude, has no measured constant to license,
+and the compatibility contract shrinks to what any readout needs: the tokenizer and the vocabulary. The engine-side
+plumbing of F64–F66 is unaffected — a residual is still read at prefill and an action still comes back — but what
+travels with the judge becomes small enough that most of F56–F58 stops being a requirement.
+
+**What is not withdrawn.** F47 (J exists and is stable), F48 (it predicts difficulty better than both controls), F61
+(its coordinates are causally upstream of the verbaliser) all stand as measured. What changes is their bearing on
+routing: **the Jacobian is established as a real object and is not the right instrument for the escalation decision.**
+
+**What remains unclaimed.** The oracle reaches 0.8305 at a 30% rate where the logit lens reaches 0.7194, so **6.2
+points of the available uplift are still unpredicted** — consistent with the 0.9291 ceiling and 78% unpredicted
+recorded earlier. And the free features (prompt length plus the emitted letter) reach 0.6855 at 20%, only 0.0075 below
+the logit lens, so **most of what is being captured at moderate coverage needs no internals at all**. Whether an
+internal readout earns its cost over the free signal is the next question, and it is a smaller claim than the one this
+project started with.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
