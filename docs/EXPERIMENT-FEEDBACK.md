@@ -3045,6 +3045,76 @@ weight digest, measured amplitude, sentinel channel — is not required for it. 
 a set of true facts about the extension points that anyone attempting this will meet, and a clear statement that this
 particular decision does not need them.
 
+## F71 — The model's own count of remaining options adds to the baseline; its surprise at the prompt is a subject effect
+
+**Where it bit.** F70 closed the line with "every cheap prompt-side signal is equivalent and none reaches the oracle",
+and the equivalent signals were all *external* descriptions of the prompt — counts of characters, symbols, options, a
+topic label. Two quantities of a different kind had not been tested: **what the model says about the item when asked**,
+and **how surprised it is by the item's text.** The second is the direct proxy for "have I seen much like this", which
+is the intuition that rare material should be unsolvable.
+
+**Surprise is measured as the negative log probability the model assigns to the prompt's own tokens** — mean, 90th
+percentile, maximum, and the share of tokens above 5 and 8 nats. It costs nothing extra: the numbers fall out of the
+same forward pass that reads the prompt. **The reported count** comes from asking, at a fixed cue after the question,
+how many options remain plausible, and reading the answer as a distribution over the digits 1 to 9 without generating
+anything.
+
+| quantity | correlation with "the box is wrong" |
+|---|---|
+| **the model's reported count of remaining options** | **+0.1791** |
+| the count's own uncertainty | +0.1143 |
+| **mean surprise over the prompt** | **−0.1052** |
+| 90th percentile surprise | −0.1024 |
+| share of tokens above 5 nats | −0.0972 |
+| prompt token count | +0.0483 |
+
+**The reported count is the first thing in a long while to beat the baseline.** Held-out AUC for difficulty, against
+the ten surface counts at 0.6298:
+
+| features | AUC | vs the baseline | verdict |
+|---|---|---|---|
+| surprise alone | 0.5462 | −0.0836 [−0.1211, −0.0464] | FAIL |
+| reported count alone | 0.6614 | +0.0316 [−0.0096, +0.0699] | FAIL |
+| **surface + reported count** | **0.6715** | **+0.0417 [+0.0229, +0.0610]** | **PASS** |
+| everything | 0.6648 | +0.0350 [+0.0139, +0.0559] | PASS |
+
+So asking the model how many options are still live **adds real information about difficulty that no external
+description of the prompt contains.** It does not help uplift — at every escalation rate, surface plus count is within
+0.003 of surface alone — which is the same split this project keeps finding: difficulty is readable, uplift is not.
+
+**And the surprise result is a textbook confound, with the sign the intuition did not expect.** Across the seven
+subjects, accuracy and mean surprise correlate **+0.7840**:
+
+| subject | accuracy | mean surprise |
+|---|---|---|
+| math | **0.4157** | **1.4133** |
+| engineering | 0.4363 | 1.3704 |
+| law | 0.5868 | 1.8053 |
+| philosophy | **0.7277** | **1.9718** |
+| economics | 0.7536 | 1.6508 |
+
+Mathematics and engineering are the **least surprising text and the hardest problems**; philosophy and economics are
+the most surprising text and the easiest. **Within each subject the correlation between surprise and error is +0.0061
+pooled**, ranging from −0.1063 to +0.0783 with no consistent sign.
+
+**So surprisal carries no information about difficulty once subject is held fixed.** The −0.105 seen over the pool is
+Simpson's paradox: a between-subject effect whose sign is opposite to a within-subject effect that is zero. What
+surprisal measures is **the surface style of the text, not the thickness of the relevant knowledge** — a formula-dense
+maths question is easy to predict token by token and hard to answer, and fluent prose is the reverse. The intuition
+that "material I have barely seen is material I cannot solve" is not refuted as an idea; it is refuted for *this
+measure of familiarity*, and the failure mode is now named: prompt surprisal is a style detector.
+
+**One configuration fact worth recording because it bears on all of the above.** Every capture in this project ran with
+the model's thinking mode **disabled** (`enable_thinking=False` in the chat template). So every readout is of a model
+answering directly, and none of these numbers describes what the same readouts would say with a reasoning trace
+enabled. That is a real limitation on the scope of every entry from F47 onward, not only this one.
+
+**What is still running.** The count tested here is "how many options remain plausible". The related question — "into
+how many sub-problems does this decompose" — was refused by a sanity gate on an earlier attempt, because that gate
+checks the distribution of answer *letters* and a decomposition count has no letter to check. It is relaunched with the
+gate checking the cue's own reply variability instead, which is the check with content: if the model reports the same
+count everywhere, the cue installed nothing.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
