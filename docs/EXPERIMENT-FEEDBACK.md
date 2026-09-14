@@ -2937,6 +2937,63 @@ the logit lens, so **most of what is being captured at moderate coverage needs n
 internal readout earns its cost over the free signal is the next question, and it is a smaller claim than the one this
 project started with.
 
+## F69 — The free signal that matches the internal readout is the one the existing gateway router already computes
+
+**Where it bit.** F68 left the internal readout 0.0075 above a "free" baseline and flagged that as too thin to build
+on. It was also measured against a broken control: the free arm's length feature was `len(question_id)`, an
+identifier of four or five characters, not the prompt's length. Fixing a control that was too weak is the direction an
+honest correction goes, and it changes the conclusion.
+
+Same 888 items, same instrument — threshold on calibration, accuracy on test at fixed escalation rates:
+
+| rate | internal (logit lens) | **prompt length alone** | **tokens + category** | + emitted letter | length + internal |
+|---|---|---|---|---|---|
+| 10% | 0.6497 | 0.6045 | **0.6704** | 0.6685 | 0.6554 |
+| 20% | 0.6930 | 0.6139 | **0.7024** | 0.7024 | 0.6987 |
+| 30% | 0.7194 | 0.6516 | 0.7194 | **0.7288** | 0.7232 |
+| 40% | **0.7495** | 0.6704 | 0.7382 | 0.7495 | 0.7552 |
+| 50% | **0.7684** | 0.6817 | 0.7439 | 0.7589 | 0.7684 |
+
+internal minus length-alone, paired bootstrap: **+0.0452 [+0.0226, +0.0678]** at 10%, rising to **+0.0866 [+0.0584,
++0.1168]** at 50% — PASS at every rate.
+
+**Three findings, and the third closes the line.**
+
+**Prompt length alone is not enough.** The internal readout beats it significantly at every rate. So "just look at how
+long the prompt is" is not the answer, and a round that had only compared against a broken length feature would have
+concluded otherwise.
+
+**Category is the load-bearing free feature.** Adding it to length reaches 0.6704 and 0.7024 at the two lowest rates,
+**at or above the internal readout**, and adding internals on top of it changes nothing there — the values are
+identical. This is the fourth independent time in this project that the free signal has matched or beaten an internal
+one; earlier rounds found difficulty survives decontamination with the free signal having all of it, that category *is*
+the free signal, and that 84.3% of a discriminant sat in the letter span.
+
+**And the free feature that does the work is the one the industry's gateway already computes.** F63 identified a
+structural mismatch: the standard's decision point runs before any engine has processed the request, so a residual read
+after prefill does not exist there. That mismatch is why speculative dispatch was designed, built and measured in
+F64–F66. **If the load-bearing signal is the prompt's category, the mismatch dissolves** — a category is a function of
+the prompt, computable at the gateway, and vLLM's router is a *semantic* router whose whole business is classifying the
+prompt. The decision fits `Filter`/`Scorer`/`Picker` natively: no engine hook, no residual, no Jacobian, no plugin, no
+conflict with a fully compiled model, no scheduled-token row mapping.
+
+**Where internals still win, stated fairly.** At 40% and 50% escalation the internal readout is ahead of tokens plus
+category, 0.7495 against 0.7382 and 0.7684 against 0.7439. But escalating half the traffic saves little, so the region
+where internals help is the region where the cascade has least reason to exist. A design should be judged in its
+operating region, and in the 10–30% band the free signal is at least as good.
+
+**What this does to the engine-side work.** It does not make F64–F66 wrong — the plumbing runs, the escalation channel
+works, the common path costs nothing, and the failures they found (the compiled-model conflict, the row mapping, the
+missing action channel) are real properties of the extension points that anyone doing this would meet. It makes them
+**unnecessary for this decision.** The honest summary of the line is: the Jacobian is a real object that predicts
+difficulty better than its controls and is causally upstream of the verbaliser; it is not the right instrument for
+choosing when to escalate; and the instrument that is turns out to live at the gateway, where the standard already puts
+the decision.
+
+**What would still be worth measuring.** The oracle reaches 0.8305 where the best arm reaches 0.7288, so **10 points of
+available uplift remain unclaimed by anything tried here.** Whether a classifier trained for *uplift* rather than for
+topic closes any of it is a gateway-side question and needs no internals to answer, which makes it cheap.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
