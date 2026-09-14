@@ -3115,6 +3115,60 @@ checks the distribution of answer *letters* and a decomposition count has no let
 gate checking the cue's own reply variability instead, which is the check with content: if the model reports the same
 count everywhere, the cue installed nothing.
 
+## F72 — Asking the model to count sub-problems correlates with difficulty and adds nothing; asking it to count live options adds
+
+**Where it bit.** F71 found that the model's reported count of remaining options beats the surface-count baseline, and
+that its surprise at the prompt is a subject effect with no within-subject signal. The adjacent question was asked
+directly: **into how many sub-problems does this decompose?** An earlier attempt at that cue was refused by a sanity gate
+that checks the distribution of answer *letters*, which a decomposition count does not have; rerun with the gate checking
+the cue's own reply variability instead, it completed on 1,664 items.
+
+**The correlation is real and, unlike surprise, it is not a subject effect.**
+
+| | pooled correlation with "the box is wrong" | **within-category, pooled** |
+|---|---|---|
+| **reported sub-problem count** | **+0.1486** | **+0.1303** |
+| prompt surprise (F71) | −0.1052 | **+0.0061** |
+
+Six of seven categories are positive (engineering +0.2749, computer science +0.2074, law +0.1848, math +0.1423,
+philosophy +0.1185, health +0.0438, economics −0.0593). So the model's estimate of how many steps a question takes
+carries information about whether it will get it wrong, and that information survives holding the subject fixed — which
+is exactly the check that killed surprise.
+
+**The reported count is effectively binary.** Its argmax is 1 on 868 items and 3 on 714, with 22 items spread over the
+rest. The model does not use the 1-to-9 range it was offered; it distinguishes "one step" from "a few steps" and little
+else.
+
+**And it adds nothing to the baseline.** Held-out AUC on the items carrying every measurement, against surface counts at
+0.6957:
+
+| features | AUC | vs the baseline | verdict |
+|---|---|---|---|
+| reported sub-problem count alone | 0.5813 | −0.1145 [−0.1724, −0.0603] | FAIL |
+| reported option count alone | 0.6907 | −0.0051 [−0.0442, +0.0349] | FAIL |
+| **surface + option count** | **0.7221** | **+0.0264 [+0.0101, +0.0425]** | **PASS** |
+| surface + sub-problem count | 0.7052 | +0.0095 [−0.0112, +0.0287] | FAIL |
+| **surface + both counts** | **0.7267** | **+0.0310 [+0.0082, +0.0533]** | **PASS** |
+| everything including surprise | 0.7293 | +0.0336 [+0.0092, +0.0576] | PASS |
+
+**Correlating and adding are different things, and this is a clean case of the difference.** The sub-problem count
+correlates with difficulty at +0.15 and contributes nothing over ten surface counts of the prompt, because a question
+that decomposes into several steps is also a question with more symbols, more numbers and more clauses — the surface
+counts already have it. The option count is the one that adds, and what it has that the surface cannot is the model's
+own read of how many answers are still live. This is the same shape as the earlier finding that the topic label is the
+free signal and a per-category policy fails: **a quantity can be genuinely informative and entirely redundant.**
+
+**On uplift the counts look better than they did.** At a 20% escalation rate, surface plus both counts reaches 0.7407
+against the baseline's 0.7003, and at 30% 0.7677 against 0.7542. That is a change from the pattern in which nothing
+helped uplift — but the subset carrying all measurements has 297 test items with 126 fixable, no paired intervals were
+computed for it, and the earlier rounds' lesson about small subsets is exactly why this is recorded as a direction
+rather than a result.
+
+**What this leaves.** Of the four things asked, three are answered: the decomposition count correlates but is
+redundant; surprise is a style detector; and every capture so far ran with thinking disabled. The fourth — what happens
+with thinking enabled — is measuring now, and its interim numbers already show the one thing every earlier tier pair
+lacked: **a 256-fold token ratio between the two arms.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
