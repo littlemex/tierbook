@@ -2568,6 +2568,85 @@ them.
 are about where and when to read, which the deployment-condition results already address, and the intervention line is
 closed with a negative that has a control behind it.
 
+## F63 — The industry already externalises the routing decision, and it does so upstream of the observation we need
+
+**Where it bit.** Every design round so far assumed tierbook would define its own interface for externalising a
+routing decision. It does not need to: Envoy's External Processing filter plus the Gateway API Inference Extension
+(GIE) already standardise exactly that, `llm-d` implements it, and vLLM's semantic-router uses the same mechanism.
+Reading the implementation rather than the marketing settles what is available and what is not.
+
+**The decision's actual input and output**, from `kubernetes-sigs/gateway-api-inference-extension`:
+
+```go
+type Request struct { RequestId, TargetModel, Prompt string; Headers map[string]string }
+type Endpoint struct { State EndpointState }        // per-endpoint, per scheduling cycle
+type Filter interface { Filter(ctx, *Request, *CycleState, []*Endpoint) []*Endpoint }
+type Scorer interface { Score(ctx, *Request, *CycleState, []*Endpoint) []*ScoredEndpoint }  // [0,1]; weights in config
+type Picker interface { Pick(ctx, *CycleState, []*ScoredEndpoint) []*ScoredEndpoint }
+type PickResult struct { Endpoint string; Fallbacks []string; MutatedBody []byte; ExtraHeaders map[string]string }
+```
+
+Called at the `RequestHeaders` / `RequestBody` phases. Existing scorers — queue depth, KV-cache utilisation,
+prefix-cache hit, adapter affinity — all read **per-endpoint** state.
+
+**The mismatch that decides the architecture.** The EndpointPicker runs **before any engine has processed the
+request**, so the layer-32 residual the stage-1 gate reads does not exist at decision time. What the existing scorers
+consume is per-endpoint state; what the gate needs is **per-request internal state that comes into existence only
+after that request has begun running on an endpoint.** No amount of interface design removes this: it is a
+consequence of where the decision point sits.
+
+**The resolution, chosen from four candidates on latency, cost, feasibility and standards fit:**
+
+| approach | latency | cost | feasibility | fit |
+|---|---|---|---|---|
+| two requests, prefill-only then resubmit | poor, three serial hops | poor, prefill twice on a cache miss | low–medium | shape only; abuses inference as a probe API |
+| decide inside the engine, engine picks the endpoint | good | minimal | medium | **bypasses the standard** |
+| **speculative dispatch** | **good on the common path** | pays cheap prefill, saves cheap decode on escalation | medium–high | **the standard picks endpoints; only the internal judgement is in the engine** |
+| redefine the gate to use gateway-visible data only | best | minimal | high | most standard, but discards the measured gate |
+
+**Speculative dispatch wins, and the reason it fits is that the engine returns an action rather than a
+destination** — `ContinueLocal` / `Escalate(target_profile, reason, receipt)` / `Abort`. Endpoint selection after an
+escalation goes back to the standard picker, so nothing is bypassed. On the common path `ContinueLocal` means the
+prefill flows straight into decode and **the routing decision costs nothing**, which is the property that made this
+design worth measuring in the first place.
+
+Two consequences worth recording because they are not obvious:
+
+- **Prefix caching is an optimisation, not a contract.** The two-request scheme depends on the resubmission landing
+  on the same endpoint with the cache still warm, and on `max_tokens=0` meaning the same thing across servers. It
+  also puts an internal residual in an HTTP header. None of these is a guarantee, so the scheme cannot be the base
+  design even though it is contractually equivalent on paper.
+- **Stage 2 has a commit problem the measurement did not surface.** Generation length is the stage-2 signal
+  (F52: 0.6978, beating the J-lens which loses to its own random control at −0.0165), and length is only known while
+  decoding — by which point output may already be streaming to the client and cannot be replaced. So the policy must
+  declare **buffered commit** (hold the cheap response until the final decision) or **early commit** (stage 2 becomes
+  audit and next-round calibration, not substitution). This is a declaration the buyer makes, not a property of the
+  detector.
+
+**What tierbook must not build.** Named explicitly by an adversarial round: endpoint discovery and readiness, pod
+enumeration, queue / KV-utilisation / prefix-cache / adapter-affinity scoring, scorer composition, pod fallback,
+destination-header manipulation, Envoy body wiring, profile management, per-endpoint metrics collection.
+**Re-implementing these produces compatibility debt rather than value.** The four blocks resolve to: serving wiring
+**mostly deleted**, flow executor **split**, outcome ledger **kept**, and measurement **the core** — buyer-data base
+rates, the utility curve, convention checks, detector drift.
+
+**The closed loop, without forking upstream.** The plugin surface has no `PostResponse`, and the fix is not to add
+one: **a response callback must never mutate a running scorer**, because then results depend on execution order and
+reproducibility and auditability are lost. Instead an asynchronous outcome plane — the picker leaves
+`request_id` / endpoint / profile version in metadata, the engine emits `decision_id` and per-stage outcomes as
+telemetry events, the access log supplies status and latency, a collector joins on the ids, the ledger appends, and a
+calibration job produces an **immutable snapshot** that the next policy version reads. Within one request, stage 1 to
+escalation is the engine's business; only cross-request learning returns to the ledger. The upstream proposal that
+follows is a **telemetry SPI rather than a scheduler plugin**: an observer that cannot change endpoint selection, is
+non-blocking, takes the body only on explicit opt-in, carries versions, and declares a drop policy under
+backpressure.
+
+**The condition under which tierbook has no reason to exist**, stated so it can be checked rather than assumed: the
+decision completes on prompt, headers and endpoint state alone; candidate models are fixed in advance by traffic
+split; no internal observation, extra API call or extra inference is used; there is no admission or provenance
+requirement for a third-party detector; and outcome feedback feeds only ordinary scheduler tuning. Everything this
+project has measured lives outside that set, which is the honest form of the claim.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
