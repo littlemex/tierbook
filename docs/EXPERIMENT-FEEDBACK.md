@@ -3456,6 +3456,55 @@ reason is not a weak signal but a missing one: the quantity that would buy accur
 unfitted at this scale. Any claim that a thinking-budget router improves quality needs to produce the harm predictor
 first, and this ledger does not have it.
 
+## F79 — Pooling the budget pairs removes the power excuse: harm is below chance, and pooled "help" is explained by the budgets alone
+
+**Where it bit.** F78 could not fit the harm direction because any single budget pair leaves about six positives in
+calibration, and said so rather than concluding from it. Pooling fixes that: an item appears in up to 26 pairs and the
+same question is asked at each, so 230 items become **6,440 pair-instances with 248 harm cases** — 113 in calibration,
+135 in test. The split is by **item**, so an item's readout never appears on both sides; splitting by instance would have
+made the held-out number a memory test.
+
+| direction | readout + budgets | **budgets alone** | shuffled labels | difference over the stronger control |
+|---|---|---|---|---|
+| **help** (extension fixes it) | 0.6474 | **0.6494** | 0.5098 | −0.0020 [−0.0095, +0.0070] FAIL |
+| **harm** (extension breaks it) | **0.4614** | 0.5134 | 0.5009 | −0.0520 [−0.1135, +0.0041] FAIL |
+
+**Harm is below chance with 113 calibration positives.** The power excuse is gone: six features fitted on 113 positives
+is a fit that can work, and it does not. F78's asymmetry — the readout sees that thinking will help and not that it will
+hurt — is now measured rather than inferred from two differently-powered fits.
+
+**And pooled, the help direction is entirely explained by the budgets.** Budgets alone reach 0.6494 and adding the
+readout reaches 0.6474 — no gain, and the fitted coefficients say why: `log extend` is **+0.421**, dwarfing entropy's
++0.182. Pooled, the dominant fact is that a larger extension fixes more items, which is trivially true and needs no
+readout to know.
+
+**This does not overturn F76, and saying how is the point.** F76 fitted at a **single** pair, 64 → 256, where the budget
+is constant and cannot explain anything, and its control was shuffled labels: AUC 0.7149 against 0.4150. That measures
+**the ordering of items within one pair**, which is what a deployed policy needs, because a policy operates at one
+operating point. The pooled AUC mixes between-pair variation with within-pair variation, and the between-pair part is
+large and uninformative, so it swamps the within-pair signal. Both numbers are correct and they answer different
+questions. The consistency check is the coefficient: entropy is **+0.182** pooled against **+0.186** at the single pair,
+so the same relationship is being found in both.
+
+**The lesson about the instrument, which is the transferable part.** A pooled fit over conditions can hide a real
+within-condition effect behind a trivial between-condition one, and a within-condition fit can lack the positives to
+test the direction that matters. Neither is the wrong analysis; running only one of them is. Here the pooled version was
+the only way to power the harm test, and the single-pair version was the only way to see the help signal at all.
+
+**What is now established about the thinking-budget line.**
+
+1. The readout after a short think orders items by whether continuing helps, within a pair, at AUC 0.7149 (F76).
+2. That ordering buys **tokens and not accuracy**, because extending everything already captures all the help (F77).
+3. Accuracy would require predicting harm, and harm is **not predictable from the readout** at a sample size where it
+   could have been (this entry).
+4. So the ceiling on a thinking-budget gate is the token saving measured in F77: 36% fewer tokens for 2.9 accuracy
+   points at the best operating point.
+
+**What would still change the picture.** A harm predictor from something other than the current readout — the trajectory
+so far rather than the state now, since harm is a property of where the reasoning is going. The readout is four scalars of
+the present distribution; the direction of travel over the last k tokens is a different object and is not in this data.
+That is the next thing worth capturing, and it needs the residual at several points in the trace rather than one.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
