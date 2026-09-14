@@ -2994,6 +2994,57 @@ the decision.
 available uplift remain unclaimed by anything tried here.** Whether a classifier trained for *uplift* rather than for
 topic closes any of it is a gateway-side question and needs no internals to answer, which makes it cheap.
 
+## F70 — Every cheap prompt-side signal is equivalent, none reaches the oracle, and the cheapest one needs no classifier
+
+**Where it bit.** F69 named the last open question of this line: the topic label is a proxy, and the quantity wanted is
+whether a longer computation will fix the item, so does a classifier trained directly on **uplift** from the prompt text
+close any of the 10 unclaimed points? Everything needed is available at the gateway, so the test is cheap.
+
+**First attempt, and its diagnosis.** Hashed word unigrams and bigrams — 2,048 features plus 10 surface counts —
+against 357 calibration items with 72 positives. It lost **7 and 10 points** at the two lowest rates. That is not a test
+of the idea; it is a demonstration of overfitting, and reporting it as evidence against text features would have been
+the mirror image of the power failure recorded two entries earlier.
+
+**Second attempt, at a dimension this sample can train:**
+
+| rate | tokens + category | **surface counts alone (10)** | surface + category (17) | hashed (2048) |
+|---|---|---|---|---|
+| 10% | **0.6704** | 0.6535 | 0.6685 | 0.6008 |
+| 20% | 0.7024 | **0.7081** | **0.7081** | 0.6045 |
+| 30% | 0.7194 | **0.7326** | 0.7250 | 0.7363 |
+| 40% | 0.7382 | **0.7439** | 0.7326 | 0.7401 |
+| 50% | 0.7439 | 0.7495 | **0.7571** | 0.7401 |
+
+Every paired interval crosses zero; the largest difference is 0.0132. **FAIL at every rate**, and this time the failure
+is informative: the arms are equal, not broken.
+
+**Two conclusions the whole line comes down to.**
+
+**The topic label is not needed either.** Ten surface counts of the prompt — its token count, its length, its digit and
+symbol and question-mark counts, its longest word, its type-token ratio, its option count — match tokens plus category
+everywhere. So the practical recommendation is the cheapest arm available: **no classifier, no embedding service, no
+model call, no engine hook.** Given F69 showed the internal readout does not beat the topic label in the operating band,
+and this shows surface counts match the topic label, the chain runs from the residual all the way down to counting
+characters with no measurable loss.
+
+**And nothing reaches the oracle.** The best arm anywhere is 0.7571 against an oracle of 0.8305 — **7 to 10 points of
+available uplift are unclaimed by every signal tried in this project**: the layer-32 residual, the J-lens readout, the
+logit lens, the topic label, surface counts, hashed text. The consistency of that gap across such different instruments
+is itself the finding. Earlier rounds bounded uplift prediction at a 0.9291 ceiling with 78% of it unpredicted, and this
+is that bound met again from a different direction.
+
+**What is genuinely still open, stated narrowly.** More labelled items would let a text classifier be tested properly —
+357 calibration items cannot train 2,058 features and the low-dimension arms may simply be at their own ceiling rather
+than at the problem's. And no signal tried here looks at what the *upper* path would do; every arm predicts from the
+item alone. A cheap partial run of the upper path is the one untried family, and it is not free, which is exactly the
+trade the ledger's cost accounting exists to price.
+
+**Where this leaves the design.** The decision is a gateway-side function of the prompt, computable from counts, and it
+belongs in the standard's `Filter`/`Scorer`/`Picker` shape. The engine-side apparatus — plugin, hook, Jacobian artefact,
+weight digest, measured amplitude, sentinel channel — is not required for it. What the engine-side work leaves behind is
+a set of true facts about the extension points that anyone attempting this will meet, and a clear statement that this
+particular decision does not need them.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
