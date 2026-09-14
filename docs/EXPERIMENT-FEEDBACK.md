@@ -3216,6 +3216,69 @@ budget the first k tokens of it are taken, a cue appended, and the answer read �
 of the full trace are exactly what a request capped at k would have produced. The readout is captured at every budget
 too, because a mid-generation gate would have to decide from what the model looks like after k steps.
 
+## F74 — Cutting thinking short loses benefit, and a readout 64 tokens in can pick which items are worth continuing
+
+**Where it bit.** F73 measured thinking at 170x the tokens for +20.6 accuracy points and left the obvious question:
+thinking is a stream, so if most of the benefit arrives early the price is nothing like 170x. The curve was arranged to
+cost one generation rather than one per budget — the trace is generated once at the cap, and for each budget k the first
+k tokens are taken, a cue appended, and the answer read, which under greedy decoding is exactly what a request capped at
+k would have produced. 230 items, budgets 0 to 1024.
+
+**Split by whether the trace concluded, because pooling the two hides the answer.** Two thirds concluded and a third hit
+the cap, and for the latter the "full budget" arm is itself a truncated trace — so pooled numbers compare
+truncated-at-256 with truncated-at-1024 and say nothing about concluding.
+
+| budget | **concluded (154 items)** | cut off (76 items) |
+|---|---|---|
+| 0 | 0.6169 | 0.3553 |
+| 128 | 0.6688 | 0.3289 |
+| 256 | 0.7662 | **0.4737** |
+| 512 | 0.8442 | 0.3816 |
+| **1024** | **0.8766** | 0.4474 |
+
+**For items whose trace concludes, the curve rises monotonically to the cap and does not flatten.** The smallest budget
+within 0.02 of the full one is the full one. **So cutting thinking short loses benefit** — the price cannot be reduced
+by truncation without paying in accuracy, and the answer to "would a truncated trace do as well" is no.
+
+**And I had this wrong at the halfway point.** At 56 concluded items the curve looked flat from 512, and I reported 512
+as giving the full benefit at half the cost. At 154 it keeps climbing. The interim reading was a small-sample plateau,
+and the correction is the reason a curve should not be read before it is finished.
+
+**The cut-off group peaks at 256 and the intervals do not support it.** 0.4737 [0.3654, 0.5845] against 0.4474 [0.3408,
+0.5590] at the cap — heavy overlap. The pooled non-monotonicity that looked like "thinking too long hurts" is a mixture
+of two groups whose base rates differ by 26 points, which is the third Simpson-shaped artefact in this ledger.
+
+**The finding that changes the picture: a mid-generation readout works, once.** Asked whether the four readout features
+after k tokens of thinking pick the items that continuing to a larger budget would fix, threshold on calibration and
+scored on test against random selection of the same coverage:
+
+| transition | 20% coverage | 30% | 50% |
+|---|---|---|---|
+| **64 → 256** | **0.5929 > 0.5714 PASS** | **0.6000 > 0.5929 PASS** | **0.6500 > 0.6286 PASS** |
+| 128 → 512 | 0.5857 FAIL | 0.6214 FAIL | 0.6571 FAIL |
+| 256 → 1024 | 0.6786 FAIL | 0.6857 FAIL | 0.7286 FAIL |
+
+**This is the first time in this project that an internal readout has beaten its control on a routing decision.** Every
+earlier attempt — the J-lens on difficulty against a logit lens, the logit lens against surface counts, the residual
+against random escalation — either lost or tied. Here the readout after 64 tokens of thinking passes at all three
+coverage rates, and it passes on the transition where there is most to gain.
+
+**The caveats are real and the claim is narrow.** The test fold holds 26 items that continuing fixes; the margins are
+0.0215, 0.0071 and 0.0214, and the middle one is thin. Nine cells were tested and three passed — but **all three are the
+same transition**, which is the coherent pattern rather than three scattered hits, and the two failing transitions have
+fewer fixable items (23 and 15). A confirmation at a larger sample is what this needs, and it is cheap: the expensive
+part is the generation, which is already done once per item.
+
+**Why the shape makes sense, offered as a reading rather than a result.** Early in a trace the model has set up the
+problem and not yet committed; whether the setup is going anywhere is plausibly visible then. Later the trace has
+committed, and by 256 tokens the readout is describing a line of reasoning already underway rather than a decision
+still open. That is consistent with the transition ordering, and it is not established by it.
+
+**And one separation larger than any predictor here.** Whether the trace concluded at all is worth **26 accuracy points**
+(0.6169 against 0.3553 at zero thinking, 0.8766 against 0.4474 at the cap). No signal tried in this project separates
+items that well. It is known only after paying, so it cannot route — but it does say that "will this finish" is the
+quantity with the most information in it, which is a different target from either difficulty or uplift.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
