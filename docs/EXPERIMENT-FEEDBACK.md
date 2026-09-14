@@ -3279,6 +3279,45 @@ still open. That is consistent with the transition ordering, and it is not estab
 items that well. It is known only after paying, so it cannot route — but it does say that "will this finish" is the
 quantity with the most information in it, which is a different target from either difficulty or uplift.
 
+## F75 — A correction: the served readout had three features, not four; and conclusion is not predictable before paying
+
+**Two things, one of them a correction to every serving entry.**
+
+**The correction.** The served plugin's readout was written as four features — entropy, maximum probability, verbaliser
+log-odds, and the rank of the letter the model is about to emit — and **the fourth was left as a constant zero.** It was
+never computed. So every result from F65 onward, including F74's mid-generation gate, ran on **three** features, and
+every sentence in those entries saying "four readout features" is wrong. The bug surfaced only because a correlation
+against it came back as `nan`, which is the kind of thing a summary statistic catches and a passing test does not.
+
+The direction of the error is worth naming: **F74's PASS was achieved with less than it claimed**, so the finding
+survives the correction and is if anything understated. The feature is computed now, and the confirmation run uses it.
+
+**The measurement.** F74 found that whether a trace concludes within the cap is worth 26 accuracy points — 0.6169
+against 0.3553 with no thinking, 0.8766 against 0.4474 at the cap — a bigger separation than any signal this project has
+produced. It is known only after paying, so the question is whether it can be predicted from the readout at the prompt's
+own prefill, before any thinking is generated. If it could, the decision would gain a third target beside difficulty and
+uplift, and one whose **label is free**: a finish reason, with no second arm to run.
+
+| | held-out AUC for "the trace will hit the cap" |
+|---|---|
+| the prefill readout | 0.5977 |
+| the same pipeline on shuffled labels | 0.5761 |
+| difference | **+0.0216 [−0.0062, +0.0503] FAIL** |
+
+**FAIL.** And the shuffled-label control at 0.5761 is the reason to report it that way rather than as "0.5977, weakly
+predictive": with 140 test items and 46 positives, refitting the same pipeline on nonsense labels reaches 0.576 by
+itself, so the honest reading of 0.5977 is that it is inside what the fitting procedure buys for nothing. A control that
+measures what the machinery achieves on noise is the one that makes a weak positive readable, and without it this would
+have been written up as a small effect.
+
+Per-feature correlations with hitting the cap, for whatever they are worth: entropy **+0.2233**, verbaliser log-odds
++0.1126, maximum probability −0.0664. So entropy at the prompt does carry something about whether the answer will run
+long — it just does not survive as a fitted predictor at this sample size.
+
+**What is running.** The confirmation of F74's passing transition, at double the sample, with the fourth feature actually
+computed. 26 fixable items in the test fold is what the original PASS rested on, and doubling the sample is the cheapest
+thing that could overturn it.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
