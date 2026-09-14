@@ -3318,6 +3318,49 @@ long — it just does not survive as a fitted predictor at this sample size.
 computed. 26 fixable items in the test fold is what the original PASS rested on, and doubling the sample is the cheapest
 thing that could overturn it.
 
+## F76 — The signal is the entropy after a short think, it is specific to early positions, and AUC shows it clearly
+
+**Where it bit.** F74's mid-generation gate passed at 64 → 256 with coverage-constrained margins of 0.0215, 0.0071 and
+0.0214 — thin enough to want confirmation and thin enough that the instrument was suspect. A coverage-constrained
+comparison forces a threshold onto a discrete item count, so with 140 test items the accuracy moves in steps of 1/140 and
+the margin is quantised. Held-out AUC has no threshold, so the sample enters through the interval alone. Re-measured that
+way, against the same pipeline fitted on shuffled labels:
+
+| transition | fixable in test | **AUC** | shuffled-label control | difference | verdict |
+|---|---|---|---|---|---|
+| **64 → 256** | 26 | **0.7149** | 0.4150 | **+0.2999 [+0.0941, +0.4922]** | **PASS** |
+| 128 → 512 | 23 | 0.5663 | 0.5180 | +0.0483 [−0.0305, +0.1379] | FAIL |
+| 256 → 1024 | 15 | 0.5477 | 0.4731 | +0.0747 [−0.1763, +0.3056] | FAIL |
+
+**0.7149 against a shuffled-label control of 0.4150.** The same finding that looked like a 0.02 margin is a 0.30 margin
+once the threshold is removed, and the instrument was the reason. This is the clearest positive result in this ledger.
+
+**What carries it is the entropy.** Three features were live in this data (the fourth was the constant recorded in F75),
+and the fitted coefficients are **entropy +0.186**, maximum probability +0.007, verbaliser log-odds −0.048. So the
+signal is: **after 64 tokens of thinking, if the readout is still spread out, more thinking helps; if it has already
+peaked, it will not.** That is a mechanism simple enough to state in one sentence and to check against the transition
+ordering, which it survives.
+
+**The signal is specific to position, not to the size of the jump.** 64 → 256 and 256 → 1024 are both fourfold
+increases, and only the early one works. So it is not "predicting a 4x extension"; it is that early in a trace the
+question of whether the reasoning is going anywhere is still open, and by 256 tokens the model has committed and the
+readout describes a line already underway. The later transitions also have fewer fixable items (23 and 15 against 26),
+so sample size is a competing explanation for their failure — but it cannot explain 128 → 512's failure at 23 items when
+64 → 256 passes at 26.
+
+**The policy this suggests, with its arithmetic.** Thinking costs a median of 682 tokens for +20.6 accuracy points
+(F73). Instead: **give every item 64 tokens of thinking — a tenth of the cost — read the entropy, and continue only
+where it is high.** The gate's job is then not "should this item think" but "has this item finished being worth
+thinking about", which is a question asked 64 tokens in rather than zero tokens in, and that is precisely where the
+signal turns out to live. The prefill-time gate that this project spent most of its effort on sits at zero tokens, where
+F69 and F70 showed counting characters does as well as reading the residual.
+
+**What this does not yet establish.** The margin is wide but so is its interval, the confirmation run at double the
+sample is in flight, and the budgets tested are a coarse grid — whether the signal is strongest at 64 or somewhere
+between 32 and 128 is not resolved by three passing cells at one budget. And the accuracy gain a real policy would
+capture has not been computed: the AUC says the ordering is good, not what a threshold on it earns after paying for the
+64 tokens on every item.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
