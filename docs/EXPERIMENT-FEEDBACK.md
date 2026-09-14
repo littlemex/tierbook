@@ -3169,6 +3169,53 @@ redundant; surprise is a style detector; and every capture so far ran with think
 with thinking enabled — is measuring now, and its interim numbers already show the one thing every earlier tier pair
 lacked: **a 256-fold token ratio between the two arms.**
 
+## F73 — Thinking on versus off is the first tier pair with a real price gap: 170x the tokens for 20.6 accuracy points
+
+**Where it bit.** Every capture in this project ran with thinking disabled (F71), and every tier pair it had was
+economically uninteresting: F67's two models differed by 2.5 accuracy points, and F68's terse-versus-explaining pair
+differed in prompt only, with no token cost recorded. Turning thinking on is not just a missing condition — it is the
+**cheap/expensive pair the project never had**, on one set of weights, with a cost ratio that makes routing worth
+arguing about.
+
+One vLLM server, `empero-ai/Qwen3.8-9B-Distill`, 180 labelled items, each answered twice. The two arms differ by a
+per-request chat-template flag, not by a deployment, so this measures two conditions rather than two servers.
+
+| | thinking off | thinking on | ratio |
+|---|---|---|---|
+| accuracy | 0.5222 | **0.7278** | **+0.2056** |
+| completion tokens, median | 4 | **682** | **170.5x** |
+| latency, median | 210 ms | **24,477 ms** | 116x |
+| **fixes / breaks** | — | **44 (24.4%) / 7 (3.9%)** | oracle 0.7667 |
+
+**The arithmetic that makes a router worth building.** Escalating every item costs 170x for +20.6 points. Escalating
+only the 24.4% that thinking actually fixes would cost roughly **42x** for the same gain — so a selector that finds
+those items is worth about a factor of four in serving cost. Every previous pair in this ledger had a gap too small for
+that argument to matter; this one does not.
+
+**Two facts about how thinking arrives, both of which affect how it can be used.**
+
+**There is no separate reasoning channel.** `reasoning_content` was returned on **0 of 180 items** — with
+`enable_thinking: true` the trace appears in the ordinary content field, beginning `Thinking Process:\n\n1. **Analyze
+the Request:**`. So a caller cannot separate the reasoning from the answer by field, and any harness that assumes it can
+will read the first sentence of the reasoning as the answer. The answer here is read at an explicit `Answer:` cue over
+the whole trace, which is the convention that finally survived three earlier failures.
+
+**A third of the traces never finished.** 62 of 180 hit the 1,024-token cap, so the thinking-on accuracy of 0.7278 is a
+**lower bound**: those items answered from a truncated trace. Raising the cap would raise both the accuracy and the
+cost, which is exactly the trade the next measurement is about.
+
+**The routing test needs more items than this run has.** At three coverage rates the readout at the cheap prefill scored
+0.5618, 0.5843 and 0.6517 against random-selection ceilings of 0.5618, 0.5843 and 0.6292 — **exact ties at two of the
+three rates.** With 89 test items accuracy moves in steps of 1/89 = 0.0112, so a tie is what a coarse instrument
+produces, not what a null looks like. The signal question is open here; what failed was the resolution.
+
+**What is measuring now.** Thinking is a stream, so it can be cut off, and if most of the benefit arrives early then the
+price is nothing like 170x and the decision becomes **how long to think** rather than **whether to think**. That curve
+is arranged to cost one generation rather than one per budget: the trace is generated once at the full cap, and for each
+budget the first k tokens of it are taken, a cue appended, and the answer read — under greedy decoding the first k tokens
+of the full trace are exactly what a request capped at k would have produced. The readout is captured at every budget
+too, because a mid-generation gate would have to decide from what the model looks like after k steps.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
