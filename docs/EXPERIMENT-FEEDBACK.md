@@ -3361,6 +3361,56 @@ between 32 and 128 is not resolved by three passing cells at one budget. And the
 capture has not been computed: the AUC says the ordering is good, not what a threshold on it earns after paying for the
 64 tokens on every item.
 
+## F77 — The gate buys tokens, not accuracy; and a truncated reasoning trace is worse than none at all
+
+**Where it bit.** F76 measured the ordering — AUC 0.7149 for picking which items an extension fixes — and said plainly
+that an AUC is not what a policy earns, because the policy pays the probe on **every** item and the extension only on the
+selected ones. This puts accuracy and tokens on one table for every policy, with the threshold chosen on calibration and
+applied to test, so the numbers are what a deployed policy would have got rather than the best a threshold could get.
+
+| policy | accuracy | mean tokens |
+|---|---|---|
+| answer with no thinking | 0.5214 | 0 |
+| **64 tokens on everything, then answer** | **0.5071** | 64 |
+| extend everything to 256 | **0.6857** | 256 |
+| think fully on everything | 0.7286 | 1024 |
+| **gated: probe 64, extend 52%** | **0.6571** | **164** |
+| gated: probe 64, extend 29% | 0.6286 | 120 |
+| **oracle gate at the same coverage** | **0.6929** | 164 |
+
+**The gate cannot buy accuracy. The oracle at the same coverage reaches 0.6929 and extending everything reaches
+0.6857** — a perfect selector is worth **0.007 accuracy points** over the policy with no selector at all. Everything the
+gate achieves is on the token axis: 164 against 256 is **36% fewer tokens for 2.9 accuracy points**, and against the full
+budget it is **84% fewer tokens for 7.2 points**. Whether that exchange is worth making is a deployment question with a
+price attached; what is settled is that there is nothing else on offer. A write-up that reported the AUC and stopped
+would have implied otherwise.
+
+**And a finding worth more than the gate: a truncated reasoning trace is worse than no reasoning at all.** Answering
+after 64 tokens of thinking scores **0.5071 against 0.5214 for never thinking**. Stopping mid-deliberation leaves the
+model having raised options it had not yet rejected, and reading an answer off that is worse than reading it off the
+question. So the branch of the gate that declines to extend should **throw the partial trace away**, and doing so
+improves every coverage for free:
+
+| coverage | keep the partial trace | **discard it** | gain |
+|---|---|---|---|
+| 20% | 0.5929 | **0.6143** | +0.0214 |
+| 29% | 0.6000 | **0.6286** | +0.0286 |
+| 39% | 0.6143 | **0.6429** | +0.0286 |
+| 52% | 0.6500 | **0.6571** | +0.0071 |
+
+**This generalises past this experiment.** Any system that caps a reasoning budget and answers from whatever the trace
+reached is doing measurable harm relative to not having thought — 1.4 accuracy points here — and the fix costs nothing:
+discard the trace and answer from the prompt. The 34% of traces that hit the cap in F73 were all answered from partial
+traces, so **that entry's thinking-on accuracy of 0.7278 is understated by whatever this effect is worth on those
+items**, and the same is true of every truncated arm in F74's curve.
+
+**What this leaves for the thinking line.** The signal is real and early (F76). Its value is a token saving with a small
+accuracy cost, and the ceiling on any selector at this transition is 0.007 over the no-selector policy. The remaining
+question with money in it is not a better selector but a better **operating point**: whether some budget pair other
+than 64 → 256 has a wider oracle gap, because a transition where the oracle beats always-extend by more than 0.007 is
+the only place a selector can earn accuracy rather than only tokens. That is a sweep over pairs, and the confirmation run
+in flight gives the sample to do it on.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
