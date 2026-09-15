@@ -3816,6 +3816,69 @@ nothing this project has produced comes close.
 number that says why: not a weak signal, but a threshold that a weak signal cannot clear and that was never computed
 until now.
 
+## F86 — Two corrections: the readout's value was mis-stated, and on one cost axis the gate is dominated everywhere
+
+**Two things in this ledger were framed wrongly, both pointed out rather than discovered.**
+
+### Correction 1: judging difficulty without generating is the claim, and it holds
+
+Entries from F67 onward summarised the readout's value as "it loses to a plain logit lens, which loses to counting
+characters", and concluded the internals were unnecessary. That conflated **two different targets**, and the readout wins
+on one of them:
+
+| target | J-lens | logit lens | random J | verdict |
+|---|---|---|---|---|
+| **difficulty** — will the cheap path be wrong | **0.7626** | 0.6729 | 0.6797 | **J-lens beats both controls** |
+| the stage-1 gate in the deployment condition | **0.8571** | 0.7744 | 0.8007 | beats the box's own 0.7853 |
+| **uplift** — will a longer path fix it | 0.6497 | 0.6930 | — | J-lens loses |
+
+**For judging difficulty at prefill, with nothing generated, the J-lens readout is the best instrument measured here.**
+The prefill happens anyway, so the reading costs nothing. What failed was **using difficulty to decide escalation**,
+because uplift is a different quantity — and that is a failure of the *use*, not of the instrument. Writing "the readout
+is unnecessary" was a summary of the wrong target, and the surface-count comparisons in F69 and F70 were all on uplift.
+
+### Correction 2: accuracy and tokens were reported as a pair, and a pair cannot be ranked
+
+Every policy above was given two numbers and compared against its neighbour. Combining them the way the processor world
+combines energy and delay makes the comparison total: **cost per query = tokens + λ · (1 − accuracy)**, where λ is the
+number of tokens one avoided error is worth. A product form is degenerate here because a policy can spend zero tokens; the
+weighted sum has no such hole and λ is a quantity a deployment can state.
+
+| policy | accuracy | tokens |
+|---|---|---|
+| answer immediately | 0.5178 | 0 |
+| think 64, then answer | 0.5138 | 64 |
+| **think 256 always** | **0.6561** | 256 |
+| **think 1024 always** | **0.7391** | 1024 |
+| gate: probe 64, extend 45% | 0.5771 | 151 |
+
+Sweeping λ from 1 to 100,000 gives **two boundaries and three regimes**:
+
+| λ (tokens per avoided error) | the winning policy |
+|---|---|
+| below **1,850** | **answer immediately** |
+| 1,850 to **9,253** | **think 256 always** |
+| above 9,253 | **think 1024 always** |
+
+**The gate never wins, at any λ.** It is dominated everywhere, and the reason is visible in the table: at 45% coverage it
+spends 151 tokens for 0.5771, while thinking 256 always spends 105 more tokens and buys **7.9 accuracy points** — a far
+better rate than the gate's own trade. The gate occupies a bad middle.
+
+**So F77's and F80's "32% fewer tokens for 0.6 accuracy points" was a comparison against one neighbour, not against the
+policy set.** That framing made a dominated policy look like a favourable trade, and the single axis is what exposes it.
+The lesson is not about this gate: **a policy reported as a pair of numbers has not been compared to anything, and the
+comparison it needs is total, not local.**
+
+**And λ ≈ 1,850 is a number a deployment can act on.** At an output price of one dollar per million tokens, 1,850 tokens is
+**$0.0019**, so: **if one avoided error is worth more than a fifth of a cent, think; otherwise do not.** No gate, no
+readout, no probe. That is the deployable result of the thinking line, and it is simpler than anything the previous nine
+entries proposed.
+
+**What survives of the internal readout, stated against the corrected target.** Judging *difficulty* before generating,
+where the J-lens beats a logit lens by 0.0897 and a random Jacobian by 0.0829 — a measurement that stands (F48, F51) and
+that costs nothing because the prefill is paid regardless. What does not survive is any policy built on top of it that
+has been checked on a single cost axis, because none of them has been, and the one checked here is dominated.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
