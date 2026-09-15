@@ -4045,6 +4045,60 @@ Send the items it marks easy straight to the cheap path. Spend the reasoning bud
 total cost** at the best exchange rate on this workload, over a **5.3-fold range** of exchange rates, and it costs nothing
 to decide.
 
+## F90 — F89 is substantially withdrawn: the Jacobian's advantage does not survive an interval, and neither does the gate's own value
+
+**Where it bit.** F89 reported that the Jacobian readout widens the band from 2.64× to 5.28× and raises the best saving
+from 7.9% to 10.0%, and called it a PASS on both pre-registered criteria. It also said producing an interval "means
+repeating the pair of runs". **That was wrong, and the correction is what undid the result.** Decoding is greedy, so
+repeating a run on the same items reproduces the same traces and the same numbers exactly. The only randomness is which
+items were drawn, so the interval comes from **resampling items** — and it costs nothing, which is why there was no
+excuse for not having it.
+
+Each replicate draws items with replacement, **refits the threshold on the replicate's own calibration half**, and
+recomputes both quantities. Both readouts see the same resampled items, so the difference is paired.
+
+**With coverage fixed at 0.5 in advance — the version with no selection over coverages:**
+
+| quantity | 2.5% | median | 97.5% |
+|---|---|---|---|
+| plain band width | 1.00 | 1.56 | 4.33 |
+| Jacobian band width | 1.00 | 1.99 | 6.17 |
+| plain best saving | **0.0%** | 5.2% | 15.0% |
+| Jacobian best saving | **0.0%** | 7.7% | 15.4% |
+| **Jacobian − plain, band width** | | **+0.38** | **95% [−1.98, +4.24] — includes zero** |
+| **Jacobian − plain, saving** | | **+2.5%** | **95% [−8.7%, +12.2%] — includes zero** |
+
+Taking the maximum over seven coverages, as F89 did, gives differences of +1.56 and +2.7% and **both intervals still
+include zero**.
+
+**Three things follow and all three cost something.**
+
+**F89's verdict is withdrawn.** The point estimates favour the Jacobian and the intervals do not exclude zero by a wide
+margin. The registered criterion was met by the point estimates and the criterion did not require an interval — that was
+my omission in writing it, not a loophole, and the fix is that a criterion on a difference now requires an interval.
+
+**The gate's own value is uncertain, not just the Jacobian's advantage.** The saving's 2.5th percentile is **0.0% for
+both arms**: there are item samples in which the gate wins nothing at any λ. So F87's 7.9% and this entry's 9.9% are
+medians of a distribution whose lower tail touches zero, and the honest statement of the deployable result is
+**"plausibly 5 to 8 percent, possibly nothing"** rather than a number.
+
+**And "band width" is not usable as a headline statistic.** Its 97.5th percentile reaches **143×** under the
+maximum-over-coverages arm, because it is a ratio of the extremes of a bootstrapped region and both extremes move. A
+quantity whose interval spans two orders of magnitude cannot carry a comparison, and I chose it because it sounded like
+what a deployment cares about rather than because it was stable. The saving is the better statistic of the two and even
+it has a lower bound of zero.
+
+**What would settle it.** More items, and the arithmetic is unforgiving: at 410 items the interval on the saving spans 15
+points, and halving an interval takes four times the data. **1,640 items per arm is roughly 14 GPU-hours per arm** at the
+current rate, for a pair. That is the price of turning "plausibly 5 to 8 percent" into a number, and it is worth stating
+before spending it rather than after.
+
+**What survives untouched.** Everything measured without a difference-of-differences: thinking is worth +22 accuracy
+points at 170× the tokens (F73); the readout at the prompt orders items by whether thinking will fix them and beats
+random selection at the same coverage (F87, where the comparison is against a control on the same items rather than
+against another readout); and the decision belongs before generation rather than during it (F86 against F87), which is a
+comparison of two verdicts of opposite sign rather than of two point estimates.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
