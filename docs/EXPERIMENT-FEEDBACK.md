@@ -3762,6 +3762,60 @@ that earns accuracy**, and the next thing owed is the policy table for the harm 
 actually earns after paying the probe — which is the same discipline F77 applied to the help direction and which turned
 an AUC into a 0.007-point ceiling.
 
+## F85 — The harm predictor is worthless as a policy, and the reason is a base-rate ratio that any such gate must beat
+
+**Where it bit.** F84 confirmed harm is predictable at AUC 0.5531 on pre-registered data and said plainly that this is
+not the same as a gate that earns accuracy, citing F77 — where an AUC on the help direction became a 0.007-point ceiling
+once turned into a policy. The policy table for harm is what was owed.
+
+The policy: extend everything **except** the items the harm predictor flags, since declining is the only way a selector
+can earn accuracy (F78). The predictor is the one F84 fitted, on calibration, pooled over live instances, applied per
+pair on the test fold. 22,313 test instances across the pairs with enough data:
+
+| policy | accuracy | against always-extend |
+|---|---|---|
+| always extend | 0.6409 | — |
+| decline 2% | 0.6390 | **−0.0020** |
+| decline 5% | 0.6385 | −0.0024 |
+| decline 10% | 0.6318 | −0.0091 |
+| decline 20% | 0.6199 | −0.0210 |
+| **oracle** | **0.6818** | **+0.0408** |
+
+**The ceiling is +4.1 accuracy points and the fitted predictor is negative at every decline rate.** Declining costs
+tokens nothing — it spends less, not more — so this is not an exchange where accuracy was traded for cost. The gate is
+simply worse than not having it.
+
+**The reason is arithmetic and it generalises past this predictor.** An item declined is one of three things: it would
+have been **broken** by extension, in which case declining gains a point; it would have been **fixed**, in which case
+declining loses one; or extension would have changed nothing, in which case declining is free. So a harm-avoidance gate
+breaks even only when, among the items it declines, **harm cases outnumber help cases**. The base rates here are
+**harm 4.4% against help 14.1%** — a **3.2 : 1 disadvantage** the predictor must invert before its first point of gain.
+An AUC of 0.5531 concentrates harm cases in its top slice by nowhere near a factor of 3.2, so every item it declines is
+in expectation a loss.
+
+**This is the condition any such gate has to state, and none of the entries above stated it.** The whole framing of
+"predict harm, decline those items" was pursued from F78 onward on the strength of the oracle's room, and the room is
+real — +4.1 points — but the entry price is not an AUC above chance, it is **a precision on harm that beats the local
+help-to-harm ratio.** Writing that down turns a search for a better signal into a check that can be run before the search:
+measure the ratio, divide, and see what precision is required. Here it would have said 3.2:1 from the first day, and
+nothing this project has produced comes close.
+
+**Where this leaves the thinking-budget line, and it is a clean close.**
+
+| claim | status |
+|---|---|
+| thinking is worth +20.6 accuracy points at 170x the tokens | measured (F73) |
+| the readout after a short think orders items by whether continuing helps, AUC 0.6803 | measured (F76, F80) |
+| that ordering buys a **token saving**: 32% fewer for 0.6 points | measured (F80) |
+| accuracy requires declining items extension would break | structural (F78) |
+| harm is predictable at AUC 0.5531 | measured, pre-registered (F84) |
+| **a harm-avoidance policy loses accuracy at every rate** | **measured (this entry)** |
+| the entry price for such a policy is precision beating a 3.2 : 1 base-rate ratio | **derived (this entry)** |
+
+**So the deployable result of the whole thinking line is the token saving**, and the accuracy story is closed with a
+number that says why: not a weak signal, but a threshold that a weak signal cannot clear and that was never computed
+until now.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
