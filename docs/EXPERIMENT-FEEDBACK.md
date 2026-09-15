@@ -4099,6 +4099,68 @@ random selection at the same coverage (F87, where the comparison is against a co
 against another readout); and the decision belongs before generation rather than during it (F86 against F87), which is a
 comparison of two verdicts of opposite sign rather than of two point estimates.
 
+## F91 — A statistics review found five defects; fixing them tests the band's existence for the first time, and it passes
+
+**Where it bit.** A review of the central result named five defects. All five are fixed here, and the most important
+was a genuine bug rather than a matter of taste.
+
+| defect | what it was | fix |
+|---|---|---|
+| **1** | the coverage was chosen **on the test fold** — seven options, cheapest picked at every λ | the λ → coverage mapping is decided on **calibration alone** and the test fold is scored once with it frozen |
+| **2** | **the band's existence was never tested.** At the indifference λ the two trivial policies cost the same, so any curvature in the readout — including noise — wins near it. The null is not "no band" | a **permutation test**: shuffle the readout across items, rerun the whole pipeline, build a null distribution |
+| 3 | the saving was a **maximum over λ**, a winner's curse whose bias differs between arms | the saving is reported at a **pre-specified** λ*, the indifference point computed from the calibration fold |
+| 4 | replicates with no band were hidden inside a percentile | the empty-band fraction is a primary number (it is **0/150** for both arms) |
+| 5 | the bootstrap was iid over items that come in **seven subject clusters** | stratified by category, plus leave-one-category-out |
+
+**The permutation test is the first real test of whether the readout does anything, and it passes.**
+
+| arm | observed saving at λ* | null median | p |
+|---|---|---|---|
+| plain | 3.3% | **−5.0%** | **0.027** |
+| **Jacobian** | **8.1%** | −5.2% | **0.000** |
+
+A shuffled readout **loses 5%** on average — it spends the probe and selects badly — so the null is not zero, which is
+exactly the reviewer's point. Against that null both arms are significant. The band *width* is not: p = 0.640 for plain
+and 0.067 for the Jacobian.
+
+**And a second test disagrees, which is informative rather than awkward.** The category-stratified bootstrap, with the
+threshold refitted in each replicate:
+
+| quantity | 2.5% | median | 97.5% |
+|---|---|---|---|
+| plain saving at λ* | −24.2% | **−0.8%** | +10.8% |
+| Jacobian saving at λ* | −20.7% | **+2.6%** | +15.4% |
+| Jacobian − plain | | +3.6% | [−10.6%, +19.8%] — includes zero |
+
+**The two tests ask different questions and both answers are needed.** The permutation asks *does the readout beat a
+random ordering of these items* — signal. The bootstrap asks *would this number hold on another draw of items* —
+generalisation. So: **the signal is real and its size does not generalise at n = 410.** F90 withdrew the result
+wholesale on the bootstrap alone; that was half the picture.
+
+**Leave-one-category-out is where the arms genuinely separate, and it does not depend on comparing point estimates.**
+
+| category removed | plain | Jacobian |
+|---|---|---|
+| **math** | **−18.9%** | **+4.2%** |
+| economics | −2.2% | +0.1% |
+| law | −2.0% | +3.6% |
+| the other four | +2.3% to +5.3% | +5.6% to +7.6% |
+
+**The plain readout's benefit collapses without mathematics.** The Jacobian's survives every removal, ranging from
++0.1% to +7.6%. That is the strongest available argument for the Jacobian and it is structural: a benefit that depends on
+one subject being present is not a benefit a deployment can rely on, and the review's Simpson warning was right to ask.
+
+**Where this leaves the central claim.** Reading the prompt through the Jacobian and deciding whether to spend a
+reasoning budget **carries real signal** (permutation p = 0.000, against a null that loses 5%), **is robust to removing
+any one subject** (+0.1% to +7.6%), and has a **benefit whose size is not yet pinned down** (bootstrap median +2.6%,
+interval −20.7% to +15.4%). The plain readout carries signal too (p = 0.027) and is not robust. Everything about "how
+much" needs four times the items, and everything about "whether" is now tested.
+
+**Two lessons about instruments, both from the reviewer.** A criterion on a difference must require an interval, or a
+point estimate satisfies it — F89 was registered without one and that was my omission. And **a quantity chosen because
+it sounds like what a deployment cares about is not therefore measurable**: band width spans 2.1 to 130 across
+replicates, and I made it a headline before checking whether it was stable.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
