@@ -3903,6 +3903,59 @@ where the J-lens beats a logit lens by 0.0897 and a random Jacobian by 0.0829 �
 that costs nothing because the prefill is paid regardless. What does not survive is any policy built on top of it that
 has been checked on a single cost axis, because none of them has been, and the one checked here is dominated.
 
+## F87 — The combination works, in a band: deciding think-or-not from the prompt wins where the mid-generation gate lost
+
+**Where it bit.** The two pieces had been measured on different models and never together: a readout at the prompt that
+says whether the cheap path will be wrong, and a workload-level number that says whether a reasoning budget is worth its
+tokens. This runs them as one policy on **410 items of one model** — read the prompt, decide per item whether to think,
+spend nothing on the decision because the prefill is paid regardless.
+
+Base facts: no thinking **0.5317**, full thinking **0.7415**, thinking **fixes 107 items and breaks 21**, and costs a
+mean of **696 tokens**.
+
+| policy | accuracy | tokens | against random selection at the same rate |
+|---|---|---|---|
+| never think | 0.5178 | 0 | — |
+| readout picks 17% | 0.5810 | 107 | ties the 97.5th percentile — does not beat |
+| **readout picks 28%** | **0.6126** | 185 | 0.5805 mean, 0.6087 ceiling — **beats** |
+| **readout picks 48%** | **0.6601** | 330 | 0.6251 mean, 0.6561 ceiling — **beats** |
+| readout picks 70% | 0.6680 | 489 | does not beat |
+| always think | 0.7391 | 682 | — |
+
+On the single cost axis — `tokens + λ · (1 − accuracy)`, λ in tokens per avoided error — the regimes are:
+
+| λ | winner |
+|---|---|
+| below **1,691** | never think |
+| **1,691 – 2,466** | **readout picks 17%** |
+| **2,466 – 3,053** | **readout picks 28%** |
+| **3,053 – 4,460** | **readout picks 48%** |
+| above **4,460** | always think |
+
+**The readout policy wins in a band roughly 2.6× wide in λ, and the saving at its best is about 8% of total cost** — at
+λ = 3,000 it costs 1,347 against 1,447 for never thinking and 1,465 for always thinking. Outside the band it wins
+nothing, and the honest form of the result is the band together with its width, because a deployment whose λ sits outside
+it should use neither the readout nor a gate.
+
+**And this is the exact opposite of F86, for a reason that is the whole point.** F86 gated a *mid-generation* decision —
+after 64 tokens of thinking, extend to 256 or not — and found it dominated at every λ. Here the decision is made *at the
+prompt*, before any token exists. Same model, same readout features, same cost axis, opposite verdicts:
+
+| where the decision is made | result |
+|---|---|
+| after generation has started | **dominated at every λ** (F86) |
+| **before generation starts** | **wins in a band** (this entry) |
+
+So the value of the readout is specifically that it is available **before generating**, and that is not a framing
+preference — it is the difference between a policy that wins somewhere and one that wins nowhere. Every entry from F76 to
+F86 was measuring the mid-generation version, which is why they accumulated negatives.
+
+**What is still not shown.** The band's location is a property of this model and this item set; another deployment
+re-measures λ and finds its own boundaries. The readout used here is the plain next-token readout, not the J-lens, so
+whether the Jacobian widens the band is untested — F48 measured the J-lens ahead on the difficulty target by 0.0897, and
+this policy is fitted on "thinking will fix it", which is closer to uplift. Testing the J-lens in this policy is the
+obvious next measurement and it needs only the Jacobian for this model, which does not exist yet.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
