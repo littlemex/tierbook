@@ -3997,6 +3997,54 @@ running, and because the corrected numbers on 90 shared items say something on t
 sample-dependent at this size**, which means F87's 2.64× and 7.9% need the same treatment when the run finishes — quoted
 against the same items or not quoted at all.
 
+## F89 — The Jacobian doubles the band and raises the saving: reading through it before generating is the deployable result
+
+**Where it bit.** F87 measured the policy the whole line had been looking for — read the prompt, decide per item whether
+to spend a reasoning budget, pay nothing for the decision because the prefill is paid regardless — and found it wins on
+a single cost axis in a band of λ. But the readout it used was the **plain next-token** one, while F48 had measured the
+**Jacobian lens** ahead of that on the difficulty target by 0.0897. So a Jacobian was built for this model at its own
+amplitude, its digest checked against the served weights, and the same 419 items rerun with the readout passing through
+it. The criterion was registered before the data existed: the Jacobian counts only if it **widens the band** or **raises
+the best saving**.
+
+Both arms on the **same 410 items**, with identical base rates confirming it — no thinking **0.5178**, full thinking
+**0.7391**, **682** tokens — so the readout is the only thing that differs:
+
+| | plain next-token readout | **readout through the Jacobian** |
+|---|---|---|
+| **band width in λ** | 2.64× (1,713 – 4,519) | **5.28× (1,817 – 9,591)** |
+| **best saving** | 7.9% | **10.0%** |
+| verdict | | **PASS on both** |
+
+**The policy table shows where it comes from:**
+
+| readout | coverage | accuracy | tokens |
+|---|---|---|---|
+| plain | 70% | 0.6680 | 489 |
+| **Jacobian** | **65%** | **0.7154** | **459** |
+| always think | 100% | 0.7391 | 682 |
+
+**The Jacobian gate reaches 0.7154 on 459 tokens where the plain readout's best was 0.6680 on 489** — 4.7 accuracy points
+higher at slightly fewer tokens, and within 2.4 points of thinking on everything at **two thirds of the tokens**.
+
+**What this settles about the whole line.** The value of the Jacobian readout is what the user stated in two sentences
+and what nine entries of mine had obscured: **it tells you, before a single token is generated, whether the cheap path
+will do.** Measured against the plain readout on the one axis a deployment can act on, it **doubles the range of
+exchange rates where the decision is worth making** and raises the best saving by a fifth. Every negative in F67 through
+F86 was measuring either the wrong target (uplift rather than difficulty) or the wrong decision point (mid-generation
+rather than pre-generation), and neither error touches this measurement.
+
+**What is not established.** Both figures are point estimates from one run of one model on one item set with one fold
+split; there is no interval on the band width or the saving, and producing one means repeating the pair of runs rather
+than resampling within them. The band's **location** is a property of the workload — a deployment measures its own λ and
+finds its own boundaries — and only the *shape* of the result transfers: that a Jacobian readout at the prompt beats a
+plain one, and that both beat having no gate somewhere in the middle of the λ range.
+
+**And the practical statement, in the form the ledger's summary already uses.** Read the prompt through the Jacobian.
+Send the items it marks easy straight to the cheap path. Spend the reasoning budget on the rest. That is worth **10% of
+total cost** at the best exchange rate on this workload, over a **5.3-fold range** of exchange rates, and it costs nothing
+to decide.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
