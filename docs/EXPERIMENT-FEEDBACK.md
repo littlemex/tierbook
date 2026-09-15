@@ -3571,6 +3571,57 @@ gains require predicting harm, harm is unpredictable from the present readout at
 travel over the last k tokens rather than the state now**, which is not in this data and needs the residual captured at
 several points in the trace.
 
+## F81 — The trajectory moves the harm number off the floor, and both directions miss the floor for opposite reasons
+
+**Where it bit.** F79 and F80 settled that harm — continuing turns a right answer wrong — is unpredictable from the
+readout at the probe budget, and offered a reading: harm is a property of where the reasoning is going, and the readout
+is four scalars of where it is now. That reading names a feature set, and **the feature set was already in the data**.
+Each item has a readout at every budget, so the differences between consecutive readouts below the probe describe how the
+state has been moving. Nothing new had to be captured.
+
+Pooled over budget pairs, split by item, 14,812 instances with 627 harm cases (260 in calibration, 367 in test):
+
+**HARM**, against the stronger control of budgets alone at 0.5238:
+
+| features | AUC | difference | verdict |
+|---|---|---|---|
+| **the level alone** (what F79 and F80 tested) | **0.5083** | **−0.0155** | FAIL — *worse than knowing nothing* |
+| level + velocity | 0.5429 | +0.0191 [−0.0069, +0.0479] | FAIL |
+| **level + 3 differences** | **0.5466** | **+0.0228 [−0.0027, +0.0491]** | FAIL — the interval grazes zero |
+| **3 differences, level removed** | 0.5415 | +0.0177 [−0.0091, +0.0431] | FAIL |
+
+**HELP**, against budgets alone at 0.6710:
+
+| features | AUC | difference | verdict |
+|---|---|---|---|
+| the level alone | 0.6781 | +0.0071 [+0.0033, +0.0117] | FAIL |
+| **level + 3 differences** | **0.6889** | **+0.0179 [+0.0106, +0.0256]** | FAIL |
+
+**Both directions miss the registered floor, for opposite reasons, and that is worth stating precisely.** The help
+direction has a **solid interval and too small a magnitude** — +0.0179 against a floor of 0.02, with the interval running
+from +0.0106 to +0.0256, so the effect is real and under-sized. The harm direction has **the magnitude and not the
+interval** — +0.0228 clears the floor while the interval reaches −0.0027. Neither is a claim. Recording them as PASS by
+softening the floor is the failure this ledger has avoided fifteen times, and recording them as "nothing" would discard
+the first movement the harm number has shown.
+
+**The structural fact inside the harm column is the reason to keep going.** The level is **worse than the control**
+(0.5083 against 0.5238) — knowing where the readout is actively misleads about harm — while the motion alone is better
+than the level (0.5415). So if harm information exists anywhere in this data, it is in **the direction of travel and not
+the position**, which is exactly what F79 and F80 predicted from the shape of the problem rather than from a number. A
+prediction made for structural reasons and then borne out weakly is a different thing from a hypothesis fitted after the
+fact, and it is why this is worth one more measurement instead of a conclusion.
+
+**What that measurement is.** Only 5,290 of the 14,812 instances have three differences available, because a probe at a
+low budget has few budgets beneath it. A **finer grid** below 256 — say 24, 48, 96, 192 — would give every probe more
+history at no extra generation cost, since the trace is generated once and every budget is a cheap forward pass over its
+prefix. That is the cheapest thing that could turn +0.0228 [−0.0027, +0.0491] into a decided number, and it needs no new
+model, no new items, and no new capture design.
+
+**One implementation note carried forward.** F75 recorded the readout's fourth feature as a constant zero, and the fix
+attempted after it was also wrong: it took the rank of the argmax token, which is zero by definition. Every number in
+F73 through this entry rests on **three** live features. The correct fourth feature is the rank of the best answer-letter
+token — how far down the distribution the most likely letter sits — which is meaningful and is not what was computed.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
