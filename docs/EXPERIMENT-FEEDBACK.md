@@ -3659,6 +3659,54 @@ other by its magnitude. The denser grid roughly triples the instances that have 
 feature, so both should move. If harm stays at chance with that, the reading offered in F79 and F80 — that harm is a
 property of the trajectory — will have been given its best shot and failed it.
 
+## F83 — Removing instances where extension cannot change anything turns both directions into a PASS, and the ordering of that decision matters
+
+**Where it bit.** A trace that ended at 200 tokens returns the same answer at every budget above 200. So for an
+instance whose probe budget already exceeds the trace length, "extending fixes it" and "extending breaks it" are
+**structurally zero** — not measured as zero, impossible. Pooling those in inflates the budget features, which partly
+encode "this instance is already decided", and dilutes the readout, which is being asked to predict an outcome that
+cannot occur.
+
+Restricting to **live** instances — the trace still running at the probe budget — removes 306 of 14,812 instances, 2%:
+
+| direction, level + history + budgets | all instances | **live instances only** |
+|---|---|---|
+| **HARM** | 0.5466, **+0.0228 [−0.0019, +0.0500] FAIL** | **0.5541, +0.0272 [+0.0029, +0.0503] PASS** |
+| **HELP** | 0.6889, **+0.0179 [+0.0108, +0.0261] FAIL** | **0.6962, +0.0208 [+0.0140, +0.0285] PASS** |
+
+**Both clear the registered floor with intervals above zero, and the harm direction passes for the first time.** A 2%
+removal moving a result that much is not surprising once the removed instances are described: their labels are
+guaranteed zero, so in the fit they were pure noise.
+
+**And the ordering of this decision is a problem I am not going to write around.** The restriction was applied **after**
+seeing the earlier FAIL. That is the shape of a post-hoc analysis choice, and this ledger has fifteen withdrawals in it
+precisely because results that arrive that way are unreliable. Two things can be said in its defence and neither is
+sufficient:
+
+- the restriction follows from a **structural** argument about what extension can do, not from inspecting the outcome;
+- it is the same restriction anyone would impose having thought about it first.
+
+Neither changes the fact that I did not think about it first. So the finding is recorded as **provisional**, and the
+proper test is stated now rather than later.
+
+**Pre-registered here, before the data exists.** A run with **14 budgets — 0, 12, 24, 36, 48, 64, 96, 128, 192, 256,
+384, 512, 768, 1024 — over 419 items** is in flight and will finish with **four** live readout features rather than
+three (F82). On that data, before any of it is inspected:
+
+1. the analysis is **live instances only**, by the definition above, with no unrestricted variant reported as the
+   headline;
+2. the quantity is held-out AUC for harm and for help, pooled over budget pairs, **split by item**;
+3. the controls are budgets alone and a shuffled-label fit, and the comparison is against **whichever is stronger**;
+4. the floor is **0.02 with the bootstrap interval above zero**, unchanged;
+5. **PASS on harm at that floor confirms this entry. FAIL withdraws it**, and the reading offered in F79 and F80 — that
+   harm lives in the trajectory rather than the state — will have been given a dense grid, a fourth feature, and a
+   correctly-restricted sample, and failed with all three.
+
+**Why this is worth the ceremony.** Harm is the only direction that can buy accuracy (F78), the room for it is +3.8
+points at the best operating point (F80), and every other feature family tried in this project has come back at chance.
+A first PASS on it is either the most useful result here or an artefact of a choice made in the wrong order, and the
+only thing that separates those is a test declared in advance.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
