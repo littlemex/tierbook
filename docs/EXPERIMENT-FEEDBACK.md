@@ -3505,6 +3505,72 @@ so far rather than the state now, since harm is a property of where the reasonin
 the present distribution; the direction of travel over the last k tokens is a different object and is not in this data.
 That is the next thing worth capturing, and it needs the residual at several points in the trace rather than one.
 
+## F80 — The confirmation at 529 items: the signal reaches further than claimed, harm is settled at chance, and the gate is cheaper than it looked
+
+**Where it bit.** F76 to F79 rested on 230 items, and every entry named what a larger sample would decide. The
+confirmation ran at **529 items** — 333 traces concluding within the cap and 196 hitting it — and it changes three
+numbers, in three different directions.
+
+**The signal reaches further than F76 concluded.** Held-out AUC for "extending from p to e fixes this item", against the
+same pipeline on shuffled labels:
+
+| transition | fixable (test) | AUC | shuffled | difference | verdict |
+|---|---|---|---|---|---|
+| **64 → 256** | 47 | **0.6803** | 0.3944 | **+0.2858 [+0.1527, +0.4149]** | **PASS** |
+| **128 → 512** | 58 | **0.6059** | 0.4983 | **+0.1077 [+0.0373, +0.1779]** | **PASS** (failed at 230 items) |
+| 256 → 1024 | 46 | 0.5942 | 0.4923 | +0.1019 [−0.0190, +0.2232] | FAIL, and the interval nearly excludes zero |
+
+F76 said the signal was "specific to early positions" on the strength of one passing transition and two failing ones. At
+double the sample **128 → 512 passes**, with entropy's coefficient at **+0.268** — its largest anywhere. So the correct
+statement is **early to middle**, and the failure at 256 → 1024 may still be power rather than absence: its interval runs
+from −0.019 to +0.223.
+
+**The budget curve is now monotone in both groups, which withdraws a reading twice made.** At 230 items the truncated
+group appeared to peak at 256 and fall by the cap, and both F74 and this ledger's summary of it noted the possibility
+that over-long truncated traces answer worse. At 529 the truncated group rises monotonically as well — 0.3827 → 0.4337 →
+0.4439 → **0.4796** — so **truncating never helps, in either group**, and the earlier peak was noise resolved by sample
+size.
+
+**The gate is materially cheaper than it looked.**
+
+| policy | accuracy | mean tokens |
+|---|---|---|
+| answer with no thinking | 0.5222 | 0 |
+| extend everything to 256 | 0.6297 | 256 |
+| think fully on everything | 0.7278 | 1024 |
+| **gated: probe 64, extend 57%, discard the partial trace** | **0.6234** | **173** |
+| oracle gate at the same coverage | **0.6677** | 173 |
+
+**32% fewer tokens for 0.6 accuracy points** against extending everything, where the 230-item measurement said 36% for
+2.9 points. And the oracle at that coverage now reaches 0.6677 against always-extend's 0.6297 — **+3.8 points of room**,
+where at 230 items the oracle and always-extend were within 0.007 of each other. So F77's "a perfect selector is worth
+0.007" was a small-sample figure and the room is real.
+
+**But no selector captures it, and this is now settled rather than underpowered.** Pooling the 26 budget pairs by item
+gives **14,812 instances with 627 harm cases — 260 in calibration, 367 in test**:
+
+| direction | readout + budgets | budgets alone | shuffled | difference |
+|---|---|---|---|---|
+| help | 0.6781 | 0.6710 | 0.3876 | +0.0071 [+0.0033, +0.0118] — **interval above zero, magnitude below the registered 0.02 floor: FAIL** |
+| **harm** | **0.5083** | 0.5238 | 0.5236 | −0.0155 [−0.0316, +0.0014] **FAIL** |
+
+**Harm is at chance with 260 calibration positives.** Six features on 260 positives is a fit that works when there is
+something to find. F78 said the harm result might be a sample artefact and F79 said 113 positives had removed that
+excuse; 260 removes it beyond argument. And the sweep agrees: the best advantage any fitted selector achieves at any
+operating point is **+0.0032**, against oracle room of up to +0.0506.
+
+**The help direction pooled deserves its own sentence, because the honest reading is awkward.** The readout adds
+**+0.0071 with an interval entirely above zero** — a real effect — and the pre-registered floor was 0.02, so it is
+recorded as FAIL. Both facts belong in the record: the effect exists and is too small to have been worth the floor that
+was set for it. Restating the floor now would be the failure this project has avoided fifteen times.
+
+**Where the thinking-budget line stands.** A gate on the entropy after a short think orders items well enough to cut
+token spend by roughly a third at a cost under one accuracy point, and it works from 64 tokens through 128. Accuracy
+gains require predicting harm, harm is unpredictable from the present readout at a sample size that settles it, and the
++3.8 points of oracle room is therefore unclaimed. The remaining candidate is the one F79 named: **the direction of
+travel over the last k tokens rather than the state now**, which is not in this data and needs the residual captured at
+several points in the trace.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
