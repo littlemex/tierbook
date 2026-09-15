@@ -15,6 +15,30 @@ because a later experiment showed the requirement was wrong.
 
 ---
 
+## What the whole thing amounts to, in two sentences
+
+The user's own phrasing, which is clearer than anything in the entries below and is retained verbatim:
+
+> **j score は生成せずに間違えそうかどうかを知ることができるので、簡単なタスクはそのまま箱に回答させることができる。thinking の有無は精度とコストからトークン費用で自動判定できる。**
+
+Both are supported by measurement.
+
+**The first**: a readout taken while the prompt is being read — before a single token is generated, so the reading is
+free because the prefill is paid regardless — separates items the cheap path will get wrong from items it will get
+right. Passing the easier half straight through gives **0.8571 on that half against the box's own 0.7853** (F51), and
+the J-lens readout beats a plain next-token readout by 0.0897 and a random Jacobian by 0.0829 on the same target (F48).
+
+**The second**: whether to spend a reasoning budget is settled by one number, and the number comes from measurement
+rather than from an opinion. With cost per query written as `tokens + λ · (1 − accuracy)`, where λ is what one avoided
+error is worth in tokens, the winning policy is **answer immediately below λ ≈ 1,850 and think below λ ≈ 9,253**
+(F86). At a dollar per million output tokens that boundary is **$0.0019 per avoided error**. It is a property of the
+model and the workload, so a different deployment re-measures it.
+
+**The boundary the phrasing above correctly respects.** The readout says the cheap path *will be wrong*. It does not
+say the expensive path *will be right* — those are different quantities and the second is the one escalation needs
+(F67, F68). So "let the easy ones through" follows from the measurement and its converse, "send the hard ones up",
+does not. Every failed entry below is some version of assuming it did.
+
 ## F1 — A tier's recorded outcome does not name the prompt condition it was measured under
 
 **Where it bit.** The J-space routing study, reading the box's residual stream. The stored capture used a terse
