@@ -4161,6 +4161,75 @@ point estimate satisfies it — F89 was registered without one and that was my o
 it sounds like what a deployment cares about is not therefore measurable**: band width spans 2.1 to 130 across
 replicates, and I made it a headline before checking whether it was stable.
 
+## F92 — The base-rate condition is a known likelihood-ratio result, I stated it wrongly, and the theory names the experiment I had not run
+
+**Where it bit.** A theoretical review was asked to check the paper's formalism against the measurements and to say what
+follows. Four corrections and one experiment came back. The experiment is the valuable part, and it explains an empirical
+failure that had been recorded three times without a mechanism.
+
+### The condition I derived is standard, and my wording of it was wrong
+
+F85 derived that a policy declining to extend helps only when harm cases outnumber help cases among the declined, and
+said the predictor must "invert a 3.2 : 1 base-rate disadvantage" — phrased as a **precision** requirement. The correct
+general form is a **likelihood ratio**. With `π(X) ∈ {0,1}` the decision to spend the budget, the rejection set
+`S = {π = 0}`, and potential outcomes `Y(0), Y(1)`:
+
+    V(π) − V(π_all) = Pr(S, H) − Pr(S, B)     where H = {Y(0)=1, Y(1)=0}, B = {Y(0)=0, Y(1)=1}
+
+so the rejection set helps **iff** `Pr(H|S) > Pr(B|S)`, which by Bayes is
+
+    **Pr(S | H) / Pr(S | B)  >  Pr(B) / Pr(H)**
+
+**So the requirement is on the rejection RATES, not on precision.** The correct statement of my own number: the rule must
+**reject harmful items at more than 3.2× the rate at which it mistakenly rejects beneficial ones.** Precision over the
+whole population is not the quantity — with a large no-change group, accuracy can be made arbitrarily high while the
+condition fails.
+
+**And with cost included it is the textbook individualized treatment rule**: spending is optimal iff
+`τ(X) = E[Y(1) − Y(0) | X] > c(X)`. My λ sweep is that rule with `c` expressed in tokens, which means the whole cost-axis
+analysis has a name and a literature: **Manski (2004), *Statistical Treatment Rules for Heterogeneous Populations*,
+Econometrica; Qian & Murphy (2011), Annals of Statistics; Zhao et al. (2012), *Outcome Weighted Learning*, JASA;
+Kitagawa & Tetenov (2018), *Who Should Be Treated? Empirical Welfare Maximization*, Econometrica; Athey & Wager (2021),
+Econometrica; Frangakis & Rubin (2002), *Principal Stratification*, Biometrics.**
+
+**One observation from the review that changes what my statistical problem is.** Because both paths are run
+deterministically on the same items, **both potential outcomes are directly observed** — so partial identification, the
+usual obstacle in this literature, is not my problem. What is left is generalisation to a new prompt population, which is
+precisely what F90 and F91 found to be unresolved. The framework says my difficulty is the ordinary one and not the deep
+one.
+
+### Three corrections to how I described the mechanism
+
+- **My linear-closure argument was right in outcome and wrong in wording.** I wrote that only a nonlinear readout "can
+  say something new". The sharper statement: `J` is a deterministic function of `h`, so it **adds no information at all**;
+  what it changes is *readability* under a particular nonlinear inductive bias. "New information" was never available to
+  it.
+- **High entropy is not a measurement of "the internal state is unsettled".** Writing `N` for the RMSNorm with gain
+  `D_g`, the J-lens logits are `z_J(h) = W_U N(Jh) ≈ √d · W_U D_g · Jh/‖Jh‖`, so the margin between tokens `i` and `j` is
+  `√d (w_i − w_j)ᵀ D_g (Jh/‖Jh‖)`. **What `J` changes is the direction** `h/‖h‖ → Jh/‖Jh‖`, and entropy aggregates that
+  direction's alignment with the vocabulary difference directions `D_g(w_i − w_j)`. So high entropy means **the direction
+  predicted to reach the output has not yet produced a vocabulary margin** — a statement about the predicted endpoint,
+  not about deliberation.
+- **The rank-448 truncation has no general sign on entropy.** I had assumed it would bias one way; it does not, and
+  deciding needs a rank sweep and several independent random sketches.
+
+### The experiment the theory names, and why it explains a three-times-repeated failure
+
+**Difficulty is a property of `Y(0)`. Uplift is `Y(1) − Y(0)`.** The Jacobian I built is `J^(0)` — the sensitivity of the
+**short** path's endpoint. It cannot identify a difference involving the long path's endpoint, and that is not a weakness
+of the estimate but a statement about what it is. F67, F68 and F84 each recorded that the readout predicts difficulty and
+not uplift; none of them had this reason.
+
+So: build **two** Jacobians from the same pre-generation state, one per continuation protocol —
+`J^(0)` under the direct-answer template and `J^(1)` under the thinking-enabled template — and score with
+
+    s(h) = H(P_0(h)) − H(P_1(h))     where P_a(h) = softmax(W_U N(J^(a) h))
+
+**the entropy drop the long path is predicted to produce.** That targets `Y(1) − Y(0)` directly instead of `Y(0)`, and it
+is available before a token is generated, which is the property the whole line rests on. Fixing the score in advance
+matters — the review offered Jensen-Shannon divergence and margin change as alternatives, and choosing among them after
+seeing results is the selection failure this ledger has recorded twice.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
