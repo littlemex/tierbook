@@ -3707,6 +3707,61 @@ points at the best operating point (F80), and every other feature family tried i
 A first PASS on it is either the most useful result here or an artefact of a choice made in the wrong order, and the
 only thing that separates those is a test declared in advance.
 
+## F84 — The pre-registered test passes: harm is predictable. Entropy carries it, the fourth feature contributes nothing, and help does not replicate
+
+**Where it bit.** F83 found a first PASS on the harm direction after restricting to instances where extension can change
+the answer, flagged that the restriction was applied **after** seeing a failure, and pre-registered five conditions for a
+test on data that did not yet exist. That data exists now: **410 items, 14 budgets, four live readout features, 36,266
+live instances, 1,594 harm cases with 683 in calibration.**
+
+**The registered test, exactly as declared:**
+
+| direction | features | AUC | difference over the stronger control | verdict |
+|---|---|---|---|---|
+| **HARM** | **level + budgets** | **0.5531** | **+0.0392 [+0.0295, +0.0493]** | **PASS** |
+| **HARM** | level + history + budgets | 0.5475 | +0.0336 [+0.0216, +0.0455] | **PASS** |
+| HELP | level + budgets | 0.6738 | +0.0115 [+0.0068, +0.0161] | FAIL |
+| HELP | level + history + budgets | 0.6747 | +0.0124 [+0.0068, +0.0176] | FAIL |
+
+**Harm passes on independent data, by a wider margin than the provisional finding (+0.0392 against +0.0272), with 683
+calibration positives.** F83's provisional result on harm is confirmed. Its result on help is **not**: help fell from
++0.0208 to +0.0115 and now misses the floor, so that half of F83 is withdrawn.
+
+**Three things I predicted about the mechanism, and two were wrong.** These are diagnostics, run after the registered
+test, and are labelled exploratory:
+
+| leave one feature out | AUC | change |
+|---|---|---|
+| **without entropy** | 0.5214 | **−0.0317** |
+| without maximum probability | 0.5465 | −0.0066 |
+| without verbaliser log-odds | 0.5469 | −0.0062 |
+| **without the fourth feature** | 0.5563 | **+0.0032** |
+| **without `log extend`** | **0.5810** | **+0.0279** |
+| budgets alone, for reference | 0.5139 | |
+
+- **Wrong: I attributed the change from F83 to the newly-live fourth feature.** Removing it *improves* the fit by
+  +0.0032 — it contributes nothing. Whatever moved the result between F83 and here is the denser grid and the larger
+  sample, not the feature I had just spent three attempts fixing.
+- **Wrong: I expected the trajectory to be the carrier**, on the structural argument in F79 and F80 that harm is a
+  property of where the reasoning is going. With four features and a dense grid the **level** passes at +0.0392 and
+  adding history *lowers* it to +0.0336. The structural argument was appealing and the data does not need it.
+- **Right, and it is the same feature as before: entropy carries harm**, the largest leave-one-out drop by a factor of
+  five. Entropy also carries the help direction (F76, coefficient +0.186). **One quantity, both directions** — a readout
+  still spread out means both that continuing can help and that continuing can hurt, which is what "unsettled" ought to
+  mean and is a tidier story than two separate signals.
+
+**One diagnostic that is not a result and must not be read as one.** Dropping `log extend` from the full model raises the
+AUC to **0.5810**, +0.0671 over budgets alone. That is a feature dropped after inspecting leave-one-out, so it is
+exploratory; the registered number is +0.0392. It does say something worth following up: a budget feature is actively
+misleading the fit, which usually means collinearity with what the readout already encodes.
+
+**And the honest size of it.** An AUC of 0.5531 is statistically solid at this sample and **weak as a predictor**. F78
+established that the accuracy available from avoiding harm is +3.8 points at the best operating point, and a 0.55-AUC
+selector will capture a small fraction of that. **Confirming that harm is predictable is not the same as showing a gate
+that earns accuracy**, and the next thing owed is the policy table for the harm direction — what a threshold on it
+actually earns after paying the probe — which is the same discipline F77 applied to the help direction and which turned
+an AUC into a 0.007-point ceiling.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
