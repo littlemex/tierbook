@@ -4230,6 +4230,72 @@ is available before a token is generated, which is the property the whole line r
 matters — the review offered Jensen-Shannon divergence and margin change as alternatives, and choosing among them after
 seeing results is the selection failure this ledger has recorded twice.
 
+## F93 — Reported as a cost-effectiveness frontier: the numbers reconcile, the unit joins the two analyses, and the selector closes 12 to 57 percent of the available gap
+
+**Where it bit.** Two reviews converged on the reporting rather than the result. A band width in λ is a geometric
+summary nobody deploys against; a percentage saving hides its denominator; and one review found that **my integers and my
+accuracies did not reconcile**. All three are fixed here, and one of them was a real error.
+
+### The error: counts from the whole sample, rates from the test fold
+
+I had written "thinking fixes 107 and breaks 21" beside "0.5178 → 0.7391". Those come from different denominators —
+107 and 21 are over all 410 items, the accuracies are the test fold's 253. Reported on one fold:
+
+| set | n | answer directly | think fully | fixes | breaks | net |
+|---|---|---|---|---|---|---|
+| all items | 410 | 218/410 = 0.5317 | 304/410 = 0.7415 | 107 | 21 | 86 = +0.2098 |
+| **test** | **253** | **131/253 = 0.5178** | **187/253 = 0.7391** | **68** | **12** | **56 = +0.2213** |
+
+On the test fold alone the counts and the rate agree: 56/253 = +0.2213. **Every accuracy in this entry is an integer over
+253.**
+
+A second objection did not hold: the cost was said to use the median 682 tokens. The code multiplies **per-item** tokens
+by the selection mask, so the expected cost is a per-item mean; it was my prose that quoted a median as if it were the
+cost. Two related facts from checking it: trace length correlates **+0.1987** with the direct path being wrong, and only
+**−0.0557** with thinking fixing the item — **hard items do have long traces, and the items thinking repairs are not the
+long ones.**
+
+### The frontier, and a unit error in my first version of it
+
+The standard object is incremental cost against incremental effect, dominated points removed, with the ratio between
+adjacent efficient points. My first version divided **per-item** tokens by a **count** of extra correct answers, which is
+not a unit of anything. Corrected, the ratio is total tokens per additional correct answer — **and that is the same unit
+as the exchange rate λ**, which is how the frontier and the λ sweep turn out to be one statement.
+
+| from → to | extra tokens per item | extra correct | **tokens per additional correct answer** |
+|---|---|---|---|
+| answer directly → think 9% | 63.9 | 7 | 2,356 |
+| 9% → 16% | 41.5 | 6 | 1,783 |
+| **16% → 21%** | 39.2 | 8 | **1,265** — the cheapest step |
+| 21% → 29% | 55.0 | 6 | 2,364 |
+| 29% → 43% | 98.6 | 11 | 2,312 |
+| **43% → 52%** | 53.9 | 3 | **4,638** — the dearest step |
+| 52% → 66% | 115.3 | 11 | 2,703 |
+| 66% → 77% | 68.4 | 7 | 2,520 |
+
+**A deployment reads this by comparing its own λ against the last column and stopping where the column exceeds it.** At
+the λ* of 3,759 computed earlier, the step from 43% to 52% costs 4,638 and is refused, so the answer is **think for 43%
+of items** — which the λ sweep and the frontier now agree on, because they are the same arithmetic in the same unit.
+
+### The selector's quality, with no λ in it
+
+| coverage | this policy | random at the same rate | oracle at the same rate | **share of the gap closed** |
+|---|---|---|---|---|
+| 9% | 0.5426 | 0.5346 | 0.6008 | 12.2% |
+| 21% | 0.5969 | 0.5636 | 0.7287 | 20.2% |
+| 43% | 0.6628 | 0.6127 | 0.7868 | 28.8% |
+| **77%** | 0.7442 | 0.6888 | 0.7868 | **56.5%** |
+
+**The selector closes 12% to 57% of the distance between random selection and perfect selection**, rising with coverage.
+That is the cleanest single statement of how good the readout is: it is not near-perfect and it is far from useless, and
+the number needs no exchange rate, no threshold and no band.
+
+**What is still owed.** The frontier is a point estimate; F90 and F91 established that the size of the benefit does not
+generalise at this sample, and nothing here changes that. And one review's larger objection stands unaddressed: **tokens
+are a weak proxy for cost**. GPU-seconds, KV-cache occupancy and the effect of long traces on other requests under
+continuous batching are the quantities a serving system feels, and a policy that looks good in tokens can lose in
+GPU-seconds. Measuring that needs load, not more items.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
