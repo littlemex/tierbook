@@ -3622,6 +3622,43 @@ attempted after it was also wrong: it took the rank of the argmax token, which i
 F73 through this entry rests on **three** live features. The correct fourth feature is the rank of the best answer-letter
 token — how far down the distribution the most likely letter sits — which is meaningful and is not what was computed.
 
+## F82 — The fourth feature took three attempts, and the failure that took the engine down was the good one
+
+**Where it bit.** F75 recorded that the readout's fourth feature was a constant zero. The fix after it was also wrong,
+and F81 recorded that too: it took the rank of the **argmax** token, which is zero by definition because nothing outranks
+a maximum. The third attempt is the rank of the most likely **answer letter** — how far down the distribution the best of
+A through J sits — which is near the top when the model is about to answer and far down when it is still writing prose.
+That is a property of the readout the other three features do not carry, and it is now live: values around 10.1 to 11.5
+with a standard deviation of 0.571 across items, where it had been exactly 0.0000.
+
+**Three attempts at one four-line function, and the three failures are three different kinds.**
+
+| attempt | what it did | how it failed | how it was caught |
+|---|---|---|---|
+| 1 | left `rank = zeros_like(...)` as a placeholder and never returned to it | silently constant | a correlation returned `nan` |
+| 2 | ranked the argmax token | **zero by definition** — mathematically guaranteed wrong | the standard deviation was still 0.0000 in the next run |
+| 3 | ranks the best answer letter | live | the standard deviation is 0.571 |
+
+**The third failure mode is the one worth recording.** Referencing `LETTERS` before it was defined took the engine down
+at start-up with a `NameError`, costing one nine-minute launch. That is the **best** of the three failures: it produced no
+number at all. Attempts 1 and 2 each produced a full run of numbers that looked fine, went into two ledger entries, and
+were wrong in a way only a summary statistic could reveal. **A failure that stops the run is cheaper than a failure that
+completes it**, and the ordering of those costs is the argument for computing a standard deviation over every feature
+before trusting a fit — which is now what the harness does.
+
+**What is running.** The deciding measurement F81 named, with a finer budget grid: **14 budgets — 0, 12, 24, 36, 48, 64,
+96, 128, 192, 256, 384, 512, 768, 1024 — dense below 256 where the harm signal showed its first movement.** Only a third
+of the pooled instances previously had three consecutive differences available, because a probe at a low budget has few
+budgets beneath it. Adding budgets costs nothing in generation: the trace is produced once at the cap and each budget is a
+forward pass over its prefix. 419 items, and every number from F73 onward will be recomputable with four live features
+rather than three.
+
+**What that measurement decides.** F81 left harm at +0.0228 [−0.0027, +0.0491] over the budgets-alone control with the
+trajectory included, and help at +0.0179 [+0.0106, +0.0256] — one missing the registered floor by its interval and the
+other by its magnitude. The denser grid roughly triples the instances that have a usable history and adds a fourth live
+feature, so both should move. If harm stays at chance with that, the reading offered in F79 and F80 — that harm is a
+property of the trajectory — will have been given its best shot and failed it.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
