@@ -3956,6 +3956,47 @@ whether the Jacobian widens the band is untested — F48 measured the J-lens ahe
 this policy is fitted on "thinking will fix it", which is closer to uplift. Testing the J-lens in this policy is the
 obvious next measurement and it needs only the Jacobian for this model, which does not exist yet.
 
+## F88 — Comparing two runs on different subsets nearly produced a verdict, and the fix belongs in the harness
+
+**Where it bit.** F87 left one measurement outstanding: the readout it used was the plain next-token one, and the
+Jacobian lens had been measured ahead of that on the difficulty target by 0.0897 (F48). So a Jacobian was built for the
+model the thinking work used, its digest checked against the served weights, and a second budget run started with the
+readout passing through it. The comparison was to be **band width** and **best saving** — the two things a deployment can
+act on — with the criterion registered before the data existed: the Jacobian improves the result only if it widens the
+band or raises the saving.
+
+**And the first comparison compared 410 items against 90.** The Jacobian run was a fifth of the way through, and the
+analysis happily reported:
+
+| | plain | Jacobian |
+|---|---|---|
+| band width | 2.64× | 3.92× |
+| best saving | 7.9% | 4.9% |
+| verdict | | **IMPROVES** |
+
+The base rates give it away: the plain run's items answered 0.5178 without thinking, the Jacobian run's 0.4340. **Those
+are different item sets, not different readouts.** Restricting the plain run to the same 90 items collapses its numbers to
+a band of **1.52×** and a saving of **1.0%** — so 2.64× and 7.9% were properties of the 410-item sample, and the "IMPROVES"
+verdict was comparing subsets.
+
+**The fix is in the harness rather than in my attention.** The comparison now **intersects on question id** before
+analysing either arm, and **withholds the verdict below 150 shared items** rather than printing one. Both are one-line
+changes, and the reason they belong in code is that this failure has a shape: two runs of the same script on the same
+model differ only in the thing under test *until one of them is unfinished*, and an unfinished run looks exactly like a
+finished one to an analysis that does not check.
+
+**This is the second time in this ledger that a comparison was invalid because the arms did different work**, and the
+first was the same shape: F65's throughput comparison put a gate that escalated 27 of 48 requests against one that
+escalated none, and the escalating arm looked 31% faster because it decoded less. Both were caught, both by asking what
+else differs between the arms — which is the only question that finds this class, and which is now asked by the code in
+one of the two places.
+
+**The measurement itself is still running** and its verdict is registered and unchanged. What is recorded here is the
+near-miss, because a near-miss caught by a base-rate check is the cheapest kind of evidence that the checks are worth
+running, and because the corrected numbers on 90 shared items say something on their own: **the band and the saving are
+sample-dependent at this size**, which means F87's 2.64× and 7.9% need the same treatment when the run finishes — quoted
+against the same items or not quoted at all.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
