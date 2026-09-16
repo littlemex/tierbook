@@ -4617,6 +4617,46 @@ management — F63 named those as things the standard mechanism already does, an
 compatibility debt rather than value. And no asynchronous outcome plane yet: F63 designed it and it is a larger piece
 than these three, which are each small enough to be got right in one sitting.
 
+## F101 — The outcome plane, and the one design that would have destroyed the log
+
+**The defect, stated before the fix.** An outcome is knowable only after the decision it judges, so something must
+carry it back. The obvious design lets the callback that receives an outcome update the thresholds the router is
+using — and that makes decision N behave according to how many outcomes happened to arrive before it, which is a
+function of network timing. **Replaying the same traffic then decides differently.** There is no error and no log
+line; the system works and performs plausibly. A policy that cannot be replayed cannot be audited, and cannot be
+compared against another, which removes the reason the ledger exists.
+
+**`src/tierbook/plane.py` separates three things a single callback collapses.**
+
+| what | how it is enforced |
+|---|---|
+| observations append and nothing else | `register` **inspects the observer's signature** and refuses a parameter named for anything it could mutate |
+| a snapshot is immutable and its name is derived | `snapshot_id` is a **property, not a field** — there is no parameter to supply |
+| one policy version reads one snapshot | `refuse_drift` raises when a version is seen against two snapshot ids |
+
+**The inspection matters more than the docstring.** "The observer must not mutate the scorer" is a rule, and a rule is
+what the next person breaks for a good reason. Refusing a parameter named `policy`, `scorer`, `picker`, `router`,
+`gate`, `threshold` or `snapshot` — and refusing `**kwargs`, because a signature accepting anything accepts a policy,
+and refusing a C callable, because it exposes nothing to inspect and admitting it is admitting an observer on trust.
+
+**`built_from` is a closed range.** A snapshot built from "everything up to now" cannot be rebuilt, because *now* has
+moved, so no claim made from it can be rechecked. And `unobserved` is a first-class terminal state: a request whose
+fate is genuinely unknown must be representable, or it is recorded as a failure and biases every rate computed from
+the log.
+
+**What this costs, stated rather than hidden.** The separation means an outcome observed now changes behaviour only at
+the next snapshot. Nothing here makes the loop faster — it makes it replayable — so `staleness()` reports how many
+observations the live snapshot does not include, which is what lets somebody choose the rebuild cadence instead of
+assuming the loop is closed.
+
+**33 tests, and each mechanism was mutated to check the tests are not vacuous:** removing the signature inspection
+fails 9, disabling the drift check fails 1, and dropping the constants from the derived id fails 1. Suite green at
+**1,602 passed, 3 skipped**.
+
+**One defect found in my own test rather than in the module.** The no-signature case picked its subject with a
+conditional that selected the wrong branch, landing on a `**kwargs` C wrapper and passing for the neighbouring
+reason. Both paths refuse, so the module was right and the test was evidence of nothing.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

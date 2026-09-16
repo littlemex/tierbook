@@ -140,7 +140,7 @@ def next_hop(previous: Escalation | None, *, parent_request_id: str, decision_id
                       commit_semantics=commit_semantics)
 
 
-def action_from_body(text: str, *, tokens_emitted: int | None = None) -> str:
+def action_from_body(text: str) -> str:
     """Read the action out of what the model emitted, because there is nowhere else for it to be.
 
     An empty completion with a normal stop reason is *not* read as an escalation. It cannot be told apart from a
