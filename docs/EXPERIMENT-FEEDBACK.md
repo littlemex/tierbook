@@ -4566,6 +4566,57 @@ were fixing turned out to be the wrong object. **The circularity was visible fro
 implementation would have removed it** — which is the argument for checking what a quantity requires before building the
 machinery that computes it, and the fourth such argument this ledger has recorded.
 
+## F100 — Three requirements the experiments produced, implemented so the wrong state is unrepresentable
+
+**Where it bit.** Ninety-nine entries of experiment feedback, sixty-two with an explicit discharge clause, and a check
+of the code found that three of the requirements they name existed **nowhere in it**: `weight_digest` in 0 files,
+`idempotency` in 0, `hop_count` in 0, `parent_request_id` in 0, `decision_id` in 0. `measured_on`, `policy_version`, the
+frontier and the exchange rate were already there; these were not.
+
+**`src/tierbook/judge.py` — what a judge carries and what a candidate must match.** Three categories, kept apart because
+they are checked differently and collapsing them is how a manifest looks complete while admitting a judge that cannot
+work:
+
+| category | how it is checked | what it closes |
+|---|---|---|
+| **declared** | compared against the served candidate | F56, F57: two models agreed on architecture, `d_model`, depth, vocabulary size, tied flag, dtype and `len(tokenizer)` — 248,077 in both — with residual cosine 0.56–0.61 where two *different prompts* in one model reach 0.88–0.90 |
+| **measured** | cannot be compared, only re-measured; the digest licenses it | F58: two models identical in architecture, dtype and depth fraction had optimal amplitudes a factor of four apart |
+| **assumes** | checkable by neither | F59: a readout convention gave 0.0899 against a 0.10 floor on a model whose digest would have matched |
+
+The refusals are the content. `WeightDigest` refuses `subject="loaded_tensors"` **by name**, because hashing parameters in
+memory made a correct artefact refuse its own model — an engine fuses projections and changes dtypes, so identical
+published weights hash differently once served. Each of the eight keys measured to be insufficient is refused as a
+declared key rather than deprecated. A `MeasuredConstant` cannot be constructed with a string where a digest belongs. A
+constant measured on other weights cannot sit in a contract for these. And `admissible` refuses a **missing** base rate
+rather than treating absent as clear, in the order digest-then-base-rate, because the first is free and the second costs
+a pass over the buyer's items.
+
+**`src/tierbook/escalate.py` — what a re-issue carries.** From the 32-request two-server run where 12 escalated:
+
+- **the engine returns an action, not a destination.** `target_profile` refuses anything that looks like an address,
+  because naming one is how a gate quietly becomes a second router and duplicates the endpoint selection the standard
+  mechanism already performs.
+- **the idempotency key is derived and has no parameter.** A key the caller supplies is a key a retry varies, and then
+  one escalation is billed twice. Two attempts at one escalation collide by construction.
+- **the hop bound is enforced at construction.** A depth that only gets logged is a loop with a paper trail. And
+  `next_hop` derives the depth from the previous hop rather than accepting an asserted one, refuses a chain whose links
+  name different parents, and refuses re-escalating to the profile that just declined.
+- **`commit_semantics` is a closed vocabulary** because generation length is known only while decoding, by which point
+  output may be streaming and cannot be replaced — so whether a late escalation may substitute is the buyer's
+  declaration.
+- **an empty completion is not read as an escalation.** It cannot be told apart from a request answered with nothing,
+  and a run that relied on it reported the right count for the wrong reason.
+- **`upstream_ask()` states what would replace the sentinel**, so a workaround is not mistaken for the design.
+
+**60 new tests, and the suite is green at 1,569 passed and 3 skipped.** Every test names the defect it closes, and each
+defect is one a measurement produced rather than one imagined: the numbers in the test bodies are the numbers that
+occurred.
+
+**What is deliberately not here.** No endpoint discovery, no queue or cache scoring, no pod fallback, no profile
+management — F63 named those as things the standard mechanism already does, and re-implementing them produces
+compatibility debt rather than value. And no asynchronous outcome plane yet: F63 designed it and it is a larger piece
+than these three, which are each small enough to be got right in one sitting.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
