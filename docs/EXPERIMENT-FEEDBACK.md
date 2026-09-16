@@ -4513,6 +4513,59 @@ endpoints, over traces that stop on their own, with thinking actually helping �
 them, against the short path's own readout on the same items. Registered before the second Jacobian existed and unchanged
 since.
 
+## F99 — The theory's quantity works, my approximation of it does not, and both arrive too late to be used
+
+**Where it bit.** The theory named a contrastive score — the entropy the long path is predicted to remove — and F95
+replaced the Jacobian with a first-order surrogate computable by one backward pass. Four implementation failures later
+(F97, F98) the setting is finally correct: **123 items, direct 0.5041, thinking 0.7398, 33 fixes against 4 breaks**, the
+long path halving the endpoint entropy from 0.9880 to 0.4179, and the two conditions' gradients far from parallel at
+cosine 0.1479. So the measurement can be read.
+
+**Single features, AUC for "thinking fixes this item", no fitting, each against its own permutation null:**
+
+| AUC | p | feature |
+|---|---|---|
+| **0.7785** | 0.000 | **the entropy the long path actually removes, `H0 − H1`** |
+| 0.7242 | 0.000 | the short path's own entropy `H0` — the incumbent |
+| 0.6687 | 0.001 | the contrastive score, **negated** |
+| 0.5391 | 0.265 | the long path's entropy `H1` |
+| 0.3620 | 0.991 | the generated length |
+| **0.3313** | 0.999 | **the contrastive score as the theory signs it** |
+| 0.1384 | 1.000 | the two gradients' cosine |
+
+**Two results, and they point opposite ways.**
+
+**The theory's quantity is real.** `H0 − H1` reaches **0.7785** against the incumbent's 0.7242, with the sign the theory
+predicted: an item whose endpoint entropy the long path removes more of is more likely to be repaired by it. Fitted and
+held out, `H0` alone gives 0.7111 and adding `H1` gives 0.7481.
+
+**My first-order surrogate is not.** The gradient projection `⟨g⁰ − g¹, h⟩` sits at **0.3313** as signed — anti-predictive
+— and 0.6687 negated, which is *below* the incumbent. So the approximation does not track the quantity it approximates,
+and the four implementation failures were spent producing a worse signal than the two entropies it was standing in for.
+
+**And the finding that matters most is a circularity I should have seen before building any of it.** `H1` is the endpoint
+entropy **after the long path has run**. Knowing it requires running the long path. My `g¹` is computed over prompt plus
+trace, so it requires the same. **Neither `H0 − H1` nor the contrastive score is available at the moment the decision is
+made.** The only pre-generation quantity in the table is `H0`, at 0.7242 — which is the signal this project already had.
+
+**So the +0.054 that knowing the long path buys is real and unreachable.** The theory's proposal is only non-circular if
+`J^(1)` can be **estimated from other prompts** and applied to a new item's residual without running its trace. That is
+exactly what F94 attempted, and the attempt failed for a reason it recorded: a `J^(1)` built by changing the chat template
+has cosine **0.9811** with `J^(0)`, so it carries no information about the long path that the short path did not already
+have. **Building `J^(1)` from the actual continuation is what would close the loop, and that is expensive per item in the
+same way `H1` is** — the construction has to average over prompts, so it must be built once and reused, which means it
+cannot depend on each item's own trace.
+
+**What this leaves.** The deployable signal is unchanged: the readout at the prompt, `H0`, at AUC 0.7242 on this set. The
+contrastive line is closed as a **pre-generation** signal, with a clear statement of what would reopen it — a `J^(1)`
+estimated from a corpus of traces rather than from a template change, which is a construction nobody in this project has
+built and whose cost is one generation per prompt in the construction set rather than per item at serving time.
+
+**And a note on the four failures that preceded this.** They were real and each was a distinct defect, but the object they
+were fixing turned out to be the wrong object. **The circularity was visible from the definition and no amount of correct
+implementation would have removed it** — which is the argument for checking what a quantity requires before building the
+machinery that computes it, and the fourth such argument this ledger has recorded.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
