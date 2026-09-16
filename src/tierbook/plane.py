@@ -46,7 +46,7 @@ class Unreplayable(Exception):
 
 
 @dataclass(frozen=True)
-class Observation:
+class Outcome:
     """One outcome, arriving after the decision it judges, naming what it judges.
 
     All three identifiers are required. `request_id` joins it to the traffic, `decision_id` to the decision, and
@@ -190,11 +190,11 @@ def refuse_drift(readings: list[Reading]) -> None:
 class Store:
     """Append-only. The only mutation this plane permits, and it touches nothing a decision reads."""
 
-    observations: list[Observation] = field(default_factory=list)
+    observations: list[Outcome] = field(default_factory=list)
 
-    def append(self, obs: Observation) -> None:
-        if not isinstance(obs, Observation):
-            raise Unreplayable(f"{obs!r} is not an Observation; a loose dict here means the required identifiers were "
+    def append(self, obs: Outcome) -> None:
+        if not isinstance(obs, Outcome):
+            raise Unreplayable(f"{obs!r} is not an Outcome; a loose dict here means the required identifiers were "
                                f"never checked, and the check exists because an unattributable outcome still counts")
         self.observations.append(obs)
 

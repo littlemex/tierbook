@@ -757,4 +757,30 @@ class Log:
         orphans = sorted(rid for rid in outcomes if not rid.startswith("__") and rid not in known)
         if orphans:
             outcomes["__orphan_outcomes__"] = {"count": len(orphans), "request_ids": orphans}
+
+        # One `policy_version` naming two `policy_digest`s. Each row is individually truthful -- it names the artifact
+        # it actually decided from -- so this is not a corruption of the log and is REPORTED, on the same distinction
+        # the orphan branch above draws: the rewritten-label branch RAISES because a rewrite makes every criterion
+        # over the log a criterion over the rewrite, and there is no reading of the bytes that recovers the original.
+        # Here there is: every row still says which artifact produced it, so a caller grouping by digest gets a clean
+        # answer and only a caller grouping by VERSION gets a mixture.
+        #
+        # DEFECT this closes: `read` accepted two decisions under `policy_version` "gate/0.1" carrying digests that
+        # differ, and reported nothing. Any rate computed for that version is then over a mixture of two different
+        # compiled policies, and the log looks complete while the comparison it supports is between two things that
+        # were never one policy. `plane.refuse_drift` is the same check for a caller that must not proceed at all;
+        # this is the reader's report, because refusing here would make an otherwise-readable log unreadable over a
+        # fact that only invalidates one grouping of it.
+        digests_per_version: dict[str, set] = {}
+        for row in decisions:
+            digest = row.get("policy_digest", "")
+            if digest:  # a version 1 or 2 row carries "" by S4, and an absent digest is not a second digest
+                digests_per_version.setdefault(row["policy_version"], set()).add(digest)
+        mixed = {v: sorted(d) for v, d in digests_per_version.items() if len(d) > 1}
+        if mixed:
+            outcomes["__version_mixtures__"] = {
+                "count": len(mixed), "versions": mixed,
+                "note": "each version above names more than one compiled artifact, so a rate grouped by "
+                        "policy_version is over a mixture; group by policy_digest, or bump the version when the "
+                        "artifact changes"}
         return decisions, outcomes

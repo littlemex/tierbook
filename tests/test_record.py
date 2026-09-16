@@ -305,3 +305,57 @@ def test_a_confidence_is_paired_with_its_estimator_in_both_directions():
     # Both legitimate pairings still construct, so the guard refuses the unpaired states and not the field.
     assert rec.BoundProvenance(estimator="clopper_pearson_fixed_sample", confidence=0.95).confidence == 0.95
     assert rec.BoundProvenance(estimator="unrecorded", confidence=None).confidence is None
+
+
+# --- one policy version naming two compiled artifacts -------------------------------------------------------------
+
+def _dec_with_digest(rid, digest, version="gate/0.1"):
+    """A decision differing from its sibling only in which artifact it decided from."""
+    return decision(request_id=rid, policy_version=version, policy_digest=digest)
+
+
+def test_one_version_naming_two_artifacts_is_reported(tmp_path):
+    """DEFECT: `read` accepted two decisions under one `policy_version` carrying different `policy_digest`s and
+    reported nothing, so a rate computed for that version was over a mixture of two compiled policies while the log
+    looked complete."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(_dec_with_digest("r1", "a" * 16))
+    log.append(_dec_with_digest("r2", "b" * 16))
+    _, outcomes = log.read()
+    mix = outcomes["__version_mixtures__"]
+    assert mix["count"] == 1
+    assert mix["versions"]["gate/0.1"] == ["a" * 16, "b" * 16]
+
+
+def test_a_mixture_is_reported_rather_than_refused(tmp_path):
+    """Every row names the artifact it actually decided from, so grouping by digest still gives a clean answer.
+    Refusing here would make an otherwise-readable log unreadable over a fact that invalidates one grouping of it."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(_dec_with_digest("r1", "a" * 16))
+    log.append(_dec_with_digest("r2", "b" * 16))
+    decisions, _ = log.read()
+    assert len(decisions) == 2
+
+
+def test_one_artifact_per_version_reports_no_mixture(tmp_path):
+    """Two versions each naming their own artifact is the intended shape, not a mixture."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(_dec_with_digest("r1", "a" * 16, version="gate/0.1"))
+    log.append(_dec_with_digest("r2", "a" * 16, version="gate/0.1"))
+    log.append(_dec_with_digest("r3", "b" * 16, version="gate/0.2"))
+    _, outcomes = log.read()
+    assert "__version_mixtures__" not in outcomes
+
+
+def test_an_absent_digest_is_not_counted_as_a_second_artifact(tmp_path):
+    """A version 1 or 2 row carries `""` by SEAMS.md S4. Treating that as a distinct digest would report every log
+    spanning the upgrade as a mixture, which is the false positive that gets a real check switched off."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(_dec_with_digest("r1", "a" * 16))
+    row = json.loads((tmp_path / "log.jsonl").read_text().splitlines()[0])
+    row.update(request_id="r2", schema_version=2)
+    del row["policy_digest"]
+    with (tmp_path / "log.jsonl").open("a") as fh:
+        fh.write(json.dumps(row) + "\n")
+    _, outcomes = log.read()
+    assert "__version_mixtures__" not in outcomes

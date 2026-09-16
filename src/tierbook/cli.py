@@ -641,7 +641,13 @@ def cmd_accept(args) -> int:
           # "this version did not look". Labels aimed at ids no decision carries are why a realised rate can be
           # missing from a log that visibly contains labels, and a report that omitted them would attribute the
           # gap to a measurement nobody took.
-          "orphan_outcomes": dict(outcomes.get("__orphan_outcomes__") or {})}
+          "orphan_outcomes": dict(outcomes.get("__orphan_outcomes__") or {}),
+          # Always present, for the third time and the same reason: this command answers "what can this log
+          # support", and a version naming two compiled artifacts is precisely a grouping the log cannot support.
+          # Absent-when-clean would leave a reader unable to tell "every version names one artifact" from "this
+          # version of the tool did not look" -- and unlike the two above, this one does not report a LOSS from the
+          # population: every row is present and truthful, and it is the grouping by version that is a mixture.
+          "version_mixtures": dict(outcomes.get("__version_mixtures__") or {})}
     print(json.dumps(out, indent=2))
     if args.out:
         Path(args.out).write_text(json.dumps(out, indent=1))

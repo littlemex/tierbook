@@ -17,11 +17,11 @@ sys.path.insert(0, str(ROOT / "src"))
 from tierbook import plane as p  # noqa: E402
 
 
-def obs(**kw):
+def out(**kw):
     base = dict(request_id="req-7", decision_id="dec-3f9c", policy_version="gate/0.1", terminal_state="answered",
                 correct=True, cost_usd=0.004, latency_s=1.8)
     base.update(kw)
-    return p.Observation(**base)
+    return p.Outcome(**base)
 
 
 def cal(**kw):
@@ -36,23 +36,23 @@ def cal(**kw):
 def test_an_unattributable_outcome_is_refused(f):
     """Worse than a missing one: it still counts in every rate computed over the log."""
     with pytest.raises(p.Unreplayable, match="worse than a missing one"):
-        obs(**{f: ""})
+        out(**{f: ""})
 
 
 def test_an_open_ended_terminal_state_is_refused():
     with pytest.raises(p.Unreplayable, match="cannot be grouped over"):
-        obs(terminal_state="finished-ish")
+        out(terminal_state="finished-ish")
 
 
 def test_unobserved_is_a_first_class_outcome():
     """A request whose fate is unknown must be representable, or it is recorded as a failure and biases every rate."""
-    assert obs(terminal_state="unobserved", correct=None).terminal_state == "unobserved"
+    assert out(terminal_state="unobserved", correct=None).terminal_state == "unobserved"
 
 
 def test_unobserved_with_a_known_correctness_is_a_contradiction():
     """Recording both is how an unobserved request gets counted as a labelled one."""
     with pytest.raises(p.Unreplayable, match="contradict"):
-        obs(terminal_state="unobserved", correct=False)
+        out(terminal_state="unobserved", correct=False)
 
 
 # --- the observer cannot reach what it observes -------------------------------------------------------------------
@@ -174,7 +174,7 @@ def test_a_reading_needs_both_halves():
 
 def test_the_store_appends_and_refuses_a_loose_dict():
     s = p.Store()
-    s.append(obs())
+    s.append(out())
     assert len(s.observations) == 1
     with pytest.raises(p.Unreplayable, match="never checked"):
         s.append({"request_id": "req-8"})
@@ -186,7 +186,7 @@ def test_the_lag_is_reported_rather_than_hidden():
     s = p.Store()
     live = cal(observation_count=2)
     for i in range(5):
-        s.append(obs(request_id=f"req-{i}"))
+        s.append(out(request_id=f"req-{i}"))
     assert s.staleness(live_snapshot=live) == 3
 
 

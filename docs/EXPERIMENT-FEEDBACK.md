@@ -4657,6 +4657,47 @@ fails 9, disabling the drift check fails 1, and dropping the constants from the 
 conditional that selected the wrong branch, landing on a `**kwargs` C wrapper and passing for the neighbouring
 reason. Both paths refuse, so the module was right and the test was evidence of nothing.
 
+## F102 — Two defects found by wiring the new contracts into the existing code
+
+The four contracts of F100 and F101 had **zero production callers**. A mechanism only its own tests call has no
+coverage of the thing it exists to protect, so the next step was connecting them — and connecting them is what found
+both defects below. Neither was visible while the modules stood alone.
+
+**A name collision that inverted a meaning.** `plane.Observation` and the long-standing `observe.Observation` are
+opposites: the second is the state observed **before** a decision, the first the outcome observed **after** it. Two
+types with one name, in one package, one of them the input to `route_once` and the other the thing that judges its
+result. Renamed to `plane.Outcome`.
+
+**The drift check landed on a field the log already had.** `Decision` carries `policy_digest`, a content hash of the
+compiled artifact a decision was made from — which is exactly what `refuse_drift`'s snapshot id means. So the check
+needed no schema change and no new field; it needed to be *run*. Measured before writing anything: two decisions under
+`policy_version` "gate/0.1" with digests differing, and **`read()` accepted both and reported nothing**. Any rate
+computed for that version is then over a mixture of two different compiled policies, while the log looks complete.
+
+**Reported, not refused, and the distinction is the code's own.** `read` already draws it: a rewritten label **raises**,
+because a rewrite makes every criterion over the log a criterion over the rewrite and no reading of the bytes recovers
+the original; an orphan label is **reported**, because it makes a label absent rather than corrupt. A mixture sits with
+the orphan: every row truthfully names the artifact it decided from, so grouping by digest still gives a clean answer
+and only grouping by *version* is a mixture. Refusing would make an otherwise-readable log unreadable over a fact that
+invalidates one grouping of it. `plane.refuse_drift` remains the raising version, for a caller that must not proceed at
+all.
+
+**One false positive designed out.** A version 1 or 2 row carries `policy_digest: ""` by S4, so an absent digest is not
+counted as a second artifact — otherwise every log spanning the upgrade reports as a mixture, and a check that fires on
+every healthy log is a check somebody switches off.
+
+`tierbook logs` surfaces it as `version_mixtures`, always present rather than appearing only when something is wrong,
+for the reason the two keys beside it already give: absent-when-clean leaves a reader unable to tell "every version
+names one artifact" from "this version of the tool did not look".
+
+**Suite green at 1,606 passed, 3 skipped.** The mixture detection was mutated to `{}` and the new test fails, so it is
+not passing vacuously.
+
+**And one process note.** The rename was first attempted with `sed -i '' 's/\bObservation\b/.../'`, which is a silent
+no-op on macOS because BSD `sed` does not implement `\b`. The chained command reported success for two of its three
+edits and left the test file half-renamed. A rename is not a text substitution worth trusting without reading the
+result.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
