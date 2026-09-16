@@ -4296,6 +4296,50 @@ are a weak proxy for cost**. GPU-seconds, KV-cache occupancy and the effect of l
 continuous batching are the quantities a serving system feels, and a policy that looks good in tokens can lose in
 GPU-seconds. Measuring that needs load, not more items.
 
+## F94 — Reseeding the probe directions makes two Jacobians of the same object nearly orthogonal, and a reproducibility claim was mis-stated
+
+**Where it bit.** The theory review proposed a contrastive score built from two Jacobians, one per continuation
+protocol. Building them produced a small difference — cosine **0.9811**, relative Frobenius **0.2074** — so the control
+question was whether that difference exceeds the estimator's own noise. The right control is **the same protocol with a
+different probe-direction seed**, everything else held. The first theoretical review had named exactly this and I had not
+run it.
+
+| comparison | cosine | relative Frobenius |
+|---|---|---|
+| the two protocols, short template against long | **0.9811** | 0.2074 |
+| **the same protocol, a different probe seed** | **0.0929** | **1.3508** |
+
+**Two estimates of the same Jacobian, differing only in the random directions probed, are nearly orthogonal.** The
+protocol difference is a sixth of the estimator's own variation, so a contrastive score built from these two is the
+difference of two noisy views of one object, and the measurement the theory asked for cannot be made this way.
+
+**Why, and it is not a bug.** The estimator is `J_hat = Y V⁺` with 384 random directions in a 4,096-dimensional space, so
+`V` spans **9.4%** of the space and `J_hat` is `J` seen through that subspace. Two independent 384-dimensional random
+subspaces overlap in almost nothing, so two estimates agree only on a small shared component. Both are valid partial
+views; as matrices they are nearly orthogonal. **The construction was always a projection and I had been calling it an
+estimate.**
+
+**And a reproducibility claim in F47 was mis-stated.** That entry reported split-half element correlation 0.9612 and
+relative Frobenius 0.3355 and concluded "J is stable". Those halves were **halves of the prompts, with the probe
+directions held fixed**. The variance that matters — the directions — was never varied, and it is **six times larger**
+than the one that was. The sentence should have read "the estimate is stable under resampling prompts", which is a much
+smaller claim than the one made and than the one every later entry relied on.
+
+**What this does and does not threaten.** It does **not** invalidate the measurements that used a Jacobian: a projection
+of `J` can be a useful readout even if a different projection would also be, and F89 through F93 measured that the
+readout works, against controls, on held-out items. What it does is make every one of those results a statement about
+**one random projection** rather than about the Jacobian, and that is a materially weaker claim than the entries make.
+
+**The decisive test is running.** Same model, same layer, same amplitude, same items, same everything — with the Jacobian
+rebuilt from different probe directions. **If the headline result is a property of the model it survives; if it is a
+property of one draw of `V` it does not.** No analysis can substitute for it, because the residuals were never stored and
+the readout has to be recomputed inside the engine.
+
+**The methodological lesson, which is the transferable part.** A reproducibility check is only as good as the source of
+variation it varies. Mine varied the data and held the estimator's randomness fixed, which is the easier half and the
+less important one — and the review that named it did so before any of this was measured. **When an estimator has its own
+random ingredient, resampling the data measures the wrong thing.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
