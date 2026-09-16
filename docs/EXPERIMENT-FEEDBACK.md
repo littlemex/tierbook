@@ -4473,6 +4473,46 @@ endpoints, over a trace long enough for thinking to help — orders items by whe
 short path's own readout on the same items. The comparison and the statistic were registered before the second Jacobian
 existed and are unchanged.
 
+## F98 — Two fixes that each removed the effect being measured, and the pattern they make
+
+**Where it bit.** F97 recorded four obstacles in implementing the attribution-patching score. Running it produced two
+more, and both had the same consequence: **the measurement's treatment stopped doing anything, so no sample size could
+have answered the question.** That is now the third and fourth instance of the same failure in this project, which makes
+it a pattern rather than an accident.
+
+| what was wrong | how it showed | consequence |
+|---|---|---|
+| **only one end token was passed.** The model declares **two** in its generation config (248046 and 248044); `tok.eos_token_id` is one of them | **100% of traces hit the cap**, against 63% stopping on their own through the serving path, which reads the config | truncated traces are worse than none (F77), so thinking gained **2 items in 60** where it gains twenty-two points at the same cap through the server |
+| **checkpointing disables the key-value cache.** transformers prints "Caching is incompatible with gradient checkpointing" and turns it off | every new token re-ran the whole sequence: **175 seconds an item** | the cost forced a cap of 512, and at 512 thinking neither helped nor hurt — the cap that fit was the cap with no uplift in it |
+
+**Both fixed, measured:** 175 s per item became **44 s**, and the cap-hit rate went from 100% to **60%**. The fix for the
+second is to toggle checkpointing per phase — off for generation, on for the backward — because **the thing the backward
+needs is the thing generation cannot afford**, and nothing about that is visible from either requirement alone.
+
+**And one design flaw of mine, corrected before the run rather than after.** The two conditions' endpoints were not the
+same kind of position: the direct one sits where an answer comes next, the long one sat wherever the trace stopped. The
+measured consequence and its repair:
+
+| | endpoints unaligned | endpoints both at the answer cue |
+|---|---|---|
+| entropy the long path appears to add | **+0.4880** | **+0.0956** |
+| cosine between the two gradients | −0.0018 | **+0.6689** |
+
+**Four fifths of the entropy anomaly was the position mismatch**, and the near-orthogonality that looked like a good sign
+in F97 was the same artefact. Aligned, the two gradients are correlated and distinct, which is what two genuinely
+different computations should look like.
+
+**The pattern, stated so it can be checked next time.** Four times now — the letter readout collapsing to chance, the cap
+with no uplift, the never-stopping generation, and the 512-token cap — a measurement was built whose **treatment had no
+effect in it**, and each time the tell was available in the first ten items: a base rate at chance, a fix rate near zero,
+a cap-hit rate of 100%. **None of those needed the run to finish.** The harness now prints the cap-hit rate every five
+items and flags it above 90%, which is the cheapest of the four checks and the one that would have caught two of them.
+
+**What the running measurement can now answer.** Whether the entropy the long path is predicted to remove — at comparable
+endpoints, over traces that stop on their own, with thinking actually helping — orders items by whether thinking fixes
+them, against the short path's own readout on the same items. Registered before the second Jacobian existed and unchanged
+since.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
