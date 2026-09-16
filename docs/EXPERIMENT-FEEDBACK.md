@@ -4388,6 +4388,50 @@ budget run currently in flight — the reseeded-Jacobian replication of F89 — 
 headline survives a different random projection is a question about the results already published and does not depend on
 which construction is used going forward.
 
+## F96 — Two nearly-orthogonal projections of the Jacobian both beat the plain readout, so the benefit is not one lucky draw
+
+**Where it bit.** F94 found that two Jacobian estimates built with different probe directions are nearly orthogonal as
+matrices (cosine **0.0929**), which made every earlier result a statement about **one random 384-dimensional projection**
+rather than about the Jacobian. F95 corrected how that finding should be used but left the threat standing: if the
+benefit came from one lucky draw of the probe directions, it would not replicate. The replication ran with everything held
+and only the directions reseeded.
+
+**On the same 400 items, at the same pre-specified λ\* of 3,456, with the coverage mapping fixed on calibration and the
+permutation null from F91:**
+
+| readout | saving at λ* | null median | p |
+|---|---|---|---|
+| **plain, no Jacobian** | **4.16%** | −3.24% | **0.033** |
+| **Jacobian, seed 0** (published) | **6.96%** | −3.36% | **0.000** |
+| **Jacobian, seed 7** (reseeded) | **7.90%** | −3.47% | **0.000** |
+
+**Both projections beat the plain readout and both are significant against the null.** The two Jacobians agree on almost
+nothing as matrices and agree closely on the quantity a deployment reads — 6.96% against 7.90%, on either side of each
+other rather than one being a fluke above the other.
+
+**So the benefit is a property of passing through the Jacobian, not of a particular draw.** F94's worry is answered for
+the deployable quantity. The explanation that fits: the readout's useful content is a **coarse** property of
+`softmax(W_U N(Jh))` — its entropy — and two different random projections both destroy the fine structure while
+preserving the coarse one. A matrix cosine of 0.09 is compatible with two maps that reshape the direction of `h` similarly
+in the respect the entropy is sensitive to.
+
+**What this does and does not settle.** It settles that the Jacobian's advantage replicates across the estimator's own
+randomness, which was the specific threat F94 raised and the one no analysis could have answered. It does **not** settle
+the size — F90 and F91 established that the bootstrap interval on the saving spans zero at this sample, and adding a
+second projection does not add items. Two point estimates agreeing is evidence about the estimator and not about the
+population.
+
+**And band width is now definitively unusable.** The same three runs give 4.03×, 21.24× and 7.51× — the two Jacobian
+projections differ by a factor of nearly three on a quantity whose savings differ by one point. F91 measured its bootstrap
+interval spanning 2.1 to 130; this shows the same instability across a change that barely moves the number anyone cares
+about. **The saving at a pre-specified λ\* is the statistic; the band is a picture.**
+
+**One methodological note, since three entries in a row have turned on controls.** F94's control was wrong for a reason
+(common random numbers), F95 named the right one, and this entry ran a different control that answers the original worry
+directly. The lesson is not "run more controls" — it is that **a control has to be matched to the specific alternative
+explanation**, and "the result is a property of one random draw" is answered by drawing again, not by measuring how much
+draws vary.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
