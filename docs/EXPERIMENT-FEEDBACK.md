@@ -4340,6 +4340,54 @@ variation it varies. Mine varied the data and held the estimator's randomness fi
 less important one — and the review that named it did so before any of this was measured. **When an estimator has its own
 random ingredient, resampling the data measures the wrong thing.**
 
+## F95 — F94's control was the wrong one: common random numbers cancel the variance it measured, and the whole forward-difference machinery is unnecessary
+
+**Where it bit.** F94 compared the difference between two continuation protocols (relative Frobenius 0.2074) against the
+variability of the estimator under a different probe seed (1.3508) and concluded the protocol difference was "within the
+estimator's noise". A design review overturned that in one observation.
+
+**The two protocols were built with the SAME random directions.** With common random numbers, the direction-derived
+Monte-Carlo noise **cancels in the difference** `D = J^(1) − J^(0)`. So the variability of `J` alone across seeds is not
+the variability that applies to `D`, and comparing them is comparing two different quantities. **F94's conclusion is
+withdrawn.**
+
+**The correct control, which is now specified rather than guessed.** For each of `K ≥ 5` seeds, build the pair
+`(J^(0)_s, J^(1)_s)` with the **same** directions, form `D_s`, and ask whether the `D_s` agree with each other — high
+cosine between differences means signal, scattered directions mean noise. Three statistics fixed in advance: the
+Frobenius norm of `D`, its top singular value, and the held-out mean of the score `s(h)`.
+
+**A second constraint that is larger than the first, and I had not registered it at all.** The Jacobians are built from
+**eight prompts**. Whatever variance is tested against seeds, the quantity that decides generalisation is the **prompt
+sample**, and significance against seed variance supports only "a difference on these eight prompts". The correct test is
+a **paired sign-flip permutation over prompts** — compute `D_i` per prompt, enumerate all `2^8 = 256` sign assignments,
+and take the fraction exceeding the observed statistic. Its minimum attainable p is 1/256 ≈ 0.004 and its power at
+n = 8 is hopeless; 30 to 50 prompts is the fix. And **"not significant" is not "no difference"**: claiming the template
+does not matter needs an equivalence test with a pre-justified margin (Lakens 2017, *Equivalence Tests: A Practical
+Primer*).
+
+**What survives from F94, because not all of it was wrong.** Two `J` estimates with different probe seeds *are* nearly
+orthogonal (cosine 0.0929), the estimator *is* a projection onto a random 9.4% of the space rather than an estimate of
+`J`, and F47's stability claim *was* mis-stated — it varied prompts with directions held fixed and reported the result as
+"J is stable". Those stand. What does not stand is using the seed variance to dismiss a common-random-number paired
+difference.
+
+**And the review made the entire construction obsolete, which is the most useful thing in it.** The score's first-order
+form needs not `J` but a **vector-Jacobian product**: for each condition, the gradient of the endpoint entropy with
+respect to the layer-18 residual,
+
+    g^(c)_t = ∇_{h_t} H(p_endpoint)        so        s(h) ≈ ⟨ g^(0) − g^(1), h ⟩
+
+and **one backward pass gives every position `t` at once**. That replaces 384 forward-difference probes with **one forward
+and one backward pass per prompt**, scales linearly in sequence length so the generated reasoning trace can be included —
+which is exactly what F94 identified as missing from my `J^(1)` — and is the standard approximation known as
+**attribution patching** (Nanda 2023; Kramár et al. 2024, *AtP\**).
+
+**So three things change at once.** The comparison that produced F94 is void; the construction it was comparing is
+unnecessary; and the replacement is cheaper by two orders of magnitude and can do the thing the original could not. The
+budget run currently in flight — the reseeded-Jacobian replication of F89 — is still worth finishing, because whether the
+headline survives a different random projection is a question about the results already published and does not depend on
+which construction is used going forward.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
