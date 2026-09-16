@@ -4432,6 +4432,47 @@ directly. The lesson is not "run more controls" — it is that **a control has t
 explanation**, and "the result is a property of one random draw" is answered by drawing again, not by measuring how much
 draws vary.
 
+## F97 — Attribution patching replaces the Jacobian, and three of its four obstacles were mine rather than the method's
+
+**Where it bit.** F95 recorded that the score's first-order form needs a vector-Jacobian product rather than the matrix:
+one backward pass gives the endpoint-entropy gradient at every position, replacing 384 forward-difference probes with two
+passes and scaling to sequences that include the generated reasoning trace — which is the thing the Jacobian version could
+not do. Implementing it produced four obstacles and only one belonged to the method.
+
+| obstacle | cause | fix |
+|---|---|---|
+| `can't retain_grad on Tensor that has requires_grad=False` | freezing every weight leaves nothing in the graph requiring grad, and token ids are integers | enter the network at the **embeddings**, a float tensor that can be marked |
+| out of memory at cap 768 | a backward keeps every layer's activations — **the eighth memory failure here and the first caused by a backward** rather than by a vocabulary-sized tensor | gradient checkpointing |
+| **out of memory again at cap 1024, at the same size** | **checkpointing was a silent no-op**: the call succeeds but the checkpointed path is skipped outside training mode | check that every dropout is zero, then enter train mode, so eval and train agree |
+| the generation's key-value cache resident during the backward | never freed | free it explicitly before the backward |
+
+**The silent no-op is the one worth keeping.** The log said "gradient checkpointing on" and the run then failed at
+**exactly the same allocation size** as before. A memory failure that does not move when the fix is applied is the
+signature of a fix that did nothing, and the log line was reporting that a call had returned rather than that anything had
+changed. The harness now verifies the precondition — every dropout zero — and says which mode it entered and why.
+
+**And two design flaws in my own measurement, found by looking at 30 interim items rather than by waiting.**
+
+**The endpoints were not the same kind of position.** Condition 0's last position is where the answer comes next;
+condition 1's was wherever the trace happened to stop, often mid-sentence. The measured consequence: the long path
+appeared to **raise** the endpoint entropy by 0.488 (0.1467 → 0.6347), which is not a property of thinking but of
+comparing an answer position with an arbitrary one. Both conditions now get the explicit answer cue.
+
+**And fitting the measurement into memory had removed the effect it was measuring.** At cap 512 thinking neither helped
+nor hurt — 0.5333 against 0.5333, three fixed and three broken on 30 items — where at cap 1024 it goes 0.5222 to 0.7391.
+**The cap that fit was the cap with no uplift in it**, so the run as configured could not have answered the question at
+any sample size. The sample was cut instead of the cap.
+
+**One encouraging measurement from the same interim data.** The two conditions' endpoint-entropy gradients are **nearly
+orthogonal** — cosine median −0.0018, range −0.039 to +0.017 — where the template-only Jacobians of F94 had cosine
+**0.9811**. So the contrastive score is not degenerate: measuring the sensitivity of two genuinely different computations
+gives genuinely different objects, which is what the theory asked for and what changing a chat template did not deliver.
+
+**What the run will answer.** Whether the entropy the long path is predicted to remove — now measured at comparable
+endpoints, over a trace long enough for thinking to help — orders items by whether thinking fixes them, against the
+short path's own readout on the same items. The comparison and the statistic were registered before the second Jacobian
+existed and are unchanged.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
