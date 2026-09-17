@@ -4739,6 +4739,42 @@ more of: the omission is a failure rather than an absence.
 **Suite green at 1,617 passed, 3 skipped.** The door was mutated (removing the `admissible` call) and two tests fail, so
 they exercise the door rather than the library beside it.
 
+## F104 — The log can now hold a re-issue, and answers the two questions no single record can
+
+`escalate.py` was the last of the three contracts with no production caller, and the log could not represent an
+escalation at all -- so **the cost of escalating, which is the central number of this whole line of work, was not
+computable from a tierbook log.**
+
+**The smaller shape was the better one.** The obvious move was a field on `Decision`, which meant bumping the schema
+and editing **44 construction sites**. Rejected in favour of the precedent the log already sets: an outcome is its own
+line joined by `request_id`, not a field on the decision. So a re-issue is `append_escalation`, identified by an
+`escalated_from` key, with **no schema change and no churn** -- and it catches strictly more, because the questions that
+matter are about the SET of lines rather than any one of them.
+
+**And an escalation has a second reason to be its own line that the other two kinds do not have: it is a
+RELATIONSHIP.** A field on the child records only the child's side. What the log must answer is "was this one
+escalation retried, or two escalations", and that is not a property of either decision.
+
+| check | why no single line can make it |
+|---|---|
+| **double charge** -- one idempotency key naming two `decision_id`s | the key is derived from the parent and the hop *so that a retry collides with itself*, so a collision across two decisions means one re-issue was recorded twice and every cost total counts it twice |
+| **hop bound in composition** -- a chain deeper than `MAX_HOPS` | each line is inside the bound on its own; a chain assembled from lines written by different callers is not, which is why `next_hop` derives the depth rather than accepting an asserted one |
+
+Both reported rather than refused, on the line the reader already draws: recoverable (deduplicate by the key) means
+report. A loose dict is refused at the door, because it would carry whatever the caller set -- which is how a hop bound
+gets exceeded on a line nothing checked. A re-issue naming a `request_id` no decision carries is refused too: one read
+here beats a cost total nobody can reconcile.
+
+**These three keys appear only when the log holds re-issues**, unlike the mixture and orphan keys which are always
+present. The distinction is real: a log with no escalations is not a log whose escalation checks did not run, it is a
+log with nothing to check.
+
+**One defect fixed on the way.** Adding two imports left the existing cycle-check comment sitting above three of them
+while describing one. Rewritten to say what each import is for and to record that `escalate` and `plane` import nothing
+from this package, so no edge closes a loop.
+
+**Suite green at 1,624 passed, 3 skipped.** Both whole-log checks were mutated and each fails a test.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

@@ -359,3 +359,85 @@ def test_an_absent_digest_is_not_counted_as_a_second_artifact(tmp_path):
         fh.write(json.dumps(row) + "\n")
     _, outcomes = log.read()
     assert "__version_mixtures__" not in outcomes
+
+
+# --- re-issues, and the two questions no single line can answer ----------------------------------------------------
+
+def _esc(parent="r1", decision_id="d1", hop=1, profile="upper"):
+    from tierbook import escalate as es
+    return es.Escalation(parent_request_id=parent, decision_id=decision_id, policy_version="gate/0.1",
+                         target_profile=profile, hop_count=hop)
+
+
+def test_an_escalation_is_its_own_line_and_reads_back(tmp_path):
+    """Its own line for the reason an outcome's is -- the fact arrives after the parent was written -- plus one the
+    others do not have: an escalation is a relationship, and a field on the child records only one side of it."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision(request_id="r1"))
+    log.append_escalation(_esc())
+    decisions, outcomes = log.read()
+    assert len(decisions) == 1                      # the re-issue line is not read as a decision
+    assert outcomes["__escalations__"]["count"] == 1
+    assert outcomes["__escalations__"]["by_parent"]["r1"] == [(1, "upper")]
+
+
+def test_a_re_issue_naming_no_decision_is_refused_at_the_door(tmp_path):
+    """It joins to nothing and still counts in the cost of escalating, so it makes the one number this log exists to
+    produce unreconcilable. One read here beats a total nobody can reconcile."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision(request_id="r1"))
+    with pytest.raises(rec.Incomplete, match="joins to nothing"):
+        log.append_escalation(_esc(parent="r-nonexistent"))
+
+
+def test_a_loose_dict_is_refused_because_nothing_would_have_checked_it(tmp_path):
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision(request_id="r1"))
+    with pytest.raises(rec.Incomplete, match="not an escalate.Escalation"):
+        log.append_escalation({"parent_request_id": "r1", "hop_count": 99})
+
+
+def test_one_key_naming_two_decisions_is_reported_as_a_double_charge(tmp_path):
+    """The key is derived from the parent and the hop so a RETRY collides with itself. A collision across two
+    decision_ids therefore means one re-issue was recorded twice, and every cost total counts it twice."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision(request_id="r1"))
+    log.append_escalation(_esc(decision_id="d1"))
+    log.append_escalation(_esc(decision_id="d2"))       # same parent, same hop -> same key
+    _, outcomes = log.read()
+    dc = outcomes["__double_charges__"]
+    assert dc["count"] == 1
+    assert sorted(next(iter(dc["keys"].values()))) == ["d1", "d2"]
+
+
+def test_a_retry_of_one_escalation_is_not_a_double_charge(tmp_path):
+    """Two lines for one decision is a retry, which is what the derived key exists to make collide harmlessly."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision(request_id="r1"))
+    log.append_escalation(_esc(decision_id="d1"))
+    log.append_escalation(_esc(decision_id="d1"))
+    _, outcomes = log.read()
+    assert "__double_charges__" not in outcomes
+
+
+def test_a_chain_deeper_than_the_bound_is_reported_even_though_each_line_is_inside_it(tmp_path):
+    """Each line is within MAX_HOPS on its own. A chain assembled from lines written by different callers is not, and
+    that is exactly what no single line can see."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    for rid in ("r1", "r2"):
+        log.append(decision(request_id=rid))
+    log.append_escalation(_esc(parent="r1", decision_id="d1", hop=2, profile="best"))
+    log.append_escalation(_esc(parent="r1", decision_id="d2", hop=1, profile="upper"))
+    _, outcomes = log.read()
+    assert outcomes["__hop_bound_exceeded__"]["count"] >= 1
+    assert "r1" in outcomes["__hop_bound_exceeded__"]["request_ids"]
+
+
+def test_a_log_with_no_escalations_reports_none_of_this(tmp_path):
+    """Unlike the mixture and orphan keys, these appear only when there are re-issues at all: a log with none is not a
+    log whose escalation checks did not run, it is a log with nothing to check."""
+    log = rec.Log(tmp_path / "log.jsonl")
+    log.append(decision(request_id="r1"))
+    _, outcomes = log.read()
+    for k in ("__escalations__", "__double_charges__", "__hop_bound_exceeded__"):
+        assert k not in outcomes

@@ -31,10 +31,15 @@ import time
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
 
-# Imported for its `evidence_age_days`, which `check_certification` reuses rather than recomputing
-# `date.fromisoformat` / UTC midnight / `(now - then) / 86400` a third time (amendment 7, C6). Checked for a
-# cycle before writing this: `observe` imports only `decide.STATE_VARS`, and neither `decide` nor `observe`
-# imports `record`, so this edge does not close a loop.
+# `observe` is imported for its `evidence_age_days`, which `check_certification` reuses rather than recomputing
+# `date.fromisoformat` / UTC midnight / `(now - then) / 86400` a third time (amendment 7, C6). `escalate` supplies the
+# vocabulary a re-issue line is written from and `plane` the grouping the mixture report uses, so neither fact has a
+# second implementation here.
+#
+# Checked for a cycle before writing each: `observe` imports only `decide.STATE_VARS`, and neither `decide` nor
+# `observe` imports `record`; `escalate` and `plane` import nothing from this package at all. No edge here closes a
+# loop.
+from . import escalate as es
 from . import observe
 from . import plane as pl
 
@@ -625,6 +630,18 @@ def classify_label(decided_at: float, now: float, max_label_latency_s: float | N
     return "missing"
 
 
+
+def _escalations_by_parent(escalations: list[dict]) -> dict:
+    """Which parent was re-issued, to what, and at what depth -- so a reader can see the chains without reparsing.
+
+    Sorted, because an unordered report changes between runs over one log and then a diff of two reports shows a
+    change where nothing changed.
+    """
+    out: dict[str, list] = {}
+    for row in escalations:
+        out.setdefault(row["escalated_from"], []).append((row["hop_count"], row["target_profile"]))
+    return {k: sorted(v) for k, v in sorted(out.items())}
+
 class Log:
     """Append-only JSONL. One line per decision, and the outcome attached later by request id.
 
@@ -665,6 +682,39 @@ class Log:
         with self.path.open("a") as fh:
             fh.write(json.dumps({"observation_ref": ref, "observation": observation}, sort_keys=True) + "\n")
 
+    def append_escalation(self, escalation) -> None:
+        """A re-issue, as its own line rather than a field on either decision it connects.
+
+        Its own line for the reason `attach_outcome`'s is: the fact arrives after the parent decision was written, and
+        editing that decision would break append-only. But there is a second reason here that the other two do not
+        have -- an escalation is a RELATIONSHIP, and a field on the child records only the child's side of it. What
+        the log has to answer is "was this one escalation retried, or two escalations", and that is a question about
+        the SET of lines. `escalate.Escalation` is the vocabulary, so the fields cannot be half-specified and the hop
+        bound cannot be exceeded by a line this method writes; what this adds is the checks no single line can make.
+
+        The parent must already be in this log. An escalation naming a request_id no decision carries joins to
+        nothing, and refusing it here costs one read where accepting it costs a cost total nobody can reconcile.
+        """
+        if not isinstance(escalation, es.Escalation):
+            raise Incomplete(f"{escalation!r} is not an escalate.Escalation. A loose dict here would carry whatever "
+                             f"the caller happened to set, which is how a hop bound gets exceeded on a line that "
+                             f"nothing checked and a retry gets billed as a second escalation")
+        decisions, _ = self.read()
+        if escalation.parent_request_id not in {row["request_id"] for row in decisions}:
+            raise Incomplete(
+                f"escalation names parent_request_id {escalation.parent_request_id!r}, which no decision in "
+                f"{self.path} carries. A re-issue that joins to nothing still counts in the cost of escalating, so "
+                f"it makes the one number this log exists to produce unreconcilable")
+        with self.path.open("a") as fh:
+            fh.write(json.dumps({"escalated_from": escalation.parent_request_id,
+                                 "decision_id": escalation.decision_id,
+                                 "policy_version": escalation.policy_version,
+                                 "target_profile": escalation.target_profile,
+                                 "hop_count": escalation.hop_count,
+                                 "commit_semantics": escalation.commit_semantics,
+                                 "idempotency_key": escalation.idempotency_key,
+                                 "at": time.time()}, sort_keys=True) + "\n")
+
     def read(self, *, strict: bool = False) -> tuple[list, dict]:
         """Every decision, and the outcomes keyed by request id.
 
@@ -687,6 +737,7 @@ class Log:
         with the reason, and `strict=True` raises for a caller that wants that.
         """
         decisions, outcomes, observations, bad, unreadable = [], {}, {}, 0, []
+        escalations: list[dict] = []
         ignored_keys: dict = {}
         if not self.path.exists():
             return decisions, outcomes
@@ -702,6 +753,8 @@ class Log:
                 continue
             if "observation_ref" in row:
                 observations[row["observation_ref"]] = row["observation"]
+            elif "escalated_from" in row:
+                escalations.append(row)
             elif "outcome_for" in row:
                 rid = row["outcome_for"]
                 prev = outcomes.get(rid)
@@ -787,4 +840,37 @@ class Log:
                 "note": "each version above names more than one compiled artifact, so a rate grouped by "
                         "policy_version is over a mixture; group by policy_digest, or bump the version when the "
                         "artifact changes"}
+
+        # The re-issues, and the two questions no single line can answer. A line written through
+        # `append_escalation` cannot exceed the hop bound or half-specify its fields -- `escalate.Escalation` refuses
+        # both at construction -- so what is left for the reader is exactly what needs the SET.
+        if escalations:
+            outcomes["__escalations__"] = {"count": len(escalations),
+                                           "by_parent": _escalations_by_parent(escalations)}
+            # A key naming two different decisions is a DOUBLE CHARGE: the key is derived from the parent and the hop
+            # precisely so a retry of one escalation collides with itself, so a collision across two decision_ids
+            # means one re-issue was recorded twice and every cost total over this log counts it twice. Reported
+            # rather than refused, because it is recoverable -- deduplicating by the key gives the right total -- which
+            # is the same line the mixture report above and the orphan report before it draw.
+            per_key: dict[str, set] = {}
+            for row in escalations:
+                per_key.setdefault(row["idempotency_key"], set()).add(row["decision_id"])
+            doubled = {k: sorted(v) for k, v in per_key.items() if len(v) > 1}
+            if doubled:
+                outcomes["__double_charges__"] = {
+                    "count": len(doubled), "keys": doubled,
+                    "note": "each key above names more than one decision_id. The key is derived from the parent and "
+                            "the hop so that a RETRY collides with itself, so this is one re-issue recorded twice and "
+                            "every cost total over this log counts it twice; deduplicate by idempotency_key"}
+            # A parent that is itself a child, at a depth the bound allows per line but not in composition. Each line
+            # is inside MAX_HOPS on its own; a chain assembled from lines written by different callers is not.
+            depth_of = {row["escalated_from"]: row["hop_count"] for row in escalations}
+            over = sorted(row["escalated_from"] for row in escalations
+                          if depth_of.get(row["escalated_from"], 0) + row["hop_count"] > es.MAX_HOPS)
+            if over:
+                outcomes["__hop_bound_exceeded__"] = {
+                    "count": len(over), "request_ids": over,
+                    "note": f"a chain assembled from these lines is deeper than MAX_HOPS={es.MAX_HOPS}. Each line is "
+                            f"inside the bound on its own, which is why `escalate.next_hop` derives the depth from "
+                            f"the previous hop instead of accepting an asserted one"}
         return decisions, outcomes
