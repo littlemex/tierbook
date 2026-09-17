@@ -126,6 +126,11 @@ GAP_REASONS = (
     "unmeasured_threshold",     # the quantity exists but nobody measured it
     "uncollected_variable",     # the guard reads a state variable this state did not carry
     "outside_domain",           # the state is outside the range the policy was compiled over
+    # A cost was recorded and nothing says where it came from. Not a defect in the decision -- the choice is sound --
+    # but the derivation behind it cannot be repeated, and that was measured to cost a day: a cheap/dear split over nine
+    # candidates had to be reverse-engineered from prose in three documents, confirmable only because an item count
+    # happened to be known. A gap rather than a refusal, because the alternative is a record that cannot hold a cost.
+    "unrecorded_price_basis",
 )
 
 

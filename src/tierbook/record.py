@@ -196,6 +196,57 @@ class BoundProvenance:
                              f"performs")
 
 
+#: Where a price came from. Closed for the reason BOUND_ESTIMATORS is: a decision derived from prices cannot be
+#: re-derived from the prices themselves, because they go stale -- it needs enough to obtain them again.
+#:
+#: DEFECT this closes: a cheap/dear split over nine candidates had to be **reverse-engineered from prose in three
+#: documents** and then confirmed by checking that it reproduced an original count of 168 items exactly. No static rate
+#: card existed in the repository; prices were read from a live pricing API at run time and the reading was not kept. A
+#: day of work went into recovering an input the original derivation had used and not recorded, and it was recoverable
+#: only because that count was known -- had it been off by one, the split could not have been confirmed at all.
+PRICE_SOURCES = (
+    "published_rate_card",      # a static card, re-readable at the recorded date
+    "live_price_api",           # read at run time, so the date is what makes it obtainable again
+    "gateway_metered",          # what the gateway actually charged, which is not a rate
+    "operator_asserted",        # a human said so; re-derivable from nothing, so it must say why
+)
+
+
+@dataclass(frozen=True)
+class PriceBasis:
+    """Enough to obtain a price again, rather than the price itself.
+
+    Three things, and each is required because dropping any one leaves the derivation unrepeatable: the `source`, the
+    `as_of` date it was read on, and the **`ordering`** the decision actually used. The ordering is the part a reader
+    needs and the part nobody writes down: a decision does not turn on a price, it turns on which candidate was cheaper,
+    and that comparison is what has to be reproduced.
+    """
+
+    source: str
+    as_of: str
+    ordering: tuple[str, ...]
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if self.source not in PRICE_SOURCES:
+            raise Incomplete(f"{self.source!r} is not one of {PRICE_SOURCES}; an open-ended source cannot be read again, "
+                             f"which is the only thing a basis is for")
+        if not self.as_of:
+            raise Incomplete(
+                "a price basis with no as_of date cannot be read again: a live pricing API returns a different number "
+                "next week, and the date is the whole difference between a basis and a note saying prices were consulted")
+        if not self.ordering:
+            raise Incomplete(
+                "a price basis with no ordering records where the prices came from and not what they decided. A decision "
+                "turns on which candidate was cheaper, and that comparison is what has to be reproduced")
+        if len(set(self.ordering)) != len(self.ordering):
+            raise Incomplete(f"ordering {self.ordering} names a candidate twice, so it is not an ordering")
+        if self.source == "operator_asserted" and not self.note:
+            raise Incomplete(
+                "an operator-asserted price is re-derivable from nothing, so the note is the only thing standing between "
+                "it and an unattributable number; say who asserted it and against what")
+
+
 @dataclass
 class Candidate:
     """One member of the candidate set, and why it was or was not chosen."""
@@ -209,6 +260,11 @@ class Candidate:
     #: defect this replaces `bound_kind` to close.
     bound_provenance: BoundProvenance | None = None
     cost_usd: float | None = None
+    #: What produced `cost_usd` -- the source, the date, and the ordering the decision used. Paired with `cost_usd` in
+    #: both directions, exactly as `bound_provenance` is paired with `bound` and for the same reason: a number with
+    #: nothing saying what produced it is the state this vocabulary exists to make unrepresentable. `None` is permitted
+    #: only when there is no cost, which is the fact `cost_usd is None` already states.
+    price_basis: PriceBasis | None = None
     evidence_as_of: str = ""
 
     def __post_init__(self) -> None:
@@ -231,6 +287,26 @@ class Candidate:
         if self.bound is None and self.bound_provenance is not None:
             raise Incomplete(f"bound_provenance={self.bound_provenance!r} is set but bound is None; a provenance "
                              f"cannot describe a bound that is not there")
+        if self.price_basis is not None and not isinstance(self.price_basis, PriceBasis):
+            raise Incomplete(f"price_basis must be a PriceBasis or None, not {self.price_basis!r}; a free string cannot "
+                             f"carry the date and the ordering, which are the two parts that make a price obtainable "
+                             f"again")
+        # NOT paired the way `bound`/`bound_provenance` is, and the difference is deliberate. A bound with no
+        # provenance let three fabricated bounds certify identically -- it is load-bearing for admission, so it is
+        # refused. A cost with no basis is a **reproducibility** debt: the decision is sound and the derivation cannot
+        # be repeated. Refusing it would make every existing caller unable to record a cost at all, and the honest
+        # channel for "this record cannot support X" already exists -- `Decision.gaps`, with its own closed vocabulary,
+        # which `serve.route_once` now appends to and `tierbook assign` already prints.
+        if self.cost_usd is None and self.price_basis is not None:
+            raise Incomplete(f"price_basis={self.price_basis!r} is set but cost_usd is None; a basis cannot describe a "
+                             f"price that is not there")
+        # READ rather than merely recorded, which is what `admissible` does with `corrected_over`: an ordering that
+        # contradicts the costs beside it cannot have produced them, and catching that needs both in one place.
+        if self.price_basis is not None and self.id not in self.price_basis.ordering:
+            raise Incomplete(
+                f"the price basis orders {self.price_basis.ordering} and this candidate is {self.id!r}, which is not in "
+                f"it. An ordering that does not place this candidate cannot have decided its position, so it does not "
+                f"describe the comparison this decision turned on")
 
 
 @dataclass
@@ -337,7 +413,7 @@ def _candidate_from_row(row: dict, index: int) -> tuple[Candidate, list[str]]:
     carries the position (`candidates[1].evidence_ref`) because a reader debugging a fifty-candidate row needs to
     know which one grew the field, not just that one did.
     """
-    known = {"id", "excluded_because", "bound", "bound_provenance", "cost_usd", "evidence_as_of"}
+    known = {"id", "excluded_because", "bound", "bound_provenance", "cost_usd", "price_basis", "evidence_as_of"}
     ignored = [f"candidates[{index}].{k}" for k in sorted(row) if k not in known]
     for f in fields(Candidate):
         if f.default is MISSING and f.default_factory is MISSING and f.name not in row:

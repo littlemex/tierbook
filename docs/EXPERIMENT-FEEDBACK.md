@@ -5342,6 +5342,45 @@ described identically. It now requires the subject and refuses anything outside 
 **Suite green at 1,896 passed, 3 skipped.** Four mechanisms mutated -- the subject vocabulary, the gate filter, the
 escalation-subject predicate and the quorum refusal -- and each fails tests.
 
+## F119 — The price basis behind a decision, and a refusal I talked myself out of
+
+**F3's ask**: "a decision derived from prices recording the price basis it used -- not the prices themselves, which go
+stale, but enough to re-derive them: **the source, the date, and the resulting ordering**."
+
+**The measured cost, and it is the reason the third item is there.** A cheap/dear split over nine candidates had to be
+**reverse-engineered from prose in three documents** and confirmed by checking that it reproduced an original count of
+**168 items exactly**. No static rate card existed; prices came from a live pricing API at run time and the reading was
+not kept. A day went into recovering an input the original derivation had used and not recorded -- and it was recoverable
+**only because that count happened to be known**.
+
+**`PriceBasis` carries all three, and the ordering is the one nobody writes down.** A decision does not turn on a price,
+it turns on **which candidate was cheaper**, and that comparison is what has to be reproduced. The ordering is also
+**read** rather than recorded: a basis whose ordering omits the candidate it is attached to cannot have decided that
+candidate's position, and `Candidate` refuses it.
+
+**And here is the design decision I got wrong first, then corrected.** I paired `cost_usd` with `price_basis` in both
+directions, exactly as `bound` is paired with `bound_provenance`. It broke every existing caller -- and the symmetry was
+false. A bound with no provenance let **three fabricated bounds certify identically**: it is load-bearing for admission,
+so it is refused. A cost with no basis is a **reproducibility** debt -- the decision is sound and the derivation cannot be
+repeated -- and refusing it would leave the record unable to hold a cost at all. The honest channel for "this record
+cannot support X" already existed: `Decision.gaps`, with its own closed vocabulary, which `tierbook assign` already
+prints. So `unrecorded_price_basis` is a **new gap reason**, `route_once` appends it when costs were supplied and a basis
+was not, and the churn is **zero**.
+
+**The audit against the new rule found the basis existing upstream and not being carried down.** `price_card` requires
+`source`, and every tier record requires `measured_at` -- so the source and the date were already there, in the ledger,
+and the decision that used them recorded neither. That is a sharper finding than a missing field: nothing had to be
+measured, only carried.
+
+**Three of my own errors this round, all the same one.** I guessed `route_once`'s signature text, guessed
+`compile_policy`'s arguments, and wrote a test that **skipped itself** when the guess failed -- which is worse than no
+test, because it reads as coverage. Each was caught by an assertion or a run, and the third was replaced with one driven
+through `test_serve.py`'s own `route` helper, so it exercises the real composition. This is the rule the loop prompt now
+marks as the one I keep breaking, and it cost three failures in one entry.
+
+**Suite green at 1,912 passed, 3 skipped.** Five mechanisms mutated -- the ordering check, the ordering requirement, the
+date requirement, the asserted-price note and the gap itself -- and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

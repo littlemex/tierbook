@@ -31,7 +31,7 @@ import random
 from . import decide as dc
 from . import explore as ex
 from . import observe as ob
-from .record import BoundProvenance, Candidate, Decision, Log, admissible
+from .record import BoundProvenance, Candidate, Decision, Log, PriceBasis, admissible
 
 #: The propensity of an arm nothing was drawn for -- either because no rate was declared (or it was zero) or
 #: because the eligible set held no alternative to draw. `explore.draw` returns this value itself, as a literal,
@@ -46,6 +46,7 @@ DETERMINISTIC_PROPENSITY = 1.0
 def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
                   costs: dict | None = None, evidence_as_of: str = "",
                   bound_provenance: BoundProvenance | None = None,
+                  price_basis: PriceBasis | None = None,
                   floor: float | None = None, authorised: bool = False,
                   latency_feasible: bool | None = None, available: dict | None = None,
                   evidence_age_days: float | None = None, max_age_days: float | None = None) -> list:
@@ -95,6 +96,7 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
         cand = Candidate(id=cid, excluded_because="chosen" if cid == chosen else "not_evaluated",
                          bound=bounds.get(cid),
                          bound_provenance=bound_provenance if cid in bounds else None,
+                         price_basis=price_basis if costs.get(cid) is not None else None,
                          cost_usd=costs.get(cid), evidence_as_of=evidence_as_of)
         if cid != chosen:
             cand.excluded_because = _why_not(cand, cid, costs=costs, floor=floor, authorised=authorised,
@@ -112,6 +114,7 @@ def candidate_set(policy: dc.Policy, chosen: str, *, bounds: dict | None = None,
                              # (CONTRACT amendment 3, C1), and this branch supplying one without the other used
                              # to raise `Incomplete` for exactly the caller this docstring says is legitimate.
                              bound_provenance=bound_provenance if chosen in bounds else None,
+                             price_basis=price_basis if costs.get(chosen) is not None else None,
                              cost_usd=costs.get(chosen), evidence_as_of=evidence_as_of))
     return out
 
@@ -166,7 +169,8 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
                feature_vector_version: str, policy_version: str | None = None, mechanism_version: str,
                agent: str, model: str, endpoint: str, gateway_quote_usd: float | None,
                bounds: dict | None = None, costs: dict | None = None, evidence_as_of: str = "",
-               bound_provenance: BoundProvenance | None = None, floor: float | None = None,
+               bound_provenance: BoundProvenance | None = None,
+               price_basis: PriceBasis | None = None, floor: float | None = None,
                latency_feasible: bool | None = None, max_age_days: float | None = None,
                exploration_rate: float | None = None, staleness_limit_days: float | None = None,
                rng: random.Random | None = None,
@@ -203,7 +207,7 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
     # record, not a second, separately-computed set.
     candidates = candidate_set(
         policy, deterministic, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of,
-        bound_provenance=bound_provenance,
+        bound_provenance=bound_provenance, price_basis=price_basis,
         floor=floor, authorised=authorised, latency_feasible=latency_feasible, available=available,
         evidence_age_days=evidence_age_days, max_age_days=max_age_days)
 
@@ -224,7 +228,7 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
         # `Decision.__post_init__` already enforces.
         candidates = candidate_set(
             policy, chosen, bounds=bounds, costs=costs, evidence_as_of=evidence_as_of,
-            bound_provenance=bound_provenance,
+            bound_provenance=bound_provenance, price_basis=price_basis,
             floor=floor, authorised=authorised, latency_feasible=latency_feasible, available=available,
             evidence_age_days=evidence_age_days, max_age_days=max_age_days)
     # CONTRACT C1 (amendment 3): both branches call `admissible` on the candidate actually served, not only the
@@ -296,7 +300,11 @@ def route_once(*, policy: dc.Policy, observation: ob.Observation, request_id: st
         gateway_authorised=authorised,
         # Both kinds of gap travel: the policy's own, and the collector's. A caller that saw only one would think the
         # other had been checked.
-        gaps=list(got["gaps"]) + [f"uncollected_variable: {k} -- {v}"
+        gaps=list(got["gaps"])
+        + ([] if price_basis is not None or not (costs or {}) else
+           ["unrecorded_price_basis: costs were supplied and no price_basis was; the ordering this decision turned "
+            "on cannot be re-derived"])
+        + [f"uncollected_variable: {k} -- {v}"
                                   for k, v in sorted(observation.not_observed.items())],
     )
     if log is not None:
