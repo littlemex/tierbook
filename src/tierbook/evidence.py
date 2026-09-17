@@ -457,3 +457,12 @@ SUBJECTS = ("topic", "own_competence", "item_difficulty", "resource_state")
 #: `resource_state` says nothing about the item.
 ESCALATION_SUBJECTS = ("own_competence", "item_difficulty")
 
+#: When a number a verdict depends on was fixed. Closed, and shared rather than restated: it was written first for a
+#: comparison's operating point, and a criterion's null needs the identical distinction. Two copies would be one edit
+#: from disagreeing about what "declared in advance" means.
+#:
+#: The measurement behind it: choosing a coverage on the items the comparison is then scored on gave seven candidate
+#: settings at every price of accuracy, and picking the best inflated the reported interval directly. A number fixed
+#: that way is still worth recording -- it says what the best case looked like -- and it cannot support a verdict.
+FIXED_ON = ("declared_in_advance", "calibration", "scored_items")
+

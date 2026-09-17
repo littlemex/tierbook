@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook registered-criteria  whether a conclusion is supported by every criterion registered
     tierbook floor-feasibility  whether a floor can be met at all, before a policy is written
     tierbook admissible-quantities  which declared quantities a pre-generation gate may condition on
     tierbook admit-judge refuse a judge against the model actually served, before any traffic reaches it
@@ -50,6 +51,7 @@ from tierbook.decide import as_dict as decide_as_dict
 from tierbook.decide import compile_policy
 from tierbook.evidence import EvidenceError
 from tierbook import bar as br
+from tierbook import criterion as cr
 from tierbook import evidence as ev_mod
 from tierbook import judge as jd
 from tierbook import quantity as qt
@@ -722,6 +724,39 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -
 
 
 @_refuses
+def cmd_registered_criteria(args) -> int:
+    """Whether a conclusion is supported by every criterion it was registered against, and nothing free beat it.
+
+    A door because the failure it prevents is a REPORT: one measurement in this study cleared its permutation null by
+    0.0357 and the conclusion did not follow, because a second registered criterion failed and a freely available
+    alternative scored 0.0610 higher on the same question. Reporting the number that passed is not a partial result, it
+    is a different claim -- so this prints every criterion, every alternative, and one sentence naming what stands
+    between them and the conclusion.
+    """
+    null = cr.Null(median=args.null_median, at_quantile=args.null_at_quantile, quantile=args.null_quantile,
+                   draws=args.null_draws, preserves=args.null_preserves)
+    criteria = []
+    for spec in args.criterion:
+        name, observed, direction, bound, fixed = _fields(
+            spec, ("name", "observed", "direction", "bound", "fixed_on"), option="--criterion")
+        criteria.append(cr.Criterion(name=name, observed=float(observed), null=null, fixed_on=fixed,
+                                     direction=direction, bound=None if bound == "-" else float(bound)))
+    alternatives = tuple(cr.Alternative(name=n, observed=float(v))
+                         for n, v in (_fields(spec, ("name", "observed"), option="--alternative")
+                                      for spec in args.alternative))
+    reg = cr.Registration(conclusion=args.conclusion, criteria=tuple(criteria), alternatives=alternatives,
+                          no_alternative_because=args.no_alternative_because)
+    for c in criteria:
+        print(f"{'holds' if c.holds() else 'FAILS'}: {c}")
+    for a in alternatives:
+        print(f"alternative: {a.name} at {a.observed:.4f}")
+    print(reg.why_not())
+    # Exit 2 rather than 1: every number is well formed and the conclusion does not follow from them, which is a finding
+    # about the claim rather than an error in the input.
+    return 0 if reg.supported() else 2
+
+
+@_refuses
 def cmd_floor_feasibility(args) -> int:
     """Whether a floor can be met at all, before any policy is written or scored.
 
@@ -1113,6 +1148,28 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    rc = sub.add_parser("registered-criteria", parents=[common],
+                        help="whether a conclusion is supported by every criterion it was registered against")
+    rc.add_argument("--conclusion", required=True, help="what the criteria were registered for")
+    rc.add_argument("--null-median", type=float, required=True)
+    rc.add_argument("--null-at-quantile", type=float, required=True,
+                    help="the null's value at the declared quantile; both it and the median are required because the "
+                         "gain over one is not the gain over the other")
+    rc.add_argument("--null-quantile", type=float, default=0.95)
+    rc.add_argument("--null-draws", type=int, required=True)
+    rc.add_argument("--null-preserves", default="", help="what the permutation held fixed, for the reader")
+    rc.add_argument("--criterion", action="append", default=[], required=True,
+                    metavar="NAME:OBSERVED:DIRECTION:BOUND:FIXED_ON",
+                    help="repeatable. DIRECTION is above or below; BOUND is '-' when testing against the null's "
+                         "quantile")
+    rc.add_argument("--alternative", action="append", default=[], metavar="NAME:OBSERVED",
+                    help="something freely available answering the same question. A null cannot stand in for one")
+    rc.add_argument("--no-alternative-because", default="",
+                    help="why none is listed, required when none is. An empty list with no reason is ambiguous between "
+                         "'nothing cheaper exists' and 'nobody looked', and looking is what settled the case this "
+                         "command exists for")
+    rc.set_defaults(fn=cmd_registered_criteria, registry=None)
 
     ff = sub.add_parser("floor-feasibility", parents=[common],
                         help="whether a floor can be met at all, before a policy is written")

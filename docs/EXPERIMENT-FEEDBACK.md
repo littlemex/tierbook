@@ -5412,6 +5412,55 @@ a decision.
 **Suite green at 1,919 passed, 3 skipped.** Three mechanisms mutated -- the refusal, the classification of the metered
 source, and the property that reads it -- and each fails tests.
 
+## F121 — A criterion registered with its null, and the report that passed while the conclusion failed
+
+**F36's ask**: "a criterion registered together with its null, computed on a fixture before the real data is opened. It
+is the ninth failure and **the first the gates could not have caught**."
+
+**Reproduced end to end before anything was built.** Feeding the entry's own numbers through the new structure returns
+the entry's own conclusion:
+
+| | value | verdict |
+|---|---|---|
+| the internal direction, held out | 0.8285 | -- |
+| its permutation null, 95th percentile | 0.7928 | criterion (i) **holds** by +0.0357 |
+| fraction inside the answer-letter span | 0.754 against a bound of 0.50 | criterion (ii) **fails** by -0.2540 |
+| a freely available readout, same items | **0.8895** | **beats the direction by 0.0610** |
+
+**"Beats its null" is true and the conclusion does not follow.** A report of the first line alone is a report that
+passed.
+
+**Three refusals, one per way that report could be produced.**
+
+**A null is a distribution, not a scalar.** Median 0.7584, 95th percentile 0.7928 -- the gain over one is 0.0701 and over
+the other 0.0357, so "beats the null" without naming the quantile is a sentence that can mean either. Both ends are
+carried, the quantile is declared, and **a draw count that cannot resolve it is refused**: at 0.95 with ten draws the
+tail is a single draw or none, so nothing could have failed.
+
+**A conclusion needs every criterion it was registered with**, so `supported` requires all of them and there is **no
+method that reports one** -- a test asserts no `any_supported`, `best_criterion` or `first_pass` exists. Reporting the
+test that passed is not a partial result, it is a different claim.
+
+**And a null is not an alternative.** Beating a permutation of your own labels says the signal is not an artefact of the
+label distribution; it says nothing about whether something cheaper already does the job, and here the two answers
+**disagreed**. Losing to a free alternative withholds support on its own.
+
+**What the mechanism cannot close, stated rather than glossed.** It cannot know how many criteria a claim needs -- someone
+may still register only the test that passed, and there the registration's job is to make the shortness visible. What it
+**can** refuse is a conclusion that never asked the cheaper question at all: an empty alternatives list is ambiguous
+between "nothing cheaper exists" and "nobody looked", so it is refused unless the reason is declared, and the two are
+refused together.
+
+**One duplication avoided.** "Was this number fixed on the data it is scored against" already existed for a comparison's
+operating point. Rather than a third copy, `FIXED_ON` moved to `evidence` -- the leaf both reach -- and `CHOSEN_ON` is now
+an alias, with a test asserting they are the same object.
+
+**The audit came back clean, with the reason.** Every existing verdict in `accept` compares against a **declared
+threshold** -- a floor, a cohort ceiling, section 2's clauses -- and not against a permutation null, so the
+"a null is not an alternative" rule has nothing to bite on there.
+
+**Suite green at 1,946 passed, 3 skipped.** Six mechanisms mutated and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 from math import comb
 from typing import Callable, Sequence
 
-from tierbook.evidence import (UNOBSERVED, Elicitation, EvidenceError, Substituted,
+from tierbook.evidence import (FIXED_ON, UNOBSERVED, Elicitation, EvidenceError, Substituted,
                               z_for_one_sided)
 from tierbook.outcomes import Cell, OutcomeTable
 from tierbook.reproduce import wilson
@@ -266,12 +266,11 @@ def _sign_test(wins: int, losses: int) -> float:
 #: fixed candidates and a dishonest default for anything with a gate in it.
 OPERATING_POINT_KINDS = ("fixed", "integrated", "not_applicable")
 
-#: Where the setting came from. This distinction is the one that was MEASURED to matter: choosing the coverage on the
-#: items the comparison is then scored on gave seven candidate settings at every price of accuracy, and picking the
-#: best of them inflated the reported interval directly. A comparison built that way is still worth recording -- it
-#: says what the best case looked like -- but it cannot support a verdict, which is why `Unsupported` exists rather
-#: than a refusal at construction.
-CHOSEN_ON = ("calibration", "declared_in_advance", "scored_items")
+#: Where the setting came from. An alias for `evidence.FIXED_ON`, which is the same question about a different object:
+#: this was written for an operating point and a criterion's null needs the identical distinction, so the vocabulary
+#: moved to the leaf both reach rather than being restated. The name is kept because `chosen_on` reads better of a
+#: setting somebody chose than `fixed_on` does.
+CHOSEN_ON = FIXED_ON
 
 
 class Unsupported(RuntimeError):
