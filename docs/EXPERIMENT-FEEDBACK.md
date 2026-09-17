@@ -5148,6 +5148,42 @@ with, which is a different problem from a declaration that could not be read.
 
 **Suite green at 1,807 passed, 3 skipped.** Six mechanisms mutated and each fails tests.
 
+## F114 — Store the curve, carry every baseline, and close a door defect at its third occurrence
+
+**Two entries, both absent, both about a signal's recorded performance.** F6: "whatever records a signal's strength
+recording what it was compared against, so 'beats 0.5' cannot be written where 'loses to the category prior' is the
+fact." F29: "a signal's recorded performance being its `U(λ)` curve over the price range, with any scalar derived from it
+at the point of use and **never stored in its place**."
+
+**The measured story is the test case.** An abstention rule was reported at **0.5000** as a structural result. That is
+the AUC of a constant score by construction and says nothing about the signal; the real decision-time baseline,
+measured, was a **category dictionary at 0.6583**. `Performance` reproduces it: at the cheap end the signal loses to
+both, and **at the dear end it still loses to the category prior**.
+
+**F6 and F30 pull in opposite directions and both are respected.** Quoting the weakest baseline is F6's defect; taking
+the maximum over several controls is F30's winner's curse. So every baseline is carried, `beats` **requires the caller
+to name which one**, there is deliberately no method answering "is it better", and `loses_to_any` returns the **whole
+list** -- reporting only the strongest loss is the curse from the other side and reporting none is how "beats 0.5" got
+written.
+
+**The curve is stored and every scalar is derived**, with two refusals that make the stored-scalar defect
+unrepresentable: a curve of one point is "a scalar wearing a curve's name", and a price **between** measured points is
+refused rather than interpolated -- because between two points is exactly where the ranking measured here changes, so a
+straight line through it reports a ranking that was never observed.
+
+**And the same door defect appeared a third time, so it is closed as a class.** A malformed box spec, a malformed
+quantity spec, and now a price outside a measured curve each raised from a line **outside** the door's own `try` and
+surfaced as a stack trace where a sentence was promised. A `try` covers the region its author remembered, and **a region
+an author chooses is a region an author gets wrong**. The floor is now a `@_refuses` decorator over the whole function,
+with a test asserting the doors wear it -- so a new door cannot be added without a decision about it.
+
+**The door reports the loss beside the verdict**: a quantity can be admissible on every axis this structure checks and
+still be beaten by the category prior, and that is the fact a score alone hides. An unmeasured performance prints as
+unmeasured rather than as passing, because nobody having measured it is not the same as it having performed well.
+
+**Suite green at 1,826 passed, 3 skipped.** Five mechanisms mutated -- the one-point refusal, the no-baseline refusal,
+the loss list, the interpolation refusal and the decorator's own catch -- and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

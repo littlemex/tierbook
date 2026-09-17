@@ -37,6 +37,7 @@ being read as a measurement of your traffic.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
@@ -681,6 +682,26 @@ def cmd_logs(args) -> int:
     return 0
 
 
+def _refuses(fn):
+    """Turn any refusal raised anywhere in a door into `refused: ...` on stderr and exit 1.
+
+    A DECORATOR rather than a `try` inside each door, because a `try` covers the region its author remembered and this
+    defect has now occurred three times in three doors: a malformed box spec, a malformed quantity spec, and a price
+    outside a measured curve -- each raised from a line outside the block, each surfacing as a stack trace where a
+    sentence was promised. A region an author chooses is a region an author gets wrong; the function is not.
+
+    Specific hints stay as inner handlers where they add something argparse cannot say. This is the floor under them.
+    """
+    @functools.wraps(fn)
+    def door(args) -> int:
+        try:
+            return fn(args)
+        except (jd.Inadmissible, EvidenceError, OSError) as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 1
+    return door
+
+
 def _fields(spec: str, names: tuple[str, ...], *, option: str) -> list[str]:
     """Split a colon-separated option value, refusing the wrong count with the shape it wanted.
 
@@ -698,6 +719,7 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str) -> list[str]:
     return parts
 
 
+@_refuses
 def cmd_admissible_quantities(args) -> int:
     """Which declared quantities a pre-generation gate may condition on, and why each of the others may not.
 
@@ -714,7 +736,17 @@ def cmd_admissible_quantities(args) -> int:
         served = jd.digest_published(args.served)
         elicitation = ev_mod.elicitation_from_template(args.elicitation_name,
                                                        Path(args.elicitation_template).read_text())
-        declared = [_quantity_from_spec(spec, served=served, elicitation=elicitation) for spec in args.quantity]
+        curves = {}
+        for spec in args.performance:
+            name, points, bases = _fields(spec, ("name", "curve", "baselines"), option="--performance")
+            curves[name] = qt.Performance(
+                curve=tuple(sorted((float(k), float(v)) for k, v in
+                                   (pair.split("=") for pair in points.split(",")))),
+                baselines=tuple(qt.Baseline(kind=k, value=float(v), note="from --performance" if k == "declared" else "")
+                                for k, v in (pair.split("=") for pair in bases.split(","))))
+        declared = [_quantity_from_spec(spec, served=served, elicitation=elicitation,
+                                        performance=curves.get(spec.split(":")[0]))
+                    for spec in args.quantity]
     except (jd.Inadmissible, EvidenceError) as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1
@@ -730,13 +762,22 @@ def cmd_admissible_quantities(args) -> int:
     for q in declared:
         mark = "usable" if q in usable else "not usable"
         print(f"{mark}: {q}")
+        # Printed for every quantity that has a measured performance, and printed as the LOSSES rather than as a score.
+        # A strength quoted against whichever baseline it beats is how "beats 0.5" got written where the measured
+        # decision-time baseline was 0.6583; naming what it loses to is the fact a score alone hides.
+        if q.performance is not None and args.price is not None:
+            lost = q.performance.loses_to_any(price=args.price)
+            print(f"  at price {args.price:g}: {q.performance.at(args.price):.4f}, "
+                  + (f"loses to {', '.join(lost)}" if lost else "beats every baseline it was measured against"))
+        elif q.performance is None:
+            print("  performance unmeasured, so nothing here says whether it is worth conditioning on")
     print(f"{len(usable)} of {len(declared)} quantities are admissible to a pre-generation gate")
     # Exit 2 rather than 1 when none is admissible: nothing is malformed, and the gate has nothing to decide with,
     # which is a different problem from a declaration this command could not read.
     return 0 if usable else 2
 
 
-def _quantity_from_spec(spec: str, *, served, elicitation):
+def _quantity_from_spec(spec: str, *, served, elicitation, performance=None):
     """NAME:KIND:AVAILABILITY:REGISTER:PASSES:FRESH_DAYS:READOUT_VERSION.
 
     The digest and the elicitation are not in the spec on purpose: they are what the SERVED model and the declared
@@ -750,9 +791,10 @@ def _quantity_from_spec(spec: str, *, served, elicitation):
     return qt.Quantity(name=name, kind=kind, availability=availability, register=register, price=price,
                        measured_on=served, elicitation=elicitation,
                        validity=qt.Validity(calibrated_for=elicitation, fresh_for_days=float(fresh)),
-                       readout_version=version)
+                       readout_version=version, performance=performance)
 
 
+@_refuses
 def cmd_admit_judge(args) -> int:
     """Refuse a judge against the model actually served, before any traffic reaches it.
 
@@ -1013,6 +1055,13 @@ def main(argv: list[str] | None = None) -> int:
                     metavar="NAME:KIND:AVAILABILITY:REGISTER:PASSES:FRESH_DAYS:READOUT_VERSION",
                     help="a declared quantity, repeatable. The digest and the condition are NOT in the spec: they come "
                          "from --served and --elicitation-template, so a manifest line cannot assert a match")
+    aq.add_argument("--price", type=float, default=None,
+                    help="a price of accuracy at which to report each quantity's measured value and the baselines it "
+                         "loses to. Must be one the curve was measured at: a value between two measured prices would "
+                         "be invented, and between two points is where the ranking changes")
+    aq.add_argument("--performance", action="append", default=[],
+                    metavar="NAME:PRICE=VALUE,...:KIND=VALUE,...",
+                    help="a measured curve and its baselines for one declared quantity, repeatable")
     aq.set_defaults(fn=cmd_admissible_quantities, registry=None)
 
     aj = sub.add_parser("admit-judge", parents=[common],

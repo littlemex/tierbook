@@ -107,6 +107,10 @@ class Quantity:
     elicitation: Elicitation
     validity: Validity
     readout_version: str
+    #: The measured performance, when it has been measured. `None` means nobody has, which is not the same as a signal
+    #: that performed badly -- and the distinction matters at the door: an unmeasured quantity is admissible on the
+    #: axes this structure checks and says nothing about whether it is worth conditioning on.
+    performance: Performance | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -156,6 +160,10 @@ class Quantity:
                 f"{self.validity.calibrated_for}. Those are different conditions, and a quantity fitted in one does "
                 f"not transfer to the other by recalibration -- it is about different items, so the calibration does "
                 f"not describe this quantity at all")
+        if self.performance is not None and not isinstance(self.performance, Performance):
+            raise Inadmissible(
+                f"performance={self.performance!r} is not a Performance. A bare number here would be the stored scalar "
+                f"this type exists to refuse: the ranking at one price is not the ranking at another")
         if not self.readout_version:
             raise Inadmissible(
                 "readout_version is empty. The same model and the same prompt with a changed readout give a different "
@@ -182,6 +190,124 @@ class Quantity:
     def __str__(self) -> str:
         return (f"{self.name}/{self.readout_version} ({self.kind}, {self.availability}, {self.register}, "
                 f"{'free' if self.is_free else f'{self.price.extra_passes} extra pass(es)'})")
+
+
+#: What a signal's strength was compared against. Closed, because the whole defect this closes is a strength reported
+#: against whichever baseline made it look best, and an open-ended name is how that happens.
+#:
+#: `constant_score` is the one that bit: an abstention rule was reported at 0.5000 as a structural result, and 0.5000 is
+#: the AUC of a constant score by construction -- it says nothing about the signal. The real decision-time baseline,
+#: measured, was a **category dictionary at 0.6583**. So "beats 0.5" was written where "loses to the category prior"
+#: was the fact.
+BASELINE_KINDS = ("constant_score", "category_prior", "free_surface_feature", "matched_norm_random", "declared")
+
+
+@dataclass(frozen=True)
+class Baseline:
+    """One thing a signal's strength was compared against, and what that thing scored."""
+
+    kind: str
+    value: float
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in BASELINE_KINDS:
+            raise Inadmissible(
+                f"{self.kind!r} is not one of {BASELINE_KINDS}. An open-ended name is how a strength gets reported "
+                f"against whichever baseline made it look best, which is the defect this vocabulary closes")
+        if self.kind == "declared" and not self.note:
+            raise Inadmissible("a 'declared' baseline is one this vocabulary does not name, so it needs a note saying "
+                               "what it is; without one the reader has a number and no idea what beat it")
+
+    def __str__(self) -> str:
+        return f"{self.kind}={self.value:.4f}" + (f" ({self.note})" if self.note else "")
+
+
+@dataclass(frozen=True)
+class Performance:
+    """A signal's measured performance as a CURVE over the price range, with every baseline it was compared against.
+
+    **The curve is what is stored and every scalar is derived.** A scalar is the part that gets quoted, and the crossing
+    measured here is not only in the cost term: at a high price of accuracy only the far tail of the distribution is
+    being asked about, and the ranking in the tail differs from the ranking overall. A stored scalar is that ranking
+    frozen at one price and then read as the ranking.
+
+    **Every baseline is carried, and no single one is the headline.** Two lessons pull in opposite directions and this
+    is how they are both respected: quoting the weakest baseline is the defect that reported 0.5000 as structural when
+    a category dictionary scored 0.6583, and taking the maximum over several controls puts a winner's curse on the
+    control side. So `beats` requires the caller to name which baseline, and there is no method that answers "is it
+    better" without one.
+    """
+
+    curve: tuple[tuple[float, float], ...]
+    baselines: tuple[Baseline, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.curve) < 2:
+            raise Inadmissible(
+                f"a curve of {len(self.curve)} point(s) is a scalar wearing a curve's name. The reason to store a curve "
+                f"is that the ranking at one price is not the ranking at another, and one point cannot show that")
+        prices = [p for p, _ in self.curve]
+        if prices != sorted(prices):
+            raise Inadmissible(f"the curve's prices {prices} are not in order; reading a value between two points "
+                               f"depends on the order, so an unsorted curve gives a different answer per storage order")
+        if len(set(prices)) != len(prices):
+            raise Inadmissible("the curve has two values at one price, so it is not a function of price and nothing "
+                               "says which of them applies")
+        if not self.baselines:
+            raise Inadmissible(
+                "no baseline recorded. A strength with nothing beside it is the state that let '0.5000, reported as "
+                "structural' stand where the measured decision-time baseline was 0.6583: the number was right and the "
+                "claim it supported was not")
+
+    @property
+    def price_range(self) -> tuple[float, float]:
+        return (self.curve[0][0], self.curve[-1][0])
+
+    def at(self, price: float) -> float:
+        """The measured value at a price on the curve, refused outside the range it was measured over.
+
+        Refused rather than extrapolated, and refused rather than interpolated between the two nearest points: the
+        crossing this exists to preserve happens *between* measured prices, so a straight line through it would report
+        a ranking that was never observed at exactly the prices where the ranking changes.
+        """
+        for p, u in self.curve:
+            if p == price:
+                return u
+        lo, hi = self.price_range
+        raise Inadmissible(
+            f"price {price} was not measured; the curve holds {[p for p, _ in self.curve]} over [{lo}, {hi}]. "
+            f"Interpolating would invent a value between two points, and between two points is exactly where the "
+            f"ranking measured here changes")
+
+    def beats(self, baseline_kind: str, *, price: float) -> bool:
+        """Whether the signal beat one NAMED baseline at one price. There is deliberately no unqualified version.
+
+        Naming it is the whole point: without a name a caller gets "better", which is the sentence that was written
+        against a constant score while a category dictionary was winning.
+        """
+        matching = [b for b in self.baselines if b.kind == baseline_kind]
+        if not matching:
+            raise Inadmissible(
+                f"{baseline_kind!r} is not among the baselines this performance was measured against "
+                f"{tuple(b.kind for b in self.baselines)}; answering anyway would compare against a number nobody "
+                f"measured here")
+        return self.at(price) > matching[0].value
+
+    def loses_to_any(self, *, price: float) -> tuple[str, ...]:
+        """Which baselines the signal does NOT beat at this price, which is the fact `beats` alone can hide.
+
+        Returned rather than raised, and returned as the whole list rather than the worst case: reporting only the
+        strongest loss is the winner's curse from the other side, and reporting none of them is how "beats 0.5" got
+        written.
+        """
+        value = self.at(price)
+        return tuple(b.kind for b in self.baselines if value <= b.value)
+
+    def __str__(self) -> str:
+        lo, hi = self.price_range
+        return (f"{len(self.curve)} points over [{lo:g}, {hi:g}] against "
+                f"{', '.join(str(b) for b in self.baselines)}")
 
 
 def admissible_for_a_gate(quantities: list[Quantity], *, elicitation: Elicitation,
