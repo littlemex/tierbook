@@ -5064,6 +5064,47 @@ I remember. Second: a test asserted on the loader's **source text** rather than 
 irrelevant reason that I had guessed the method's name. Replaced with a test that calls `from_evidence` and reads the
 cell, which is what the claim was about.
 
+## F112 — How an answer was extracted, and a refusal calibrated to half the failure that cost a GPU run
+
+**F5's ask, unimplemented until now**: "an outcome recording the extraction rule that produced it, and a refusal when
+the resulting answer distribution is degenerate. This is the same shape as `bound_provenance`: a value whose meaning
+depends on how it was produced, currently recorded without that."
+
+**The design driver is F5's second sentence, not its first.** The break was loud -- 1,822 of 2,364 items on `A`, 77.1%
+of a ten-option corpus, accuracy 0.1599 against a 0.10 floor -- and F5 says: *the same failure at half the rate would
+have produced a plausible middle value and been believed.* So every bound here is answerable to **half** the measured
+break, and `bound_from_options` refuses a tolerance that would let it through, naming both numbers.
+
+**`Degenerate` is a distinct failure from a low accuracy, and that is why the check earns its place.** 0.1599 against
+0.10 is a *plausible* number and sends a reader looking for a weak model. **The mass on one option is what says the
+reader is broken.** So the refusal happens at table construction, before any accuracy is computed from the answers.
+
+**The rule is a closed vocabulary and each entry is one that was actually used**: `next_token` (the one that broke,
+correct under a terse instruction only), `answer_cue` (the repair, which must carry its cue -- appending it in one
+condition and not the other is what made two runs' endpoints different kinds of position), `regex_in_reply`,
+`parsed_structure`, and `unrecorded` for every outcome written before this existed.
+
+**Two defects of my own, both found by testing an input I had not considered.**
+
+1. **The guard compared shares across different option counts.** It checked a caller's absolute bound against
+   0.3854 -- half of a share measured on a **ten**-option task -- so a two-option task was refused at *every*
+   tolerance, because uniform is already 0.5 there. A binary task could never have obtained a bound and the check
+   would have been switched off exactly where it is most usable. Clustering has to be compared as a **multiple of
+   uniform** or not at all.
+2. **A derived bound that admits everything was being clamped rather than refused.** At the default tolerance a
+   two-option task derives 1.5, clamped to 1.0 -- and the check would then be present, called, green and **incapable
+   of refusing anything**. That is coverage that is not coverage, so it now raises and sends the caller to state a
+   bound with the reason. At two options nothing derivable from the option count alone can tell a broken reader from a
+   skewed answer key, and pretending otherwise is the dishonest option.
+
+**And one fabrication caught before it shipped.** My first wiring read `e.answers` off an `Evidence` object, which has
+no such attribute -- an evidence artifact records the verdict per item, not the extracted answer. The answers now
+arrive as a parameter for the same reason `cost_per_item` does: neither is derivable from the artifact.
+
+**Suite green at 1,777 passed, 3 skipped.** Six mechanisms mutated -- the modal refusal, the tolerance guard, the
+saturation guard, the unparsed refusal, the denominator that counts unparsed replies, and the loader's call -- and each
+fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

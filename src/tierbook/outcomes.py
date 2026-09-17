@@ -40,6 +40,7 @@ import math
 from dataclasses import dataclass, field
 
 from tierbook.evidence import INCORRECT, SOLVED, UNOBSERVED, Evidence, EvidenceError
+from tierbook.extraction import Extraction, refuse_degenerate
 from tierbook.spend import Spend
 
 #: What a policy may do with a request. `REFUSE` is a first-class action rather than the absence of one: if no
@@ -76,6 +77,10 @@ class Cell:
     #: measurements writing the answer costs about 95 times reading the prompt. A scalar cannot say which of the two a
     #: saving came from, so a gate working and a shorter prompt look identical.
     spend: Spend | None = None
+    #: The rule that produced `answer`, travelling with it -- the same shape as `record.BoundProvenance`, and for the
+    #: same reason: a value whose meaning depends on how it was produced. Absent means nothing says, which is every
+    #: cell written before this field existed, and is NOT the same as a rule that was checked.
+    extraction: Extraction | None = None
 
     def __post_init__(self) -> None:
         if self.spend is None:
@@ -126,6 +131,9 @@ class OutcomeTable:
     @classmethod
     def from_evidence(cls, evidence: list[Evidence], *,
                       cost_per_item: dict[str, dict[str, float | Spend]] | None = None,
+                      answers: dict[str, dict[str, str | None]] | None = None,
+                      extraction: dict[str, Extraction] | None = None,
+                      modal_bounds: dict[str, float] | None = None,
                       features: dict[str, dict] | None = None) -> OutcomeTable:
         """Join evidence artifacts into one table, refusing to join across suites.
 
@@ -146,6 +154,10 @@ class OutcomeTable:
             raise EvidenceError(f"two artifacts claim the same subject: {sorted(subjects)}")
         table = cls(suite=evidence[0].family, manifest_digest=evidence[0].suite_manifest_digest)
         costs = cost_per_item or {}
+        # `answers` arrives as a parameter for the same reason `cost_per_item` does: an evidence artifact records the
+        # VERDICT per item and not the extracted answer, so neither the cost nor the answer is derivable from it. What
+        # is new is that the answer plus `extraction` is checkable, and the check runs below before this returns.
+        rules = extraction or {}
         for e in evidence:
             for item_id, (state, _reason) in e.verdicts.items():
                 cost = (costs.get(e.subject) or {}).get(item_id)
@@ -155,8 +167,19 @@ class OutcomeTable:
                 # fill too, which is the shape this package refuses.
                 leg_split = cost if isinstance(cost, Spend) else None
                 usd = cost.total if isinstance(cost, Spend) else cost
-                table.cells.setdefault(item_id, {})[e.subject] = Cell(state=state, usd=usd, spend=leg_split)
+                table.cells.setdefault(item_id, {})[e.subject] = Cell(
+                    state=state, usd=usd, spend=leg_split,
+                    answer=(answers or {}).get(e.subject, {}).get(item_id),
+                    extraction=rules.get(e.subject))
         table.features = dict(features or {})
+        # Checked here rather than left for a caller, because the failure this catches is one that produces a PLAUSIBLE
+        # accuracy: the run that broke reported 0.1599 against a 0.10 floor, which reads as a weak model, and only the
+        # mass on one option says the reader was broken. A table built from a broken read is therefore refused rather
+        # than returned for somebody to notice.
+        for subject, rule in (extraction or {}).items():
+            answers = [table.cells.get(i, {}).get(subject).answer if table.cells.get(i, {}).get(subject) else None
+                       for i in table.cells]
+            refuse_degenerate(answers, rule, modal_bound=(modal_bounds or {}).get(subject))
         return table
 
     # --- shape ------------------------------------------------------------------------------------
