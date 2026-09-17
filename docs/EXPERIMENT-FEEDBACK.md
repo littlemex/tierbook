@@ -4983,6 +4983,47 @@ added in an earlier iteration now sat between them, and `compare()` then passed 
 ten-field dataclass. Asserting the match count is exactly one caught it on the retry; the first attempt reported
 success while changing nothing, which is the failure mode of every edit that does not check what it matched.
 
+## F110 — Reading the prompt and writing the answer are priced apart, and a signal's price is a pass count
+
+**F13 and F14 asked for the same thing and neither existed.** F13: "a cost model that separates prefill from
+generation... a router that decides whether to generate needs those two priced apart, and no record here does that."
+F14: "nothing in the mechanism records how many passes a signal cost, so that trade cannot be stated."
+
+**The measurement is the whole argument.** On the same server: reading the prompt **0.109 s**, writing the answer at the
+box's own median length **10.42 s**. Charged at one rate per token those are the same thing; they differ by about 95, and
+**98.96%** of a generating request is the part a gate can avoid. `Spend.generation_share` reproduces that figure.
+
+**`Spend` keeps the legs apart and derives the total.** `total` is a property, not a field: a supplied total can
+disagree with the legs it claims to sum, and it is also the field a caller reaches for when they have not thought about
+which leg their change touches -- which is the defect. `avoided(before, after)` returns a **saving with its legs**,
+because a saving that is all generation is a gate working and a saving of the same size that is all prefill is a shorter
+prompt, and those need different things done next.
+
+**`SignalPrice` counts passes, and the marginal/absolute distinction is where I got it wrong first.** My initial
+`share_of` counted every pass and returned **2.09%** against the ledger's recorded 1%. **The ledger was right**: a
+request that answers at all reads its prompt once, so the recorded 1% is the *second* read. A signal computed from the
+read the request makes anyway is **free**, `extra_passes` is `passes - 1`, and `share_of` is marginal by default:
+
+| signal | extra passes | share of a whole generation avoided |
+|---|---|---|
+| read from the prompt the request already reads | 0 | **0.0** |
+| an intervention needing a second read | 1 | **0.0105** -- the recorded 1% |
+| the same, priced absolutely (only when asked for) | -- | 0.0209 |
+
+That 1% is the entire argument for **buying even a small additive gain**, and it is a statement no scalar total can
+make.
+
+**The cost vocabulary now has one home.** `COST_UNITS` and `format_cost` moved out of the comparison module into
+`spend.py` and 29 duplicated lines were deleted, because two copies of a unit list are one edit from disagreeing about
+what a cost is. A test asserts the comparison code reads them from here rather than holding a copy.
+
+**Refusals worth naming**: a negative leg (it would make a total smaller than one of its parts); a pass count that is
+not an integer, including a bool, which would count `True` as one pass silently; a scalar `per_pass`, since it cannot
+say whether the pass is a prompt read or a generation; and a share of a saving of zero, because returning a large number
+would read as "too expensive" when the fact is that nothing was saved.
+
+**Suite green at 1,740 passed, 3 skipped.** Six mechanisms mutated and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

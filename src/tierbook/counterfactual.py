@@ -58,6 +58,7 @@ from tierbook.evidence import (UNOBSERVED, Elicitation, EvidenceError, Substitut
                               z_for_one_sided)
 from tierbook.outcomes import Cell, OutcomeTable
 from tierbook.reproduce import wilson
+from tierbook.spend import COST_UNITS, format_cost
 
 #: A rule: given the table, an item, and the candidates it may use, return the tiers it calls in order.
 #: Returning a tier twice is allowed and paid for twice, because a retry is a real cost.
@@ -66,35 +67,6 @@ Rule = Callable[[OutcomeTable, str], Sequence[str]]
 
 def _cell(table: OutcomeTable, item: str, tier: str) -> Cell:
     return table.cells.get(item, {}).get(tier) or Cell(UNOBSERVED, None)
-
-
-#: What a cost is measured in. Closed, because the three are not interchangeable and no conversion between them is
-#: available here.
-#:
-#: `usd` is what a metered API bills and the only unit in which two candidates of different kinds are directly
-#: comparable. `tokens` is what every experiment in this study actually measured, and it is a **weak proxy**: a policy
-#: ahead in tokens can lose in `gpu_seconds`, because a token count does not see KV-cache occupancy or the effect of a
-#: long trace on every other request sharing the batch. `gpu_seconds` is what a self-hosted machine actually spends,
-#: and it is the one a serving system feels.
-#:
-#: There is deliberately no conversion function. `tokens` to `usd` needs a price card, `tokens` to `gpu_seconds` needs
-#: a throughput measured under load rather than more items, and a coefficient assumed instead of measured once moved a
-#: published figure in this project by a factor of six and changed which candidate was selected.
-COST_UNITS = ("usd", "tokens", "gpu_seconds")
-
-#: How a cost in this unit prints, so a token count is never rendered with a currency symbol.
-_UNIT_FORMAT = {"usd": ("$", "{:.5f}"), "tokens": ("", "{:.1f} tokens"), "gpu_seconds": ("", "{:.3f} GPU-s")}
-
-
-def format_cost(value: float, unit: str) -> str:
-    """Render a cost with its unit, so a token count never appears behind a currency symbol.
-
-    A number printed with the wrong unit is the report-level form of the same defect the refusals below prevent: a
-    reader comparing two figures assumes they are in the same thing, and a `$` in front of a token count is the
-    strongest possible reason to assume it.
-    """
-    prefix, fmt = _UNIT_FORMAT[unit]
-    return prefix + fmt.format(value)
 
 
 @dataclass
