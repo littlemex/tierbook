@@ -5300,6 +5300,48 @@ one thing.
 
 **Suite green at 1,880 passed, 3 skipped.** Six mechanisms mutated and each fails tests.
 
+## F118 — What a signal is ABOUT, and the audit that found a production caller taking it bare
+
+**F9's ask**: "a router that consumes a signal recording WHAT the signal is about. 'The model can name the topic' and
+'the model knows whether it can answer' are different facts with different uses, and a mechanism that takes one score
+cannot tell which it was handed."
+
+**The measurement does not merely distinguish them, it inverts them.** At one layer the same readout:
+
+| what it was scored against | value | chance |
+|---|---|---|
+| naming the item's field | **0.7593** | 0.1429 |
+| predicting its own error | **0.4227** | 0.5000 |
+
+**Five times chance on the subject, and below a coin on competence.** A mechanism handed one number cannot tell which of
+those two it got, and the two point in opposite directions.
+
+**`SUBJECTS` is closed over four**, and `own_competence` and `item_difficulty` are kept apart even though both route by
+difficulty: one asks whether THIS candidate can answer and the other how hard the item is for anyone, and a signal
+fitted to the second has been measured not to predict the first's uplift. `admissible_for_a_gate` gained a fourth
+filter, so a topic signal is **not admissible to a gate however strong it is** -- admitting it would route by subject
+while reporting that it routes by difficulty.
+
+**Then the audit, and it found a live one.** Sixteen call sites were clean last entry; this time
+`quorum.evaluate_signal` -- which builds an **escalation** policy -- took a bare `dict[str, float]` with nothing saying
+what the numbers were about. A topic classifier and a confidence readout arrived there identically and produced policies
+described identically. It now requires the subject and refuses anything outside `ESCALATION_SUBJECTS`.
+
+**Three things the assertions caught before they shipped, and each is a rule from this loop's own prompt.**
+
+1. **A cycle.** `quorum` importing the structure's module would have closed `quantity -> judge -> reproduce -> quorum`.
+   The vocabulary moved to `evidence`, the leaf both reach -- one home, as with the quantile table and the elicitation.
+2. **A third meaning of one word in one file.** `evaluate_signal`'s own body used `subject` for a **list of item ids**,
+   while "subject" already means a candidate in this package. The parameter is `about` and the local is now `item_ids`.
+   My grep found four uses of that local; **the asserted count found a fifth**, two on one line.
+3. **Two fabrications in my own tests.** I called a helper `_t()` that does not exist and imported an exception the file
+   does not import, then assumed `evaluate_signal` was imported at module level when this file imports it **inside each
+   test**. All three were assumptions about existing code, which is the one rule in this loop's prompt I keep breaking --
+   and the cost each time is a failing test rather than a shipped defect, because the prompt also says to run them.
+
+**Suite green at 1,896 passed, 3 skipped.** Four mechanisms mutated -- the subject vocabulary, the gate filter, the
+escalation-subject predicate and the quorum refusal -- and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

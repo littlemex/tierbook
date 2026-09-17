@@ -50,7 +50,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import combinations
 
-from tierbook.evidence import UNOBSERVED
+from tierbook.evidence import ESCALATION_SUBJECTS, UNOBSERVED, EvidenceError
 from tierbook.outcomes import Cell, OutcomeTable
 
 
@@ -250,7 +250,7 @@ def enumerate_policies(table: OutcomeTable, *, candidates: list[str], escalate_t
 
 
 def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
-                    signal: dict[str, float], threshold: float,
+                    signal: dict[str, float], about: str, threshold: float,
                     probe_usd: float = 0.0,
                     prices: dict[str, float] | None = None,
                     items: list[str] | None = None) -> QuorumPolicy:
@@ -263,13 +263,29 @@ def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
     dominated it on both axes and was never enumerated. A frontier that cannot express a mechanism
     cannot rule it out either.
 
+    **`about` is required and is checked, not recorded.** DEFECT this closes: this took a bare `dict[str, float]` with
+    nothing saying what the numbers were about, so a topic classifier and a confidence readout arrived here identically
+    and produced policies described identically. They are not interchangeable, and the measurement is brutal: at one
+    layer the same readout named the item's field at 0.7593 against a chance of 0.1429 and predicted its own error at
+    0.4227, *below* the 0.5 a coin gets.
+
+    Named `about` rather than `subject` because "subject" already means a candidate in this package, and this function's
+    own body used it for a list of item ids -- that local is renamed to `item_ids` here, which is what it holds. Three
+    meanings of one word in one file is how the wrong one gets read.
+
     A signal policy is strictly more expressive than a one-member quorum: a lone candidate always
     "agrees" with itself and so can never escalate, whereas a threshold escalates exactly the items
     the signal flags. `threshold` escalates when `signal[item] >= threshold`, so the signal is an
     uncertainty (higher means less sure); `probe_usd` is what reading it costs per item, which is not
     zero when the signal comes from an extra call.
     """
-    subject = list(items if items is not None else table.items)
+    if about not in ESCALATION_SUBJECTS:
+        raise EvidenceError(
+            f"about={about!r} is not one of {ESCALATION_SUBJECTS}. A signal policy escalates, and only competence or "
+            f"difficulty speaks to whether an item should be escalated; a topic signal answers a different question "
+            f"well -- at five times chance -- and says nothing about competence, so a policy built on it would escalate "
+            f"by subject while being reported as escalating by confidence")
+    item_ids = list(items if items is not None else table.items)
 
     def cost_of(item: str, tier: str) -> float | None:
         if prices is not None:
@@ -277,7 +293,7 @@ def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
         return _cell(table, item, tier).usd
 
     kept, escalated = [], []
-    for item in subject:
+    for item in item_ids:
         value = signal.get(item)
         # An item with no signal reading escalates, for the same reason an absent answer breaks a
         # quorum: an unread signal is not a confident one, and defaulting it to "sure" would send the
@@ -288,7 +304,7 @@ def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
             kept.append(item)
 
     total, unpriced = 0.0, False
-    for item in subject:
+    for item in item_ids:
         usd = cost_of(item, member)
         if usd is None:
             unpriced = True
@@ -306,17 +322,18 @@ def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
     return QuorumPolicy(
         members=(member,),
         escalate_to=escalate_to,
-        items=len(subject),
+        items=len(item_ids),
         stopped=len(kept),
         solved=right_kept + right_escalated,
         solved_when_stopped=right_kept,
-        usd_per_item=None if unpriced or not subject else total / len(subject),
+        usd_per_item=None if unpriced or not item_ids else total / len(item_ids),
         signal_threshold=threshold,
     )
 
 
 def enumerate_signal_policies(table: OutcomeTable, *, candidates: list[str], escalate_to: list[str],
-                              signal: dict[str, float], quantiles: tuple[float, ...] = (
+                              signal: dict[str, float], about: str,
+                              quantiles: tuple[float, ...] = (
                                   0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
                               probe_usd: float = 0.0, prices: dict[str, float] | None = None,
                               items: list[str] | None = None) -> list[QuorumPolicy]:
@@ -338,7 +355,7 @@ def enumerate_signal_policies(table: OutcomeTable, *, candidates: list[str], esc
             for tier in escalate_to:
                 if tier == member:
                     continue
-                out.append(evaluate_signal(table, member, tier, signal=signal, threshold=thr,
+                out.append(evaluate_signal(table, member, tier, signal=signal, about=about, threshold=thr,
                                            probe_usd=probe_usd, prices=prices, items=items))
     return out
 

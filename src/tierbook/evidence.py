@@ -437,3 +437,23 @@ def elicitation_from_template(name: str, template: str) -> Elicitation:
                           "is no condition to record and no two runs can be shown to share it")
     return Elicitation(name=name, template_digest=hashlib.sha256(template.encode()).hexdigest())
 
+#: What a signal is ABOUT, which is not the same question as what it is called or how strong it is. Closed, because a
+#: mechanism handed one score cannot tell which of these it was handed, and the measured case is worse than ambiguous:
+#: at one layer the same readout named the item's field at **0.7593** against a chance of 0.1429 -- five times chance --
+#: and predicted its own error at **0.4227**, *below* the 0.5 a coin gets. The band reads the subject and says nothing
+#: about competence, and the two answers point in opposite directions.
+#:
+#: `topic` routes by subject. `own_competence` and `item_difficulty` route by difficulty and are still not the same
+#: thing: one asks whether THIS candidate can answer, the other how hard the item is for anyone, and a signal fitted to
+#: the second has been measured not to predict the first's uplift. `resource_state` is a fact about the server.
+#:
+#: Here, in this leaf, rather than beside the structure that first needed it: `quorum` builds escalation policies from a
+#: signal and must check the same vocabulary, and importing the structure's module from there would close a cycle
+#: (quantity imports judge imports reproduce imports quorum). One home, reachable from both.
+SUBJECTS = ("topic", "own_competence", "item_difficulty", "resource_state")
+
+#: What an escalation decision may condition on. A gate asks "should this go somewhere better", which is a question
+#: about competence or difficulty; `topic` answers a different question well and this one not at all, and
+#: `resource_state` says nothing about the item.
+ESCALATION_SUBJECTS = ("own_competence", "item_difficulty")
+

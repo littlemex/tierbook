@@ -38,7 +38,7 @@ def validity(**kw):
 
 def q(**kw):
     base = dict(name="prefill_entropy", kind="scalar", availability="after_prefill",
-                register="passive_observation", price=price(), measured_on=DIG,
+                register="passive_observation", subject="own_competence", price=price(), measured_on=DIG,
                 elicitation=TERSE, validity=validity(), readout_version="r1")
     base.update(kw)
     return qt.Quantity(**base)
@@ -202,9 +202,9 @@ def _run(tmp_path, capsys, quantities):
 
 
 def test_the_door_reports_which_are_usable(tmp_path, capsys):
-    code, text = _run(tmp_path, capsys, ["prefill_entropy:scalar:after_prefill:passive_observation:1:30:r1",
-                                         "jlens:vector:during_compute:active_probe:2:30:r1",
-                                         "answer_length:scalar:after_generation:passive_observation:1:30:r1"])
+    code, text = _run(tmp_path, capsys, ["prefill_entropy:scalar:after_prefill:passive_observation:own_competence:1:30:r1",
+                                         "jlens:vector:during_compute:active_probe:own_competence:2:30:r1",
+                                         "answer_length:scalar:after_generation:passive_observation:own_competence:1:30:r1"])
     assert code == 0
     assert "2 of 3 quantities are admissible" in text
     assert "not usable: answer_length" in text
@@ -213,15 +213,15 @@ def test_the_door_reports_which_are_usable(tmp_path, capsys):
 def test_the_door_exits_two_when_the_gate_has_nothing(tmp_path, capsys):
     """Nothing is malformed and the gate cannot decide, which is a different problem from a declaration that could not
     be read -- so a different exit code from the 1 that gets."""
-    code, text = _run(tmp_path, capsys, ["answer_length:scalar:after_generation:passive_observation:1:30:r1"])
+    code, text = _run(tmp_path, capsys, ["answer_length:scalar:after_generation:passive_observation:own_competence:1:30:r1"])
     assert code == 2
     assert "0 of 1" in text
 
 
 @pytest.mark.parametrize("spec,expect", [
-    ("jlens:vector:during_compute:active_probe:1:30:r1", "it is a passive observation"),
-    ("jlens:vector:layer_22:active_probe:2:30:r1", "A layer number is not an availability"),
-    ("steer:vector:during_compute:control_action:2:30:r1", "may not be registered as a control action"),
+    ("jlens:vector:during_compute:active_probe:own_competence:1:30:r1", "it is a passive observation"),
+    ("jlens:vector:layer_22:active_probe:own_competence:2:30:r1", "A layer number is not an availability"),
+    ("steer:vector:during_compute:control_action:own_competence:2:30:r1", "may not be registered as a control action"),
     ("short:spec", "NAME:KIND"),
 ])
 def test_the_door_refuses_a_bad_declaration_with_a_readable_sentence(tmp_path, capsys, spec, expect):
@@ -342,7 +342,7 @@ def _run_perf(tmp_path, capsys, extra):
     tmpl.write_text("Answer with one letter.")
     argv = ["admissible-quantities", "--served", str(served), "--elicitation-name", "terse",
             "--elicitation-template", str(tmpl),
-            "--quantity", "jlens:scalar:after_prefill:passive_observation:1:30:r1", *extra]
+            "--quantity", "jlens:scalar:after_prefill:passive_observation:own_competence:1:30:r1", *extra]
     code = cli.main(argv)
     cap = capsys.readouterr()
     return code, cap.out + cap.err
@@ -514,9 +514,9 @@ def _run_strat(tmp_path, capsys, stratified):
     tmpl.write_text("Answer with one letter.")
     code = cli.main(["admissible-quantities", "--served", str(served), "--elicitation-name", "terse",
                      "--elicitation-template", str(tmpl),
-                     "--quantity", "jlens:scalar:after_prefill:passive_observation:1:30:r1",
-                     "--quantity", "settling_depth:scalar:after_generation:passive_observation:1:30:r1",
-                     "--quantity", "entropy:scalar:after_prefill:passive_observation:1:30:r1",
+                     "--quantity", "jlens:scalar:after_prefill:passive_observation:own_competence:1:30:r1",
+                     "--quantity", "settling_depth:scalar:after_generation:passive_observation:own_competence:1:30:r1",
+                     "--quantity", "entropy:scalar:after_prefill:passive_observation:own_competence:1:30:r1",
                      "--stratified", stratified])
     cap = capsys.readouterr()
     return code, cap.out + cap.err
@@ -553,3 +553,64 @@ def test_the_door_refuses_a_malformed_stratum_with_the_shape_it_wanted(tmp_path,
     code, text = _run_strat(tmp_path, capsys, "jlens:entropy:refitted_in_stratum:fast@0.7482")
     assert code == 1
     assert "LABEL@VALUE@N@LO@HI" in text
+
+
+# --- what a quantity is ABOUT, which a score cannot say ---------------------------------------------------------------
+
+def test_an_open_ended_subject_is_refused_with_the_divergence_that_makes_it_matter():
+    """The measured pair does not merely differ, it diverges: the same readout named the item's field at 0.7593 against
+    a chance of 0.1429 and predicted its own error at 0.4227, below the 0.5 a coin gets."""
+    with pytest.raises(qt.Inadmissible, match="0.7593"):
+        q(subject="something_useful")
+
+
+def test_the_subject_has_no_default():
+    """A quantity whose subject is unstated is one a router cannot tell apart from a quantity about something else."""
+    with pytest.raises(TypeError):
+        qt.Quantity(name="x", kind="scalar", availability="after_prefill", register="passive_observation",
+                    price=price(), measured_on=DIG, elicitation=TERSE, validity=validity(), readout_version="r1")
+
+
+@pytest.mark.parametrize("subject,answers", [("own_competence", True), ("item_difficulty", True),
+                                             ("topic", False), ("resource_state", False)])
+def test_only_competence_and_difficulty_answer_an_escalation_question(subject, answers):
+    """A gate asks whether this should go somewhere better. A topic signal answers a different question well -- at five
+    times chance -- and says nothing about competence."""
+    assert q(subject=subject).answers_an_escalation_question() is answers
+
+
+def test_a_topic_signal_is_not_admissible_to_a_gate_however_strong_it_is():
+    """Admitting it would route by subject while reporting that it routes by difficulty. The strength is not the
+    question: this is the one that read at 0.7593."""
+    topic = q(name="field_name", subject="topic")
+    competence = q(name="entropy", subject="own_competence")
+    usable = qt.admissible_for_a_gate([topic, competence], elicitation=TERSE, served=DIG)
+    assert [x.name for x in usable] == ["entropy"]
+
+
+def test_competence_and_difficulty_are_still_kept_apart_as_subjects():
+    """One asks whether THIS candidate can answer and the other how hard the item is for anyone; a signal fitted to the
+    second has been measured not to predict the first's uplift, so they are two entries rather than one."""
+    assert "own_competence" in qt.SUBJECTS and "item_difficulty" in qt.SUBJECTS
+    assert set(qt.ESCALATION_SUBJECTS) == {"own_competence", "item_difficulty"}
+
+
+def test_the_printed_form_says_what_it_is_about():
+    assert "about topic" in str(q(subject="topic"))
+
+
+def test_the_door_marks_a_topic_quantity_as_not_usable(tmp_path, capsys):
+    code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:30:r1",
+                                        "entropy:scalar:after_prefill:passive_observation:own_competence:1:30:r1"])
+    assert code == 0
+    assert "not usable: field_name" in text
+    assert "usable: entropy" in text
+    assert "1 of 2 quantities are admissible" in text
+
+
+def test_the_door_exits_two_when_only_topic_signals_are_declared(tmp_path, capsys):
+    """A fleet of strong signals about the wrong thing leaves the gate with nothing to decide with, which is a finding
+    rather than an error."""
+    code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:30:r1"])
+    assert code == 2
+    assert "0 of 1" in text

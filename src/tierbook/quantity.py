@@ -26,7 +26,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tierbook.evidence import Elicitation, EvidenceError
+from tierbook.evidence import (ESCALATION_SUBJECTS, SUBJECTS, Elicitation,  # noqa: F401
+                              EvidenceError)
 from tierbook.judge import WeightDigest
 from tierbook.spend import SignalPrice
 
@@ -102,6 +103,9 @@ class Quantity:
     kind: str
     availability: str
     register: str
+    #: What it is about. No default: a quantity whose subject is unstated is one a router cannot tell apart from a
+    #: quantity about something else, and the measured pair points in opposite directions.
+    subject: str
     price: SignalPrice
     measured_on: WeightDigest
     elicitation: Elicitation
@@ -126,6 +130,12 @@ class Quantity:
                 f"{self.availability!r} is not one of {AVAILABILITY}. A layer number is not an availability: it is "
                 f"provider-specific detail below this axis, and a mechanism keyed on it would refuse a quantity from a "
                 f"model of different depth for no reason that matters")
+        if self.subject not in SUBJECTS:
+            raise Inadmissible(
+                f"{self.subject!r} is not one of {SUBJECTS}. A mechanism handed one score cannot tell which of them it "
+                f"was handed, and the measured pair diverges rather than merely differing: the same readout named the "
+                f"item's field at 0.7593 against a chance of 0.1429 and predicted its own error at 0.4227, below the "
+                f"0.5 a coin gets")
         if self.register not in REGISTERS:
             raise Inadmissible(f"{self.register!r} is not one of {REGISTERS}")
         if self.register == "control_action":
@@ -174,6 +184,15 @@ class Quantity:
         """Whether obtaining this costs nothing beyond what the request pays anyway."""
         return self.price.extra_passes == 0
 
+    def answers_an_escalation_question(self) -> bool:
+        """Whether this is about something an escalation decision turns on.
+
+        A gate asks "should this go somewhere better", and only competence or difficulty speaks to that. A topic signal
+        answers a different question -- and answers it well, at five times chance -- while saying nothing about
+        competence, so admitting it here would route by subject while reporting that it routes by difficulty.
+        """
+        return self.subject in ESCALATION_SUBJECTS
+
     def usable_before_generating(self) -> bool:
         """Whether a decision about *whether to generate* can condition on this.
 
@@ -188,7 +207,8 @@ class Quantity:
         return AVAILABILITY.index(self.availability) < AVAILABILITY.index("after_generation")
 
     def __str__(self) -> str:
-        return (f"{self.name}/{self.readout_version} ({self.kind}, {self.availability}, {self.register}, "
+        return (f"{self.name}/{self.readout_version} (about {self.subject}, {self.kind}, {self.availability}, "
+                f"{self.register}, "
                 f"{'free' if self.is_free else f'{self.price.extra_passes} extra pass(es)'})")
 
 
@@ -444,9 +464,11 @@ def admissible_for_a_gate(quantities: list[Quantity], *, elicitation: Elicitatio
                           served: WeightDigest) -> list[Quantity]:
     """Which of these a pre-generation gate may condition on, and nothing else.
 
-    Three filters, and each rejects for a different reason a caller would otherwise have to check by hand: the model
-    served is not the one it was measured on; the prompt condition differs, so the number is about different items; or
-    it is not available until after the cost the gate exists to avoid has been paid.
+    Four filters, and each rejects for a different reason a caller would otherwise have to check by hand: the model
+    served is not the one it was measured on; the prompt condition differs, so the number is about different items; it
+    is not available until after the cost the gate exists to avoid has been paid; or it is about the wrong thing -- a
+    topic signal reads at five times chance and says nothing about competence, so admitting it would route by subject
+    while reporting that it routes by difficulty.
 
     Returned as a list rather than raising, because "no quantity is admissible here" is an answer a caller acts on --
     it means the gate has nothing to decide with, which is a finding rather than an error.
@@ -454,4 +476,5 @@ def admissible_for_a_gate(quantities: list[Quantity], *, elicitation: Elicitatio
     return [q for q in quantities
             if q.measured_on == served
             and q.elicitation.template_digest == elicitation.template_digest
-            and q.usable_before_generating()]
+            and q.usable_before_generating()
+            and q.answers_an_escalation_question()]

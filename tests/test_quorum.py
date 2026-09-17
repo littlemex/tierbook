@@ -14,7 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from tierbook.evidence import INCORRECT, SOLVED, UNOBSERVED  # noqa: E402
+from tierbook.evidence import INCORRECT, SOLVED, UNOBSERVED, EvidenceError  # noqa: E402
 from tierbook.outcomes import Cell, OutcomeTable  # noqa: E402
 from tierbook.quorum import (  # noqa: E402
     agreement,
@@ -259,7 +259,7 @@ def test_a_signal_policy_can_escalate_where_a_one_member_quorum_cannot():
 
     from tierbook.quorum import evaluate_signal
     quorum_alone = evaluate(t, ("a",), "dear")
-    with_signal = evaluate_signal(t, "a", "dear", signal=signal, threshold=0.5)
+    with_signal = evaluate_signal(t, "a", "dear", signal=signal, about="own_competence", threshold=0.5)
 
     assert quorum_alone.accuracy == 0.75, "no escalation is possible, so a's own accuracy is the ceiling"
     assert with_signal.accuracy == 1.0, "the threshold sends exactly the items a gets wrong"
@@ -276,7 +276,7 @@ def test_an_item_with_no_signal_reading_escalates():
         "read":   {"a": (INCORRECT, "C", 1.0), "dear": (SOLVED, "B", 10.0)},
         "unread": {"a": (INCORRECT, "C", 1.0), "dear": (SOLVED, "B", 10.0)},
     })
-    p = evaluate_signal(t, "a", "dear", signal={"read": 0.0}, threshold=0.5)
+    p = evaluate_signal(t, "a", "dear", signal={"read": 0.0}, about="own_competence", threshold=0.5)
     assert p.stopped == 1, "the item with no reading escalated"
     assert p.accuracy == 0.5
 
@@ -284,8 +284,8 @@ def test_an_item_with_no_signal_reading_escalates():
 def test_reading_the_signal_is_not_free():
     from tierbook.quorum import evaluate_signal
     t = _table({"i1": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 10.0)}})
-    free = evaluate_signal(t, "a", "dear", signal={"i1": 0.0}, threshold=0.5)
-    paid = evaluate_signal(t, "a", "dear", signal={"i1": 0.0}, threshold=0.5, probe_usd=0.25)
+    free = evaluate_signal(t, "a", "dear", signal={"i1": 0.0}, about="own_competence", threshold=0.5)
+    paid = evaluate_signal(t, "a", "dear", signal={"i1": 0.0}, about="own_competence", threshold=0.5, probe_usd=0.25)
     assert paid.usd_per_item == free.usd_per_item + 0.25
 
 
@@ -310,7 +310,7 @@ def test_all_three_mechanisms_are_ranked_on_one_frontier():
 
     everything = (enumerate_policies(t, candidates=["a", "b"], escalate_to=["a", "b", "dear"],
                                      min_stopped=10)
-                  + enumerate_signal_policies(t, candidates=["a", "b"], escalate_to=["dear"],
+                  + enumerate_signal_policies(t, candidates=["a", "b"], escalate_to=["dear"], about="own_competence",
                                               signal=signal))
     front = frontier(everything)
     assert front, "some policy must survive"
@@ -515,3 +515,53 @@ def test_no_candidate_is_pruned_by_its_own_accuracy():
                             min_stopped=1)
     assert any(p.members == ("strong", "weak") for p in ps), (
         "the weak candidate must still be enumerated as a member")
+
+
+def _small_signal_table():
+    """Two candidates over eight items, built the way the tests above build one."""
+    rows, signal = {}, {}
+    for n in range(8):
+        wrong = n % 4 == 3
+        rows[f"i{n}"] = {"a": (INCORRECT if wrong else SOLVED, "C" if wrong else "B", 1.0),
+                         "dear": (SOLVED, "B", 5.0)}
+        signal[f"i{n}"] = 0.9 if wrong else 0.1
+    return _table(rows), signal
+
+
+def test_a_signal_policy_cannot_be_built_from_a_topic_signal():
+    """DEFECT this closes: `evaluate_signal` took a bare dict of numbers with nothing saying what they were about, so a
+    topic classifier and a confidence readout arrived identically and produced policies described identically. The
+    measurement is brutal -- at one layer the same readout named the item's field at 0.7593 against a chance of 0.1429
+    and predicted its own error at 0.4227, below the 0.5 a coin gets -- so a policy built on the first would escalate by
+    subject while being reported as escalating by confidence."""
+    from tierbook.quorum import evaluate_signal
+    t, signal = _small_signal_table()
+    with pytest.raises(EvidenceError, match="escalate by subject while being reported"):
+        evaluate_signal(t, "a", "dear", signal=signal, about="topic", threshold=0.5)
+
+
+def test_a_resource_state_signal_is_refused_for_the_same_reason():
+    """It says nothing about the item, so it cannot decide whether that item should be escalated."""
+    from tierbook.quorum import evaluate_signal
+    t, signal = _small_signal_table()
+    with pytest.raises(EvidenceError, match="is not one of"):
+        evaluate_signal(t, "a", "dear", signal=signal, about="resource_state", threshold=0.5)
+
+
+@pytest.mark.parametrize("about", ["own_competence", "item_difficulty"])
+def test_both_escalation_subjects_are_admitted(about):
+    from tierbook.quorum import evaluate_signal
+    t, signal = _small_signal_table()
+    assert evaluate_signal(t, "a", "dear", signal=signal, about=about, threshold=0.5) is not None
+
+
+def test_the_word_subject_no_longer_has_three_meanings_in_this_module():
+    """"subject" already means a candidate in this package, and this function's own body used it for a list of item ids.
+    The parameter is `about` and the local is `item_ids`, because three meanings of one word in one file is how the wrong
+    one gets read."""
+    import inspect
+
+    from tierbook.quorum import evaluate_signal
+    src = inspect.getsource(evaluate_signal)
+    assert "item_ids" in src
+    assert "subject = " not in src

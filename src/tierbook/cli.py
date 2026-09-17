@@ -846,17 +846,18 @@ def cmd_admissible_quantities(args) -> int:
 
 
 def _quantity_from_spec(spec: str, *, served, elicitation, performance=None):
-    """NAME:KIND:AVAILABILITY:REGISTER:PASSES:FRESH_DAYS:READOUT_VERSION.
+    """NAME:KIND:AVAILABILITY:REGISTER:SUBJECT:PASSES:FRESH_DAYS:READOUT_VERSION.
 
     The digest and the elicitation are not in the spec on purpose: they are what the SERVED model and the declared
     template say, so letting a manifest line assert them would let it assert a match instead of being checked for one.
     """
-    name, kind, availability, register, passes, fresh, version = _fields(
-        spec, ("name", "kind", "availability", "register", "passes", "fresh_days", "readout_version"),
+    name, kind, availability, register, subject, passes, fresh, version = _fields(
+        spec, ("name", "kind", "availability", "register", "subject", "passes", "fresh_days", "readout_version"),
         option="--quantity")
     price = sp_mod.SignalPrice(passes=int(passes),
                                per_pass=sp_mod.Spend(prefill=0.109, generation=0.0, unit="gpu_seconds"))
-    return qt.Quantity(name=name, kind=kind, availability=availability, register=register, price=price,
+    return qt.Quantity(name=name, kind=kind, availability=availability, register=register, subject=subject,
+                       price=price,
                        measured_on=served, elicitation=elicitation,
                        validity=qt.Validity(calibrated_for=elicitation, fresh_for_days=float(fresh)),
                        readout_version=version, performance=performance)
@@ -1137,7 +1138,7 @@ def main(argv: list[str] | None = None) -> int:
     aq.add_argument("--elicitation-template", required=True,
                     help="a file holding the prompt template; its text is the key, not its name")
     aq.add_argument("--quantity", action="append", default=[], required=True,
-                    metavar="NAME:KIND:AVAILABILITY:REGISTER:PASSES:FRESH_DAYS:READOUT_VERSION",
+                    metavar="NAME:KIND:AVAILABILITY:REGISTER:SUBJECT:PASSES:FRESH_DAYS:READOUT_VERSION",
                     help="a declared quantity, repeatable. The digest and the condition are NOT in the spec: they come "
                          "from --served and --elicitation-template, so a manifest line cannot assert a match")
     aq.add_argument("--price", type=float, default=None,
