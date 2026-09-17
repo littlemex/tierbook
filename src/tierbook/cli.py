@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook admissible-quantities  which declared quantities a pre-generation gate may condition on
     tierbook admit-judge refuse a judge against the model actually served, before any traffic reaches it
     tierbook attach-outcome  attach an observed outcome (label, tokens, latency) to a decision already logged
     tierbook accept      the acceptance criteria over a log, each with its own verdict and why
@@ -46,7 +47,10 @@ from tierbook.config import ConfigError, draft_from_model_list, load_config
 from tierbook.decide import as_dict as decide_as_dict
 from tierbook.decide import compile_policy
 from tierbook.evidence import EvidenceError
+from tierbook import evidence as ev_mod
 from tierbook import judge as jd
+from tierbook import quantity as qt
+from tierbook import spend as sp_mod
 from tierbook.policy import (assign_family, break_even_price, capacity_note, capacity_priority,
                              cutover_violation, evidence_class, load_registry, occupancy_at, registry_version,
                              reservation_verdict)
@@ -677,6 +681,78 @@ def cmd_logs(args) -> int:
     return 0
 
 
+def _fields(spec: str, names: tuple[str, ...], *, option: str) -> list[str]:
+    """Split a colon-separated option value, refusing the wrong count with the shape it wanted.
+
+    Shared by every option of this form, and shared because it went wrong twice. `admit-judge`'s box spec raised a
+    stack trace on a malformed value until it was caught; the quantity spec then did the identical thing in a new door,
+    which is the signature of a defect fixed at the instance rather than at the class. A third option of this shape
+    cannot repeat it without deleting this call.
+    """
+    parts = spec.split(":")
+    if len(parts) != len(names):
+        raise EvidenceError(
+            f"{option} {spec!r} has {len(parts)} field(s); it takes {len(names)} as "
+            f"{':'.join(n.upper() for n in names)}. An operator cannot act on a stack trace, and a value that "
+            f"happens to split into the right number of pieces by accident is what a positional format costs")
+    return parts
+
+
+def cmd_admissible_quantities(args) -> int:
+    """Which declared quantities a pre-generation gate may condition on, and why each of the others may not.
+
+    A door rather than a library call because the answer is a deployment fact: a gate with nothing admissible has
+    nothing to decide with, and that is a finding the operator has to see before traffic rather than infer from a gate
+    that never fires.
+
+    Each quantity is declared as a manifest line, and the three rejections are reported separately because they send
+    the caller to different places: a model mismatch needs the quantity re-measured, a condition mismatch needs it
+    re-fitted on the items actually asked this way, and an availability of `after_generation` cannot be fixed at all --
+    by then the cost the gate exists to avoid has been paid.
+    """
+    try:
+        served = jd.digest_published(args.served)
+        elicitation = ev_mod.elicitation_from_template(args.elicitation_name,
+                                                       Path(args.elicitation_template).read_text())
+        declared = [_quantity_from_spec(spec, served=served, elicitation=elicitation) for spec in args.quantity]
+    except (jd.Inadmissible, EvidenceError) as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"refused: --elicitation-template could not be read ({e})", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        # PASSES or FRESH_DAYS not a number. Caught for the same reason the field count is: the operator gets a
+        # sentence naming what to fix, because argparse cannot check inside a positional string.
+        print(f"refused: --quantity needs a whole number of PASSES and a numeric FRESH_DAYS ({e})", file=sys.stderr)
+        return 1
+    usable = qt.admissible_for_a_gate(declared, elicitation=elicitation, served=served)
+    for q in declared:
+        mark = "usable" if q in usable else "not usable"
+        print(f"{mark}: {q}")
+    print(f"{len(usable)} of {len(declared)} quantities are admissible to a pre-generation gate")
+    # Exit 2 rather than 1 when none is admissible: nothing is malformed, and the gate has nothing to decide with,
+    # which is a different problem from a declaration this command could not read.
+    return 0 if usable else 2
+
+
+def _quantity_from_spec(spec: str, *, served, elicitation):
+    """NAME:KIND:AVAILABILITY:REGISTER:PASSES:FRESH_DAYS:READOUT_VERSION.
+
+    The digest and the elicitation are not in the spec on purpose: they are what the SERVED model and the declared
+    template say, so letting a manifest line assert them would let it assert a match instead of being checked for one.
+    """
+    name, kind, availability, register, passes, fresh, version = _fields(
+        spec, ("name", "kind", "availability", "register", "passes", "fresh_days", "readout_version"),
+        option="--quantity")
+    price = sp_mod.SignalPrice(passes=int(passes),
+                               per_pass=sp_mod.Spend(prefill=0.109, generation=0.0, unit="gpu_seconds"))
+    return qt.Quantity(name=name, kind=kind, availability=availability, register=register, price=price,
+                       measured_on=served, elicitation=elicitation,
+                       validity=qt.Validity(calibrated_for=elicitation, fresh_for_days=float(fresh)),
+                       readout_version=version)
+
+
 def cmd_admit_judge(args) -> int:
     """Refuse a judge against the model actually served, before any traffic reaches it.
 
@@ -715,7 +791,9 @@ def cmd_admit_judge(args) -> int:
                                                     shared_with=tuple(sw.split(",")) if sw else (),
                                                     tenants=int(oc), max_tenants=int(mx))
                                       for bid, bdig, own, sw, oc, mx
-                                      in (spec.split(":") for spec in args.standing_box)],
+                                      in (_fields(spec, ("id", "digest", "owner", "shared_with", "tenants",
+                                                         "max_tenants"), option="--standing-box")
+                                          for spec in args.standing_box)],
                            requester=args.requester)
                    if args.standing_box else None)
     except jd.Inadmissible as e:
@@ -924,6 +1002,18 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    aq = sub.add_parser("admissible-quantities", parents=[common],
+                        help="which declared quantities a pre-generation gate may condition on, and why not the rest")
+    aq.add_argument("--served", required=True, help="the model snapshot directory actually being served")
+    aq.add_argument("--elicitation-name", required=True, help="what the prompt condition is called, for the reader")
+    aq.add_argument("--elicitation-template", required=True,
+                    help="a file holding the prompt template; its text is the key, not its name")
+    aq.add_argument("--quantity", action="append", default=[], required=True,
+                    metavar="NAME:KIND:AVAILABILITY:REGISTER:PASSES:FRESH_DAYS:READOUT_VERSION",
+                    help="a declared quantity, repeatable. The digest and the condition are NOT in the spec: they come "
+                         "from --served and --elicitation-template, so a manifest line cannot assert a match")
+    aq.set_defaults(fn=cmd_admissible_quantities, registry=None)
 
     aj = sub.add_parser("admit-judge", parents=[common],
                         help="refuse a judge against the model actually served, before any traffic reaches it")

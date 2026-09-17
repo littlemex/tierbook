@@ -5105,6 +5105,49 @@ arrive as a parameter for the same reason `cost_per_item` does: neither is deriv
 saturation guard, the unparsed refusal, the denominator that counts unparsed replies, and the loader's call -- and each
 fails tests.
 
+## F113 — F21's one structure, assembled from the parts the previous iterations built
+
+**F21 is the entry that says the other nineteen were circling one shape**: "one structure, replacing six separate
+requirements... the only entry here that would let the J-space work reach the mechanism at all -- as an optional
+observation with a price, rather than a signal the mechanism knows the name of." `Quantity` is that structure, and the
+mechanism now holds **no readout-specific feature at all**: entropy, a hidden-state probe, a price and a queue length
+are the same kind of thing.
+
+**It is assembled rather than restated, and that is the return on the earlier iterations.** The price is a
+`spend.SignalPrice`, the prompt condition an `evidence.Elicitation`, the model a `judge.WeightDigest`. A sixth home for
+"which model" would have been a sixth thing to get wrong.
+
+**The register refusal is the sharpest thing here and it is a factor of four.** Moving an internal direction moves the
+words a model uses about its own competence and moves **15%** of its answers. A mechanism that could register that as a
+lever on output quality would act on a 15% effect as though it were the 59% a paper reports for a different claim. So
+`control_action` is refused outright, and the register is **checked against the price**: a passive observation costing
+an extra pass is an active probe wearing the cheaper label, and a probe costing nothing extra is a passive observation
+that would be declined on a budget it does not consume.
+
+**A layer number is refused as an availability by name**, because it is provider-specific detail below that axis and a
+mechanism keyed on it would refuse a quantity from a model of different depth for no reason that matters.
+
+**Three defects of my own this round.**
+
+1. **I put the availability axis in the wrong order** -- `during_compute` after `after_prefill` -- and the
+   `usable_before_generating` predicate then **excluded the one quantity this entire study is about**: a hidden-state
+   readout taken during the prefill computation, reported as useless to the gate it was built for. Fixed, and the
+   predicate now reads the axis's own index rather than a hand-written list of good values, so a stage added between
+   the existing ones cannot leave it silently wrong.
+2. **The new door raised a stack trace on a malformed spec** -- the identical defect fixed in `admit-judge` two entries
+   ago, reappearing in a new door. That is a defect fixed at the instance rather than at the class, so the colon-spec
+   parsing is now **one shared function** that names the shape it wanted. A third option of this form cannot repeat it
+   without deleting that call.
+3. The door also had to catch a non-numeric `PASSES`, for the same reason: argparse cannot check inside a positional
+   string, so the operator gets a sentence rather than a trace.
+
+**The door is `tierbook admissible-quantities`**, and the digest and the condition are deliberately **not** in the
+manifest spec: they come from `--served` and `--elicitation-template`, so a declaration cannot assert a match instead of
+being checked for one. Exit 2 when nothing is admissible -- nothing is malformed and the gate has nothing to decide
+with, which is a different problem from a declaration that could not be read.
+
+**Suite green at 1,807 passed, 3 skipped.** Six mechanisms mutated and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
