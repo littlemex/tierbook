@@ -5184,6 +5184,46 @@ unmeasured rather than as passing, because nobody having measured it is not the 
 **Suite green at 1,826 passed, 3 skipped.** Five mechanisms mutated -- the one-point refusal, the no-baseline refusal,
 the loss list, the interpolation refusal and the decorator's own catch -- and each fails tests.
 
+## F115 — A floor with the target it is claimed for, and the bar that was unsatisfiable on the day it was written
+
+**F17 and F19 asked for this and only a different ceiling existed.** `accept.floor_is_reachable` checks a floor against
+the ceiling a **sample size** imposes on a lower confidence bound; F17/F19's ceiling is the **capability** one -- what
+escalating every item could reach -- and nothing computed it. F19: "a floor accepted only alongside the escalation target
+it is claimed for... the infeasibility was in the pairing of a floor with a target."
+
+**Two impossibilities, kept apart because they have different fixes.**
+
+| condition | box solves | needs, for floor 0.90 | verdict |
+|---|---|---|---|
+| terse | 722 / 1,187 | 347 | `gamma` **1.24** -- above what escalating EVERY item reaches. Needs a better target. |
+| explaining | 902 / 1,187 | 167 | the bar permitted **141**. Needs a bigger budget or a lower floor. |
+
+A single "infeasible" would send a reader to look for the wrong one. And both are arithmetic, so **the bar could have
+been refused on the day it was written** -- which is what did not happen: it stood through several rounds of being
+blamed on signals.
+
+**`gamma` is what makes two conditions comparable.** One absolute floor of 0.90 demands 347 rescues in one condition and
+167 in the other -- a factor of two -- so every comparison made between them was a comparison of two different
+requirements. `comparable()` answers that directly.
+
+**The door exits 2, not 1.** Nothing is malformed and no policy is at fault: the finding is about the bar, and reporting
+it as a failure of the thing being measured is the confusion this door exists to end. Exit 1 stays for a bar that could
+not be read.
+
+**One defect of mine, and one finding about the ledger's own numbers.**
+
+1. **I took rates and the count came out wrong by one.** `floor(0.608 x 1187)` is 721, while the count the reported 347
+   implies is **722**. `round` happens to be right there and is not right in general: a rate stated to three decimals
+   over 1,187 items covers a window more than one item wide, so the count is recoverable only when that window holds
+   exactly one integer, which nobody checks. `Bar` now takes **counts**, and the off-by-one is unrepresentable.
+2. **The two reported figures are not equally consistent with their rates.** 347 implies 722 solved, whose rate is
+   0.6083 against the prose's 0.608 -- consistent. But 167 implies 902, whose rate is **0.7599** while the prose says
+   **0.7597**, and *no* integer count over 1,187 items gives 0.7597. So in that row the rate and the rescue count came
+   from slightly different computations. The entry's ordinal conclusions survive it; the pair does not round-trip, and
+   that is worth knowing before either number is quoted as the other's provenance. Recorded as a test.
+
+**Suite green at 1,848 passed, 3 skipped.** Five mechanisms mutated and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

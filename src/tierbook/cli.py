@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook floor-feasibility  whether a floor can be met at all, before a policy is written
     tierbook admissible-quantities  which declared quantities a pre-generation gate may condition on
     tierbook admit-judge refuse a judge against the model actually served, before any traffic reaches it
     tierbook attach-outcome  attach an observed outcome (label, tokens, latency) to a decision already logged
@@ -48,6 +49,7 @@ from tierbook.config import ConfigError, draft_from_model_list, load_config
 from tierbook.decide import as_dict as decide_as_dict
 from tierbook.decide import compile_policy
 from tierbook.evidence import EvidenceError
+from tierbook import bar as br
 from tierbook import evidence as ev_mod
 from tierbook import judge as jd
 from tierbook import quantity as qt
@@ -720,6 +722,34 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str) -> list[str]:
 
 
 @_refuses
+def cmd_floor_feasibility(args) -> int:
+    """Whether a floor can be met at all, before any policy is written or scored.
+
+    Two impossibilities, and the door reports which: a floor above what escalating every item could reach, and an
+    escalation budget below the arithmetic minimum of net rescues. Both are decidable from counts, so a bar can be
+    refused on the day it is written -- which is what did not happen to the bar this exists for, and it stood through
+    several rounds of being blamed on signals.
+
+    Counts rather than rates on purpose. The rate 0.608 over 1,187 items is compatible with 721 solved and with 722,
+    and those give 348 and 347 minimum rescues; the ledger's own 347 is what pins the count. A rate cannot be inverted,
+    so this door does not accept one.
+    """
+    bar = br.Bar(floor=args.floor, target=args.target, box_solved=args.box_solved, items=args.items,
+                 target_rescued=args.target_rescued, escalation_budget=args.escalation_budget)
+    print(f"{bar}")
+    try:
+        bar.check()
+    except br.Unsatisfiable as e:
+        # Exit 2, not 1: nothing is malformed and no policy is at fault. The finding is about the bar, and reporting it
+        # as a failure of the thing being measured is the confusion this whole door exists to end.
+        print(f"unsatisfiable: {e}", file=sys.stderr)
+        return 2
+    print(f"satisfiable: gamma {bar.gamma:.4f} of the available headroom, at least "
+          f"{bar.minimum_net_rescues} net rescues needed")
+    return 0
+
+
+@_refuses
 def cmd_admissible_quantities(args) -> int:
     """Which declared quantities a pre-generation gate may condition on, and why each of the others may not.
 
@@ -1044,6 +1074,23 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    ff = sub.add_parser("floor-feasibility", parents=[common],
+                        help="whether a floor can be met at all, before a policy is written")
+    ff.add_argument("--floor", type=float, required=True)
+    ff.add_argument("--target", required=True, help="the escalation target the floor is claimed for; a floor recorded "
+                                                    "alone is one whose feasibility cannot be decided")
+    ff.add_argument("--items", type=int, required=True)
+    ff.add_argument("--box-solved", type=int, required=True,
+                    help="how many items the default candidate solves. A COUNT, because a rate cannot be inverted: "
+                         "0.608 of 1,187 is compatible with 721 and with 722, which differ by one net rescue")
+    ff.add_argument("--target-rescued", type=int, required=True,
+                    help="how many of the items the box MISSED the target solves; its accuracy over everything is a "
+                         "different quantity and overstates the ceiling")
+    ff.add_argument("--escalation-budget", type=int, default=None,
+                    help="the most escalations the bar permits. Absent means the bar constrains only accuracy, which "
+                         "is a weaker bar rather than an unlimited budget")
+    ff.set_defaults(fn=cmd_floor_feasibility, registry=None)
 
     aq = sub.add_parser("admissible-quantities", parents=[common],
                         help="which declared quantities a pre-generation gate may condition on, and why not the rest")
