@@ -40,6 +40,7 @@ import math
 from dataclasses import dataclass, field
 
 from tierbook.evidence import INCORRECT, SOLVED, UNOBSERVED, Evidence, EvidenceError
+from tierbook.spend import Spend
 
 #: What a policy may do with a request. `REFUSE` is a first-class action rather than the absence of one: if no
 #: arrangement satisfies the constraints its owner stated, refusing is the correct answer, and making it an
@@ -67,6 +68,34 @@ class Cell:
     # grader rejects is a certificate that the answer key is wrong. Correctness
     # alone can express neither.
     answer: str | None = None
+    #: The same cost with reading the prompt kept apart from writing the answer, when the harness recorded them. `None`
+    #: means it did not, which is every cell written before this field existed -- and those two are not the same fact as
+    #: a cost of zero, which is why `usd`'s own docstring already says None is not zero.
+    #:
+    #: Why it matters here rather than only in a report: a gate decides whether to generate, and on this project's
+    #: measurements writing the answer costs about 95 times reading the prompt. A scalar cannot say which of the two a
+    #: saving came from, so a gate working and a shorter prompt look identical.
+    spend: Spend | None = None
+
+    def __post_init__(self) -> None:
+        if self.spend is None:
+            return
+        if not isinstance(self.spend, Spend):
+            raise EvidenceError(f"spend={self.spend!r} is not a Spend; a pair of bare numbers here would not say which "
+                                f"is which, and the two differ by about 95")
+        if self.spend.unit != "usd":
+            raise EvidenceError(
+                f"spend is in {self.spend.unit!r} while the field beside it is named `usd`. A token count sitting next "
+                f"to a dollar figure is the mismatch this package refuses elsewhere; a cost in another unit belongs on "
+                f"a run that declares that unit, not in a cell whose scalar is dollars")
+        if self.usd is None:
+            raise EvidenceError("spend is recorded but usd is None; the two are one cost seen two ways, so a cell "
+                                "carrying the split and not the total says the total was never known when it was")
+        if abs(self.usd - self.spend.total) > 1e-9:
+            raise EvidenceError(
+                f"usd={self.usd!r} and spend.total={self.spend.total!r} disagree. Two numbers then describe one cost "
+                f"and nothing says which is right -- the state the derived total in `Spend` exists to prevent, "
+                f"reintroduced by writing them side by side")
 
     @property
     def solved(self) -> bool:
@@ -95,7 +124,8 @@ class OutcomeTable:
     # --- construction -----------------------------------------------------------------------------
 
     @classmethod
-    def from_evidence(cls, evidence: list[Evidence], *, cost_per_item: dict[str, dict[str, float]] | None = None,
+    def from_evidence(cls, evidence: list[Evidence], *,
+                      cost_per_item: dict[str, dict[str, float | Spend]] | None = None,
                       features: dict[str, dict] | None = None) -> OutcomeTable:
         """Join evidence artifacts into one table, refusing to join across suites.
 
@@ -118,8 +148,14 @@ class OutcomeTable:
         costs = cost_per_item or {}
         for e in evidence:
             for item_id, (state, _reason) in e.verdicts.items():
-                usd = (costs.get(e.subject) or {}).get(item_id)
-                table.cells.setdefault(item_id, {})[e.subject] = Cell(state=state, usd=usd)
+                cost = (costs.get(e.subject) or {}).get(item_id)
+                # One parameter, two accepted shapes. A harness that recorded the split passes a `Spend` and the cell
+                # carries both; one that recorded only a total passes a float and the cell carries what it has. The
+                # alternative -- a second parallel dict -- is a list one caller fills and another has to remember to
+                # fill too, which is the shape this package refuses.
+                leg_split = cost if isinstance(cost, Spend) else None
+                usd = cost.total if isinstance(cost, Spend) else cost
+                table.cells.setdefault(item_id, {})[e.subject] = Cell(state=state, usd=usd, spend=leg_split)
         table.features = dict(features or {})
         return table
 

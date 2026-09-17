@@ -5024,6 +5024,46 @@ would read as "too expensive" when the fact is that nothing was saved.
 
 **Suite green at 1,740 passed, 3 skipped.** Six mechanisms mutated and each fails tests.
 
+## F111 — The cost legs reach production: evidence file to cell to run to comparison
+
+**F110 left `Spend` and `SignalPrice` called only by their own tests**, which by this project's own rule is zero
+coverage of the thing they exist to protect. This connects them, and the path is the whole point: **evidence file →
+`Cell` → `Run` → `Comparison`**, with each hop refusing the state that would make the next one lie.
+
+**`Cell.spend`, paired with the scalar it must agree with.** Three refusals, all the same shape as `bound` /
+`bound_provenance`: a split whose total disagrees with `usd` (two numbers then describe one cost and nothing says which
+is right -- the state the derived total exists to prevent, reintroduced by writing them side by side); a split with
+`usd` absent (they are one cost seen two ways, so carrying the split and not the total says the total was never known
+when it was); and a split in another unit beside a field named `usd`.
+
+**One parameter, two shapes.** `from_evidence(cost_per_item=...)` takes a float or a `Spend` per item. The alternative
+was a second parallel dict, which is a list one caller fills and another has to remember to fill too -- the shape this
+package refuses everywhere else. Its type hint was updated in the same edit, because a hint saying `float` while the
+body accepts `Spend` is the documentation defect this ledger keeps recording.
+
+**All or nothing on a run.** `simulate` drops the split to `None` the moment any cell it touched lacks it. A partly
+split run reports a leg total smaller than the scalar beside it, and a reader finding that discrepancy has nothing to
+attribute it to; a tuple with a hole in it makes every caller check every element, which the first version of anything
+does not.
+
+**Both directions on a comparison, not one signed number.** `saving` and `overspend` are separate, clamped at zero,
+because `Spend` refuses a negative leg -- a signed cost is not a cost, and inventing one to hold a delta would undo the
+refusal that keeps a total from being smaller than its parts. And the two directions are the measured shape: the gate
+here **avoids a whole generation at the price of an extra prompt read**, so the net would hide the trade the decision
+actually made. A test asserts exactly that: `overspend.prefill` is one prompt read while `overspend.generation` is a
+generation, on a cascade against the dear arm.
+
+**Suite green at 1,751 passed, 3 skipped.** Five links in the path were mutated -- the per-cell accumulation, the
+all-or-nothing rule, the leg deltas, the loader's shape test and the total/split agreement -- and each fails tests.
+
+**Two of my own defects, and the first is a repeat.** F109 recorded that an unasserted `replace` reports success while
+changing nothing, and I then wrote five replacements in one edit and **asserted the count on only some of them**. The
+unasserted one silently matched nothing and `compare()` passed fourteen arguments to a twelve-field dataclass -- the
+identical failure, one iteration later. The discipline has to be applied to every replacement rather than to the ones
+I remember. Second: a test asserted on the loader's **source text** rather than its behaviour, and it failed for the
+irrelevant reason that I had guessed the method's name. Replaced with a test that calls `from_evidence` and reads the
+cell, which is what the claim was about.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

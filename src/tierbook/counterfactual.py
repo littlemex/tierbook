@@ -58,7 +58,7 @@ from tierbook.evidence import (UNOBSERVED, Elicitation, EvidenceError, Substitut
                               z_for_one_sided)
 from tierbook.outcomes import Cell, OutcomeTable
 from tierbook.reproduce import wilson
-from tierbook.spend import COST_UNITS, format_cost
+from tierbook.spend import COST_UNITS, Spend, avoided, format_cost
 
 #: A rule: given the table, an item, and the candidates it may use, return the tiers it calls in order.
 #: Returning a tier twice is allowed and paid for twice, because a retry is a real cost.
@@ -90,6 +90,10 @@ class Run:
     #: instruction and under one asking for reasoning are different numbers, and every economic threshold in this
     #: project is conditioned on "the box accuracy" while naming no condition.
     elicitation: Elicitation | None = None
+    #: The same per-item costs with the legs kept apart, when every cell this run touched recorded them. `None` means
+    #: at least one did not, and it is all-or-nothing on purpose: a partly-split run reports a leg total smaller than
+    #: the scalar beside it and gives a reader a discrepancy with nothing to attribute it to.
+    spend: tuple[Spend, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.elicitation is not None and not isinstance(self.elicitation, Elicitation):
@@ -106,6 +110,20 @@ class Run:
     @property
     def accuracy(self) -> float:
         return sum(self.solved) / len(self.solved) if self.solved else 0.0
+
+    @property
+    def spend_per_item(self) -> Spend | None:
+        """The mean cost with its legs, or `None` when the split was not recorded throughout.
+
+        The mean rather than the total, to match `cost_per_item` beside it: two accessors of one quantity that
+        disagreed about whether they were means would be read as a real difference between the legs and the scalar.
+        """
+        if not self.spend:
+            return None
+        n = len(self.spend)
+        return Spend(prefill=sum(s.prefill for s in self.spend) / n,
+                     generation=sum(s.generation for s in self.spend) / n,
+                     unit=self.spend[0].unit)
 
     @property
     def cost_per_item(self) -> float:
@@ -151,11 +169,16 @@ def simulate(table: OutcomeTable, rule: Rule, items: Sequence[str], *, label: st
     solved: list[bool] = []
     usd: list[float] = []
     calls: list[tuple[str, ...]] = []
+    per_item_legs: list[Spend | None] = []
     for item in items:
         seq = tuple(rule(table, item))
         if not seq:
             raise EvidenceError(f"the rule called nothing on item {item!r}; a policy must call something")
         spent = 0.0
+        # `None` the moment any cell on this item lacks the split. A run priced partly with legs and partly without
+        # would report a leg total smaller than the scalar it sits beside, and a reader comparing the two would find
+        # the difference and have nothing to attribute it to.
+        legs: Spend | None = Spend(prefill=0.0, generation=0.0)
         for tier in seq:
             c = _cell(table, item, tier)
             if c.state == UNOBSERVED:
@@ -165,11 +188,16 @@ def simulate(table: OutcomeTable, rule: Rule, items: Sequence[str], *, label: st
             if c.usd is None:
                 raise EvidenceError(f"{tier!r} on {item!r} carries no cost, so this run cannot be priced")
             spent += c.usd
+            legs = None if (legs is None or c.spend is None) else legs + c.spend
         final = _cell(table, item, seq[-1])
         solved.append(bool(final.solved))
         usd.append(spent)
+        per_item_legs.append(legs)
         calls.append(seq)
-    return Run(label, tuple(items), tuple(solved), tuple(usd), tuple(calls))
+    # All or nothing, for the reason above: a tuple with a hole in it is worse than no tuple, because a caller would
+    # have to check every element and the first version of anything does not.
+    split = None if any(x is None for x in per_item_legs) else tuple(per_item_legs)
+    return Run(label, tuple(items), tuple(solved), tuple(usd), tuple(calls), spend=split)
 
 
 def oracle(table: OutcomeTable, candidates: Sequence[str], items: Sequence[str]) -> Run:
@@ -334,6 +362,11 @@ class Comparison:
     #: VISIBLE: printing nothing would leave a reader unable to tell "both arms were asked the same way" from "nobody
     #: wrote down how either was asked".
     elicitation: Elicitation | None = None
+    #: Which legs `a` spent less on than `b`, when both runs recorded the split. Clamped at zero and one-directional,
+    #: with `overspend` for the other, because `Spend` refuses a negative leg -- a signed cost is not a cost, and
+    #: inventing one to hold a delta would undo the refusal that keeps a total from being smaller than its parts.
+    saving: Spend | None = None
+    overspend: Spend | None = None
 
     def is_significant(self, *, allow_point_chosen_on_scored_items: bool = False) -> bool:
         """Whether the paired difference clears the level -- refused when the setting was chosen on these items.
@@ -458,6 +491,19 @@ class Comparison:
                 f"{format_cost(abs(self.cost_delta), self.cost_unit)}/item")
 
 
+def _leg_deltas(a: Run, b: Run) -> tuple[Spend | None, Spend | None]:
+    """What `a` saved and what it overspent, leg by leg, or two `None`s when either side lacks the split.
+
+    Both directions rather than one signed number: a policy can save a whole generation and spend an extra prompt read
+    doing it, and that is the exact shape the gate measured here has. Reporting only the net would hide the trade the
+    decision actually made.
+    """
+    sa, sb = a.spend_per_item, b.spend_per_item
+    if sa is None or sb is None:
+        return (None, None)
+    return (avoided(sb, sa), avoided(sa, sb))
+
+
 def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
     """Pair two runs item by item. Refuses runs over different item lists, and requires the setting be named.
 
@@ -486,7 +532,8 @@ def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
     return Comparison(a.label, b.label, len(a.items), a_only, b_only,
                       _sign_test(a_only, b_only),
                       a.cost_per_item - b.cost_per_item, a.accuracy - b.accuracy,
-                      operating_point, a.cost_unit, a.elicitation or b.elicitation)
+                      operating_point, a.cost_unit, a.elicitation or b.elicitation,
+                      *_leg_deltas(a, b))
 
 
 @dataclass

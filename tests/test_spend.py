@@ -177,3 +177,131 @@ def test_the_comparison_code_reads_the_vocabulary_from_here_rather_than_holding_
     from tierbook import counterfactual as cf
     assert cf.COST_UNITS is sp.COST_UNITS
     assert cf.format_cost is sp.format_cost
+
+
+# --- the production path: evidence file -> cell -> run -> comparison ------------------------------------------------
+
+def _cell(usd=None, legs=None, state=None):
+    from tierbook.evidence import SOLVED
+    from tierbook.outcomes import Cell
+    return Cell(state=state or SOLVED, usd=usd, spend=legs)
+
+
+def test_a_cell_carrying_the_split_and_a_disagreeing_total_is_refused():
+    """Two numbers would then describe one cost with nothing saying which is right -- the state the derived total in
+    Spend exists to prevent, reintroduced by writing them side by side."""
+    with pytest.raises(EvidenceError, match="disagree"):
+        _cell(usd=1.0, legs=sp.Spend(prefill=0.1, generation=10.0))
+
+
+def test_a_cell_carrying_the_split_and_no_total_is_refused():
+    """They are one cost seen two ways, so carrying the split and not the total says the total was never known."""
+    with pytest.raises(EvidenceError, match="usd is None"):
+        _cell(usd=None, legs=sp.Spend(prefill=0.1, generation=10.0))
+
+
+def test_a_cell_cannot_hold_a_token_split_beside_a_dollar_scalar():
+    """A token count sitting next to a dollar figure is the mismatch this package refuses elsewhere."""
+    with pytest.raises(EvidenceError, match="named `usd`"):
+        _cell(usd=10.1, legs=sp.Spend(prefill=0.1, generation=10.0, unit="tokens"))
+
+
+def test_a_cell_with_no_split_is_fine_because_that_is_every_cell_written_before_the_field_existed():
+    assert _cell(usd=0.5).spend is None
+
+
+def _table(legs_for=("cheap", "dear")):
+    """A two-candidate table where the named candidates carry the split and any others do not."""
+    from tierbook.evidence import SOLVED, INCORRECT
+    from tierbook.outcomes import OutcomeTable
+    t = OutcomeTable(suite="s", manifest_digest="d" * 64)
+    for item, cheap_ok in (("i1", True), ("i2", False), ("i3", True), ("i4", False),
+                           ("i5", True), ("i6", False), ("i7", True), ("i8", True)):
+        for tier, ok, pf, gen in (("cheap", cheap_ok, PREFILL, GENERATION), ("dear", True, PREFILL, GENERATION * 2)):
+            legs = sp.Spend(prefill=pf, generation=gen) if tier in legs_for else None
+            t.cells.setdefault(item, {})[tier] = _cell(usd=(pf + gen), legs=legs,
+                                                       state=SOLVED if ok else INCORRECT)
+    return t
+
+
+def test_a_run_built_from_cells_with_the_split_carries_it_through():
+    from tierbook.counterfactual import simulate
+    r = simulate(_table(), lambda tb, i: ("cheap",), ["i1", "i2", "i3"], label="cheap")
+    assert r.spend is not None
+    assert r.spend_per_item.prefill == pytest.approx(PREFILL)
+    assert r.cost_per_item == pytest.approx(r.spend_per_item.total)
+
+
+def test_a_run_touching_one_cell_without_the_split_reports_none_rather_than_a_hole():
+    """All or nothing: a partly-split run reports a leg total smaller than the scalar beside it, and a tuple with a
+    hole in it makes every caller check every element, which the first version of anything does not."""
+    from tierbook.counterfactual import simulate
+    r = simulate(_table(legs_for=("dear",)), lambda tb, i: ("cheap",), ["i1", "i2"], label="cheap")
+    assert r.spend is None
+    assert r.spend_per_item is None
+
+
+def test_a_run_that_escalates_accumulates_both_candidates_legs():
+    from tierbook.counterfactual import simulate
+    r = simulate(_table(), lambda tb, i: ("cheap", "dear"), ["i1", "i2"], label="cascade")
+    assert r.spend_per_item.prefill == pytest.approx(2 * PREFILL)
+    assert r.spend_per_item.generation == pytest.approx(GENERATION * 3)
+
+
+def test_the_comparison_says_which_leg_the_saving_came_from():
+    """F13's ask, end to end: a gate working and a shorter prompt are the same scalar and different facts."""
+    from tierbook.counterfactual import OperatingPoint, compare, simulate
+    items = ["i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8"]
+    cheap = simulate(_table(), lambda tb, i: ("cheap",), items, label="cheap")
+    dear = simulate(_table(), lambda tb, i: ("dear",), items, label="dear")
+    c = compare(cheap, dear, operating_point=OperatingPoint(kind="not_applicable"))
+    assert c.saving is not None
+    assert c.saving.generation == pytest.approx(GENERATION)   # cheap generates half as much
+    assert c.saving.prefill == 0.0                            # both read the prompt once
+    assert c.overspend.total == 0.0
+
+
+def test_both_directions_are_reported_because_a_policy_can_save_one_leg_and_spend_another():
+    """The gate measured here has exactly that shape: a whole generation avoided at the price of an extra prompt
+    read, and reporting only the net would hide the trade the decision made."""
+    from tierbook.counterfactual import OperatingPoint, compare, simulate
+    items = ["i1", "i2"]
+    cascade = simulate(_table(), lambda tb, i: ("cheap", "dear"), items, label="cascade")
+    dear = simulate(_table(), lambda tb, i: ("dear",), items, label="dear")
+    c = compare(cascade, dear, operating_point=OperatingPoint(kind="not_applicable"))
+    assert c.overspend.prefill == pytest.approx(PREFILL)      # the cascade read the prompt twice
+    assert c.overspend.generation == pytest.approx(GENERATION)
+
+
+def test_a_comparison_of_runs_without_the_split_reports_neither_direction():
+    from tierbook.counterfactual import OperatingPoint, compare, simulate
+    t = _table(legs_for=())
+    items = ["i1", "i2"]
+    c = compare(simulate(t, lambda tb, i: ("cheap",), items, label="a"),
+                simulate(t, lambda tb, i: ("dear",), items, label="b"),
+                operating_point=OperatingPoint(kind="not_applicable"))
+    assert c.saving is None and c.overspend is None
+
+
+def _evidence(subject, items):
+    from tierbook.evidence import SOLVED, Evidence
+    return Evidence(path=subject,
+                    header={"suite_manifest_digest": "sha256:" + "a" * 64, "subject": subject,
+                            "family": "s", "trials_per_item": 1},
+                    verdicts={i: (SOLVED, None) for i in items})
+
+
+def test_the_loader_takes_a_split_through_the_same_parameter_as_a_total():
+    """One parameter, two accepted shapes. The alternative is a second parallel dict, which is a list one caller fills
+    and another has to remember to fill too -- the shape this package refuses."""
+    from tierbook.outcomes import OutcomeTable
+    items = ["i1", "i2"]
+    legs = sp.Spend(prefill=PREFILL, generation=GENERATION)
+    table = OutcomeTable.from_evidence([_evidence("cheap", items)],
+                                       cost_per_item={"cheap": {"i1": legs, "i2": 0.5}})
+    assert table.cells["i1"]["cheap"].spend == legs
+    assert table.cells["i1"]["cheap"].usd == pytest.approx(legs.total)
+    # A plain float through the same parameter still works and carries no split, which is what makes this an addition
+    # rather than a migration.
+    assert table.cells["i2"]["cheap"].spend is None
+    assert table.cells["i2"]["cheap"].usd == 0.5
