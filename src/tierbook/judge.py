@@ -27,6 +27,14 @@ matching its sibling in every declarable field it produced accuracy 0.0899 again
 comparison run on those labels would have compared two orderings of noise. No manifest field can check it and no
 digest can license it. What catches it is a base rate measured on the buyer's own items before the judge's output
 is used at all, which is why `BaseRate` lives here and `admissible` reads it.
+
+**The same comparison does double duty, and that is why binding lives here too.** Asking "may this judge run against
+what is served" and asking "must a box be provisioned for it" are one question read at two points, so `bind` reuses the
+digest the contract already carries rather than introducing a second notion of compatibility. The reason it matters is
+not tidiness: a judge built by an ordinary user has to be able to point at the box an administrator already stands up
+from a template, and if every judge provisions its own instead, a marketplace of judges does not work at any scale.
+Which is why `blocked` and `provision` are different outcomes -- reporting the first as the second is exactly how a
+shared box ends up idle beside a second copy of itself.
 """
 from __future__ import annotations
 
@@ -246,3 +254,129 @@ def admissible(contract: JudgeContract, *, served: WeightDigest, base_rate: Base
             f"the candidate answers {base_rate.correct}/{base_rate.total} = {base_rate.rate:.4f} on the buyer's "
             f"items, below the declared floor of {base_rate.floor}. Whatever the judge then reports is an ordering "
             f"of noise, and a comparison built on it returns a number rather than an error")
+
+#: Why a standing box could not be bound to. Closed, because the difference between these decides whether the answer
+#: is "provision one" or "ask for access", and conflating them is how every judge ends up with its own box.
+UNBINDABLE_REASONS = (
+    "digest_mismatch",      # it serves a different model; no permission would help
+    "not_shared",           # it serves the right model and its owner has not offered it
+    "at_capacity",          # it serves the right model and would take a tenant, but not another one now
+)
+
+#: What a binding attempt concluded. `bound` names the box. `provision` means nothing serves this model at all, which
+#: is the only honest reason to start a new one. `blocked` means something DOES serve it and would not take this
+#: judge -- a permission or capacity problem wearing the shape of a provisioning one, and the distinction is the whole
+#: point: answering `provision` here is how a shared box sits idle beside a second copy of itself.
+BINDING_OUTCOMES = ("bound", "provision", "blocked")
+
+
+@dataclass(frozen=True)
+class StandingBox:
+    """A serving box somebody already runs, and what it will and will not accept.
+
+    The digest is a `WeightDigest` rather than a model name for the reason the rest of this module keys on one: two
+    boxes serving models that agree on every declarable field are not interchangeable, and a judge bound to the wrong
+    one produces a working-looking gate.
+
+    `shared_with` is the marketplace requirement in one field. A judge built by an ordinary user has to be able to
+    point at the box an administrator already stands up from a template, and the alternative -- every judge
+    provisioning its own -- is the failure that makes a marketplace of judges impossible rather than merely wasteful.
+    """
+
+    box_id: str
+    serves: WeightDigest
+    owner: str
+    shared_with: tuple[str, ...] = ()
+    tenants: int = 0
+    max_tenants: int = 1
+
+    def __post_init__(self) -> None:
+        if not self.box_id or not self.owner:
+            raise Inadmissible("a standing box needs both an id and an owner: the id is what a judge binds to and the "
+                               "owner is who a blocked judge has to ask, and a binding that cannot name either leaves "
+                               "the caller with nothing to do next")
+        if not isinstance(self.serves, WeightDigest):
+            raise Inadmissible(
+                f"box {self.box_id!r} says it serves {self.serves!r}, which is not a WeightDigest. Two boxes serving "
+                f"models that agree on {REFUSED_KEYS} are not interchangeable, so a name here would let a judge bind "
+                f"to the wrong one and still appear to work")
+        if self.max_tenants < 1:
+            raise Inadmissible(f"box {self.box_id!r} declares max_tenants={self.max_tenants}, so it can never be bound "
+                               f"to; a box nothing may use is not a standing box, it is a box being decommissioned")
+        if self.tenants < 0 or self.tenants > self.max_tenants:
+            raise Inadmissible(f"box {self.box_id!r} reports {self.tenants} of {self.max_tenants} tenants, which is not "
+                               f"an occupancy")
+
+    def accepts(self, requester: str) -> bool:
+        """Whether this box's owner has offered it to `requester`. Ownership is offered access, not a special case."""
+        return requester == self.owner or requester in self.shared_with or "*" in self.shared_with
+
+    @property
+    def has_room(self) -> bool:
+        return self.tenants < self.max_tenants
+
+
+@dataclass(frozen=True)
+class Binding:
+    """What a binding attempt concluded, and for every box that was rejected, why.
+
+    The rejections are carried rather than summarised for the same reason `Candidate.excluded_because` is: "provision
+    one" and "ask box-1's owner for access" are different instructions to a caller, and a result that only said "no"
+    would send them to provision a second copy of a box that already exists.
+    """
+
+    outcome: str
+    box_id: str = ""
+    rejected: tuple[tuple[str, str], ...] = ()   # (box_id, one of UNBINDABLE_REASONS)
+
+    def __post_init__(self) -> None:
+        if self.outcome not in BINDING_OUTCOMES:
+            raise Inadmissible(f"{self.outcome!r} is not one of {BINDING_OUTCOMES}")
+        if (self.outcome == "bound") != bool(self.box_id):
+            raise Inadmissible(
+                f"outcome={self.outcome!r} and box_id={self.box_id!r} disagree. A binding names a box exactly when it "
+                f"succeeded: a named box with any other outcome reads as though it were usable, and an unnamed one "
+                f"with outcome 'bound' cannot be acted on")
+        bad = sorted({r for _, r in self.rejected} - set(UNBINDABLE_REASONS))
+        if bad:
+            raise Inadmissible(f"rejection reasons {bad} are not in {UNBINDABLE_REASONS}; an open-ended reason cannot "
+                               f"be turned into an instruction for the caller")
+
+    @property
+    def instruction(self) -> str:
+        """What the caller should actually do, which is the product of this whole comparison."""
+        if self.outcome == "bound":
+            return f"bind to {self.box_id}"
+        if self.outcome == "provision":
+            return ("provision a box serving this judge's digest: nothing standing serves it, so there is no shared "
+                    "resource to point at")
+        blocked = [b for b, r in self.rejected if r != "digest_mismatch"]
+        return (f"ask the owner of {', '.join(blocked)} for access or capacity -- a box already serves this judge's "
+                f"digest, so provisioning another would leave two copies of one model")
+
+
+def bind(contract: JudgeContract, boxes: list[StandingBox], *, requester: str) -> Binding:
+    """Which standing box this judge may use, or what to do because none will.
+
+    **Requirement and provisioning are two readings of one comparison**, which is why this reuses the digest the
+    contract already carries rather than introducing a second notion of compatibility. Asking "does any standing box
+    serve what this judge needs" and asking "must I start one" are the same question answered at different points.
+
+    The three outcomes are kept apart because they are different instructions, and collapsing the last two is the
+    specific failure this exists to prevent: if `blocked` were reported as `provision`, every judge whose access
+    request was pending would start its own copy of a box that is already running, and a marketplace where each
+    judge silos its own hardware does not work at any scale.
+    """
+    rejected: list[tuple[str, str]] = []
+    for box in boxes:
+        if box.serves != contract.weight_digest:
+            rejected.append((box.box_id, "digest_mismatch"))
+        elif not box.accepts(requester):
+            rejected.append((box.box_id, "not_shared"))
+        elif not box.has_room:
+            rejected.append((box.box_id, "at_capacity"))
+        else:
+            return Binding(outcome="bound", box_id=box.box_id, rejected=tuple(rejected))
+    serves_it = [r for r in rejected if r[1] != "digest_mismatch"]
+    return Binding(outcome="blocked" if serves_it else "provision", rejected=tuple(rejected))
+

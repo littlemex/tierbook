@@ -4895,6 +4895,50 @@ sitting where it decides whether a result is claimed. A test asserts `_z_for` no
 **Suite green at 1,679 passed, 3 skipped.** Five mechanisms mutated -- the attainability guard, the post-hoc refusal,
 the interval containment, the p-floor formula, and the quantile table -- and each fails tests.
 
+## F108 — A judge binds to a box somebody already runs, and "blocked" is not "provision"
+
+**F56's clause named this and only half of it was built:** "the same matching that lets a judge BIND to an
+already-standing shared box rather than provisioning its own — requirement and provisioning are two readings of one
+comparison, so the contract does double duty." Admission existed; binding did not. It is also the requirement stated
+directly in this project: **an administrator stands a box up from a template and ordinary users build judges against
+it**, because if every judge silos its own hardware a marketplace of judges does not work at any scale.
+
+**`bind(contract, boxes, requester=...)` reuses the digest the contract already carries** rather than introducing a
+second notion of compatibility, which is what "two readings of one comparison" means in code.
+
+**Three outcomes, and keeping the last two apart is the entire point.**
+
+| outcome | what it means | what the caller does |
+|---|---|---|
+| `bound` | a standing box serves this digest and will take you | bind to it |
+| `provision` | **nothing** standing serves this digest | start one; there is no shared resource to point at |
+| `blocked` | something serves it and will not take you -- not shared, or full | ask that owner; **provisioning another would leave two copies of one model** |
+
+Reporting `blocked` as `provision` is precisely how a shared box ends up idle beside a second copy of itself: every
+judge whose access request is pending starts its own. So the rejections are carried per box with a closed vocabulary
+(`digest_mismatch`, `not_shared`, `at_capacity`), and `Binding.instruction` turns them into the sentence the caller
+acts on. A `Binding` names a box **exactly when it succeeded** -- a named box with any other outcome reads as usable,
+and an unnamed one claiming success cannot be acted on.
+
+**Wired into `admit-judge`, after admission rather than before**: a judge that may not run against this model at all
+should not be told which box to point at. Exit codes separate the two problems -- **1 for a judge that must not run, 2
+for a judge that is fine and has nowhere to run** -- because only one of them involves starting a machine.
+
+**One real defect in my own wiring, caught by trying to reach each outcome.** The first `--standing-box` spec had no
+digest field, so every box was constructed with the digest of the model actually served. `digest_mismatch` could then
+never occur and **`provision` was unreachable from the door** -- a command able to report two of its three answers with
+nothing saying so. The spec is now `ID:DIGEST:OWNER:SHARED_WITH:TENANTS:MAX`, and all three outcomes were exercised
+against the real command.
+
+**Suite green at 1,699 passed, 3 skipped.** Three mechanisms mutated -- the blocked/provision split, the grant check and
+the capacity check -- and each fails tests.
+
+**One process note that cost several minutes.** Five verification runs all reported a malformed spec, and the code was
+correct: **zsh's `:a` modifier had eaten part of `"box-1:$RD:admin:..."`**, turning the digest into an absolute path and
+leaving `dmin` behind. Building the argument with `printf` into a variable fixes it. A shell that rewrites an argument
+silently produces a failure that looks exactly like a bug in the program under test, and the tell was that the same
+values passed through `argv` in Python worked first time.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

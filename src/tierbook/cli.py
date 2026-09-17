@@ -705,16 +705,40 @@ def cmd_admit_judge(args) -> int:
         contract = jd.JudgeContract(judge_id=args.judge_id, weight_digest=declared,
                                     measured=measured, assumes=tuple(args.assumes))
         jd.admissible(contract, served=served, base_rate=base_rate)
+        # Binding after admission, not before: a judge that may not run against this model at all should not be told
+        # which box to point at, and the digest comparison that decides admission is the same one that decides
+        # binding, so doing it in this order asks the question once.
+        # DEFECT this spec's digest field prevents: the first version built every box with the digest of the model
+        # actually served, so `digest_mismatch` could not occur and the `provision` outcome was unreachable from this
+        # door -- a command that can only report two of three answers, with nothing saying so.
+        binding = (jd.bind(contract, [jd.StandingBox(box_id=bid, serves=jd.WeightDigest(hex=bdig), owner=own,
+                                                    shared_with=tuple(sw.split(",")) if sw else (),
+                                                    tenants=int(oc), max_tenants=int(mx))
+                                      for bid, bdig, own, sw, oc, mx
+                                      in (spec.split(":") for spec in args.standing_box)],
+                           requester=args.requester)
+                   if args.standing_box else None)
     except jd.Inadmissible as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1
     except ValueError as e:
-        # A --constant that is not NAME=VALUE, or a VALUE that is not a number. Same treatment: the operator gets a
-        # sentence naming what to fix, because argparse cannot check the shape inside a repeated string option.
-        print(f"refused: --constant must be NAME=VALUE with a numeric VALUE ({e})", file=sys.stderr)
+        # A --constant that is not NAME=VALUE, a VALUE that is not a number, or a --standing-box with the wrong number
+        # of colon-separated fields. Same treatment: the operator gets a sentence naming what to fix, because argparse
+        # cannot check the shape inside a repeated string option.
+        print(f"refused: --constant must be NAME=VALUE with a numeric VALUE, and --standing-box must be "
+              f"ID:DIGEST:OWNER:SHARED_WITH:TENANTS:MAX ({e})", file=sys.stderr)
         return 1
     print(f"admitted {args.judge_id!r} on {served.hex[:16]}: {len(measured)} measured constant(s), base rate "
           f"{base_rate.correct}/{base_rate.total} = {base_rate.rate:.4f} against a floor of {base_rate.floor}")
+    if binding is not None:
+        # Printed as the instruction rather than the outcome word, because "blocked" and "provision" send the caller
+        # to different places and only one of them involves starting a machine.
+        print(f"binding: {binding.instruction}")
+        for box_id, reason in binding.rejected:
+            print(f"  {box_id}: {reason}")
+        # Exit 0 for a successful bind, 2 for anything else -- distinct from the 1 an inadmissible judge gets, because
+        # a judge that is fine and has nowhere to run is a different problem from a judge that must not run.
+        return 0 if binding.outcome == "bound" else 2
     return 0
 
 
@@ -918,6 +942,14 @@ def main(argv: list[str] | None = None) -> int:
     aj.add_argument("--base-rate-floor", type=float, default=0.20,
                     help="the task's floor, one over the number of options times a margin. The buyer's, not the "
                          "judge's: a judge that could set it would be certifying itself")
+    aj.add_argument("--standing-box", action="append", default=[],
+                    metavar="ID:DIGEST:OWNER:SHARED_WITH:TENANTS:MAX",
+                    help="a box somebody already runs, repeatable. DIGEST is what that box serves, which is not "
+                         "assumed to be --digest: without it a fleet of boxes serving other models cannot be "
+                         "expressed and 'nothing serves this, provision one' becomes unreachable. SHARED_WITH is "
+                         "comma-separated, '*' for anyone, empty for nobody")
+    aj.add_argument("--requester", default="",
+                    help="who is asking to bind, checked against each box's owner and grants")
     aj.set_defaults(fn=cmd_admit_judge, registry=None)
 
     ao = sub.add_parser("attach-outcome", parents=[common],
