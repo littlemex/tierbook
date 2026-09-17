@@ -194,3 +194,31 @@ def test_the_lag_is_never_negative():
     """A snapshot built from a longer history than this store holds is normal -- the store may be a window -- and
     must not report a negative lag that a caller would compare against a threshold."""
     assert p.Store().staleness(live_snapshot=cal(observation_count=253)) == 0
+
+
+# --- the fact, separated from the two policies over it --------------------------------------------------------------
+
+def test_mixtures_reports_the_fact_and_refuse_drift_acts_on_it():
+    """One implementation, two policies. A second copy of this grouping is one edit away from the reader and the
+    decider disagreeing about what a mixture is, which is how a log passes one check and fails the other."""
+    readings = [p.Reading(policy_version="gate/0.1", snapshot_id="aaa"),
+                p.Reading(policy_version="gate/0.1", snapshot_id="bbb"),
+                p.Reading(policy_version="gate/0.2", snapshot_id="ccc")]
+    assert p.mixtures(readings) == {"gate/0.1": ["aaa", "bbb"]}
+    with pytest.raises(p.Unreplayable):
+        p.refuse_drift(readings)
+
+
+def test_mixtures_is_empty_when_every_version_names_one_snapshot():
+    readings = [p.Reading(policy_version="gate/0.1", snapshot_id="aaa"),
+                p.Reading(policy_version="gate/0.1", snapshot_id="aaa"),
+                p.Reading(policy_version="gate/0.2", snapshot_id="bbb")]
+    assert p.mixtures(readings) == {}
+    p.refuse_drift(readings)
+
+
+def test_the_ids_are_sorted_so_the_report_is_stable():
+    """An unordered report changes between runs over the same log, and then a diff of two reports shows a change
+    where nothing changed."""
+    assert p.mixtures([p.Reading(policy_version="v", snapshot_id="bbb"),
+                       p.Reading(policy_version="v", snapshot_id="aaa")]) == {"v": ["aaa", "bbb"]}

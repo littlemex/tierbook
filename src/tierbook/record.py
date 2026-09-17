@@ -36,6 +36,7 @@ from pathlib import Path
 # cycle before writing this: `observe` imports only `decide.STATE_VARS`, and neither `decide` nor `observe`
 # imports `record`, so this edge does not close a loop.
 from . import observe
+from . import plane as pl
 
 #: The shape this module writes and reads by default. Verified: `accept._as_decision` used to splat every row key
 #: into `Decision(**kw)`, so a record carrying a field the reader's Decision does not define raised
@@ -771,12 +772,15 @@ class Log:
         # were never one policy. `plane.refuse_drift` is the same check for a caller that must not proceed at all;
         # this is the reader's report, because refusing here would make an otherwise-readable log unreadable over a
         # fact that only invalidates one grouping of it.
-        digests_per_version: dict[str, set] = {}
-        for row in decisions:
-            digest = row.get("policy_digest", "")
-            if digest:  # a version 1 or 2 row carries "" by S4, and an absent digest is not a second digest
-                digests_per_version.setdefault(row["policy_version"], set()).add(digest)
-        mixed = {v: sorted(d) for v, d in digests_per_version.items() if len(d) > 1}
+        #
+        # The grouping itself comes from `plane.mixtures` rather than being repeated here. Two callers need the same
+        # fact and must act on it differently -- `plane.refuse_drift` must not proceed, this must still return the
+        # rows it holds -- and a second copy of the rule is one edit away from the two disagreeing about what a
+        # mixture is. A version 1 or 2 row carries `policy_digest: ""` by S4 and is filtered before a `Reading` is
+        # built, because `Reading` refuses an empty id: an unknown snapshot is not a different one.
+        readings = [pl.Reading(policy_version=row["policy_version"], snapshot_id=row["policy_digest"])
+                    for row in decisions if row.get("policy_digest")]
+        mixed = pl.mixtures(readings)
         if mixed:
             outcomes["__version_mixtures__"] = {
                 "count": len(mixed), "versions": mixed,

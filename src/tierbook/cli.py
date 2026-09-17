@@ -2,6 +2,8 @@
 
 Offline, run when the ledger changes: `validate`, `explain`, `compile`, `discover`, `preflight`, `export-vsr`,
 `logs`. Per request or per log, run while traffic is served: `observe`, `assign`, `attach-outcome`, `accept`.
+`admit-judge` is offline too, and deliberately: the digest comparison gives the same answer on every request, and
+the base rate costs a pass over the buyer's items, which is not something a request can wait for.
 `route` reads a compiled table and belongs to both -- it is what `assign` does without recording anything.
 
 The header used to say "deliberately four verbs" and listed eight, which had not been true for two releases. The
@@ -18,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook admit-judge refuse a judge against the model actually served, before any traffic reaches it
     tierbook attach-outcome  attach an observed outcome (label, tokens, latency) to a decision already logged
     tierbook accept      the acceptance criteria over a log, each with its own verdict and why
 
@@ -43,6 +46,7 @@ from tierbook.config import ConfigError, draft_from_model_list, load_config
 from tierbook.decide import as_dict as decide_as_dict
 from tierbook.decide import compile_policy
 from tierbook.evidence import EvidenceError
+from tierbook import judge as jd
 from tierbook.policy import (assign_family, break_even_price, capacity_note, capacity_priority,
                              cutover_violation, evidence_class, load_registry, occupancy_at, registry_version,
                              reservation_verdict)
@@ -673,6 +677,47 @@ def cmd_logs(args) -> int:
     return 0
 
 
+def cmd_admit_judge(args) -> int:
+    """Refuse a judge against the model actually served, before any traffic reaches it.
+
+    This is the door the judge contract exists for, and it runs BEFORE serving rather than per request for two
+    reasons. The digest comparison is decidable from the manifest alone and would be the same answer on every
+    request, so paying for it per request buys nothing; and the base rate costs a pass over the buyer's own items,
+    which is not something a request can wait for.
+
+    The exit code is what a deployment reads: 0 admits, 1 refuses, and a refusal names which of the two checks
+    failed. A judge that fails here still produces a working-looking gate if it is deployed anyway -- 0.7176 against
+    0.7529 for the matched one, a difference whose interval included zero -- so there is nothing downstream that
+    would notice.
+    """
+    # Everything that can refuse is inside the try, including reading the served snapshot and parsing the digest.
+    # DEFECT this shape prevents: with these three lines outside it, a --served directory holding no config.json and
+    # a --digest that is a model NAME both exited with a stack trace instead of the sentence saying what was wrong --
+    # and a refusal an operator cannot read is a refusal that gets worked around rather than fixed.
+    try:
+        declared = jd.WeightDigest(hex=args.digest)
+        served = jd.digest_published(args.served)
+        measured = tuple(jd.MeasuredConstant(name=n, value=float(v), measured_on=declared)
+                         for n, v in (kv.split("=", 1) for kv in args.constant))
+        base_rate = (None if args.base_rate_correct is None or args.base_rate_total is None else
+                     jd.BaseRate(correct=args.base_rate_correct, total=args.base_rate_total,
+                                 floor=args.base_rate_floor))
+        contract = jd.JudgeContract(judge_id=args.judge_id, weight_digest=declared,
+                                    measured=measured, assumes=tuple(args.assumes))
+        jd.admissible(contract, served=served, base_rate=base_rate)
+    except jd.Inadmissible as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        # A --constant that is not NAME=VALUE, or a VALUE that is not a number. Same treatment: the operator gets a
+        # sentence naming what to fix, because argparse cannot check the shape inside a repeated string option.
+        print(f"refused: --constant must be NAME=VALUE with a numeric VALUE ({e})", file=sys.stderr)
+        return 1
+    print(f"admitted {args.judge_id!r} on {served.hex[:16]}: {len(measured)} measured constant(s), base rate "
+          f"{base_rate.correct}/{base_rate.total} = {base_rate.rate:.4f} against a floor of {base_rate.floor}")
+    return 0
+
+
 def cmd_attach_outcome(args) -> int:
     """Attach an observed outcome to a decision already in the log -- the documented door onto a labelled log.
 
@@ -855,6 +900,25 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    aj = sub.add_parser("admit-judge", parents=[common],
+                        help="refuse a judge against the model actually served, before any traffic reaches it")
+    aj.add_argument("--judge-id", required=True, help="how this judge is named in a decision record")
+    aj.add_argument("--digest", required=True,
+                    help="the published-weights digest this judge was built and measured on")
+    aj.add_argument("--served", required=True,
+                    help="the model snapshot directory actually being served, which is hashed here")
+    aj.add_argument("--constant", action="append", default=[], metavar="NAME=VALUE",
+                    help="a constant this judge measured; repeatable. Each is licensed by --digest and nothing weaker")
+    aj.add_argument("--assumes", action="append", default=[], metavar="TEXT",
+                    help="what the judge assumes that no field can check, such as a readout convention")
+    aj.add_argument("--base-rate-correct", type=int, default=None,
+                    help="how many of the buyer's own items the candidate answers correctly")
+    aj.add_argument("--base-rate-total", type=int, default=None, help="how many items that was out of")
+    aj.add_argument("--base-rate-floor", type=float, default=0.20,
+                    help="the task's floor, one over the number of options times a margin. The buyer's, not the "
+                         "judge's: a judge that could set it would be certifying itself")
+    aj.set_defaults(fn=cmd_admit_judge, registry=None)
 
     ao = sub.add_parser("attach-outcome", parents=[common],
                         help="attach an observed outcome to a decision already in the log")

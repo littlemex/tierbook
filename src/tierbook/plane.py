@@ -168,6 +168,26 @@ class Reading:
                                "half of the pair produced a decision and leaves the other unknowable")
 
 
+def mixtures(readings: list[Reading]) -> dict[str, list[str]]:
+    """Which policy versions name more than one set of constants, and which.
+
+    The FACT, separated from what to do about it, because two callers need the same fact and must act on it
+    differently: a caller about to decide must not proceed at all, and a log reader must still return the rows it
+    holds. Written once, so the two policies cannot drift apart -- which is what happened when the reader grew its
+    own copy of this grouping and the two implementations were one edit away from disagreeing about what a mixture
+    is.
+
+    There is no branch here for a reading with no snapshot: `Reading` refuses one, so a row that predates the
+    mechanism naming its snapshot cannot become a reading at all and is filtered where it is read. That is the
+    earlier and better place for it -- an unknown snapshot is not a *different* snapshot, and counting it as
+    different would report every history spanning the change as a mixture.
+    """
+    per_version: dict[str, set] = {}
+    for r in readings:
+        per_version.setdefault(r.policy_version, set()).add(r.snapshot_id)
+    return {v: sorted(s) for v, s in per_version.items() if len(s) > 1}
+
+
 def refuse_drift(readings: list[Reading]) -> None:
     """Refuse one policy version that read two different snapshots.
 
@@ -176,14 +196,13 @@ def refuse_drift(readings: list[Reading]) -> None:
     complete and the comparison it supports is between two things that were never one policy. If the numbers change,
     the version changes.
     """
-    seen: dict[str, str] = {}
-    for r in readings:
-        prior = seen.setdefault(r.policy_version, r.snapshot_id)
-        if prior != r.snapshot_id:
-            raise Unreplayable(
-                f"policy version {r.policy_version!r} read snapshot {prior} and also {r.snapshot_id}. Two decisions "
-                f"credited to one policy were made with different constants, so any rate computed over that version "
-                f"is over a mixture; bump the version when the snapshot changes")
+    mixed = mixtures(readings)
+    if mixed:
+        version, ids = sorted(mixed.items())[0]
+        raise Unreplayable(
+            f"policy version {version!r} read snapshot {ids[0]} and also {ids[1]}. Two decisions credited to one "
+            f"policy were made with different constants, so any rate computed over that version is over a mixture; "
+            f"bump the version when the snapshot changes")
 
 
 @dataclass

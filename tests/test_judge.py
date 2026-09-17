@@ -179,3 +179,68 @@ def test_the_snapshot_digest_is_stable_across_calls(tmp_path):
     (tmp_path / "model.safetensors").write_bytes(b"\0" * 8)
     assert j.digest_published(tmp_path) == j.digest_published(tmp_path)
     assert j.digest_published(tmp_path).subject == "published_weights"
+
+
+# --- the CLI door, which is what actually runs before traffic ------------------------------------------------------
+
+def _snapshot(d, size=1000):
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.json").write_text(json.dumps({"model_type": "qwen3_5", "hidden_size": 4096}))
+    (d / "model.safetensors").write_bytes(b"\0" * size)
+    return d
+
+
+def _admit(argv, capsys):
+    """Returns (exit_code, everything printed). The exit code is what a deployment reads."""
+    from tierbook import cli
+    code = cli.main(["admit-judge", *argv])
+    cap = capsys.readouterr()
+    return code, cap.out + cap.err
+
+
+def test_a_matched_judge_is_admitted_through_the_cli(tmp_path, capsys):
+    right = _snapshot(tmp_path / "right")
+    code, text = _admit(["--judge-id", "prefill-gate/0.1", "--digest", j.digest_published(right).hex,
+                         "--served", str(right), "--constant", "threshold=0.62",
+                         "--base-rate-correct", "180", "--base-rate-total", "253"], capsys)
+    assert code == 0
+    assert "admitted" in text and "0.7115" in text
+
+
+def test_the_wrong_model_refuses_with_exit_one(tmp_path, capsys):
+    right, wrong = _snapshot(tmp_path / "right"), _snapshot(tmp_path / "wrong", size=1001)
+    code, text = _admit(["--judge-id", "g", "--digest", j.digest_published(right).hex, "--served", str(wrong),
+                         "--base-rate-correct", "180", "--base-rate-total", "253"], capsys)
+    assert code == 1
+    assert "cannot be caught downstream" in text
+
+
+def test_a_chance_base_rate_refuses_with_exit_one(tmp_path, capsys):
+    right = _snapshot(tmp_path / "right")
+    code, text = _admit(["--judge-id", "g", "--digest", j.digest_published(right).hex, "--served", str(right),
+                         "--base-rate-correct", "21", "--base-rate-total", "234"], capsys)
+    assert code == 1
+    assert "ordering of noise" in text
+
+
+@pytest.mark.parametrize("argv,expect", [
+    (["--digest", "Qwen3.8-9B-Distill"], "not a lowercase 64-character sha256"),
+    (["--served", "MISSING"], "no config.json"),
+    (["--constant", "threshold"], "NAME=VALUE"),
+    (["--constant", "threshold=high"], "NAME=VALUE"),
+    (["--judge-id", ""], "cannot be named in a decision record"),
+])
+def test_every_bad_input_refuses_with_a_readable_sentence(tmp_path, capsys, argv, expect):
+    """DEFECT: with the snapshot read and the digest parsed outside the try, a --served holding no config.json and a
+    --digest that is a model NAME both exited with a stack trace. A refusal an operator cannot read is a refusal that
+    gets worked around rather than fixed."""
+    right = _snapshot(tmp_path / "right")
+    base = {"--judge-id": "g", "--digest": j.digest_published(right).hex, "--served": str(right)}
+    for i in range(0, len(argv), 2):
+        base[argv[i]] = argv[i + 1]
+    if base["--served"] == "MISSING":
+        base["--served"] = str(tmp_path / "nothing-here")
+    flat = [x for kv in base.items() for x in kv]
+    code, text = _admit([*flat, "--base-rate-correct", "180", "--base-rate-total", "253"], capsys)
+    assert code == 1, text
+    assert expect in text

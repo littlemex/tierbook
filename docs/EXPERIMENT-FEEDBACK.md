@@ -4698,6 +4698,47 @@ no-op on macOS because BSD `sed` does not implement `\b`. The chained command re
 edits and left the test file half-renamed. A rename is not a text substitution worth trusting without reading the
 result.
 
+## F103 — Giving the contracts a real caller, and the three defects that surfaced on the way
+
+All three new modules had **zero production importers**, measured rather than assumed: the earlier grep looked like it
+found callers and was matching the word "judge" followed by a full stop in prose. A mechanism only its own tests reach
+has no coverage of the thing it protects.
+
+**Defect 1: the reader grew a second copy of the drift rule.** F102 put the version-mixture grouping inline in
+`record.read()` while `plane.refuse_drift` already had it. Two implementations of one rule, one edit from disagreeing
+about what a mixture is — and then a log passes one check and fails the other. Split into the fact and the two policies
+over it: `plane.mixtures()` returns the grouping, `refuse_drift` raises on it for a caller that must not proceed, and
+`read()` reports it while still returning its rows. **Proved wired by breaking `plane.mixtures` and watching a `record`
+test fail** — two modules both existing is not evidence that one calls the other.
+
+**Defect 2: I wrote unreachable code and a comment describing it.** The new `mixtures` had a branch for a reading with
+no snapshot id, explained at length. `Reading` refuses an empty id, so the branch could never run. The invariant now
+lives in one place and the docstring says where the filtering happens instead of pretending to do it twice.
+
+**Defect 3: the CLI door printed stack traces where it promised sentences.** `admit-judge` now exists — the door the
+judge contract was built for, offline rather than per request because the digest comparison gives the same answer every
+time and the base rate costs a pass over the buyer's items. Its first version put `digest_published()` and the digest
+parse **outside** the try, so a `--served` directory with no `config.json` and a `--digest` that was a model *name* both
+exited with a traceback. A refusal an operator cannot read is a refusal that gets worked around rather than fixed. Six
+paths verified by running the command, exit code measured correctly the second time (the first attempt read `tail`'s
+status, not the program's):
+
+| input | exit | refusal |
+|---|---|---|
+| matched, base rate 180/253 | 0 | admitted |
+| wrong model served | 1 | cannot be caught downstream |
+| base rate 21/234 against a floor of 0.20 | 1 | ordering of noise |
+| no base rate | 1 | the only check that sees it |
+| `--digest Qwen3.8-9B-Distill` | 1 | not a lowercase 64-character sha256 |
+| `--served` with no config, `--constant threshold`, `--constant threshold=high`, empty `--judge-id` | 1 | each names what to fix |
+
+**And the repo caught my own omission.** A standing guard asserts the module docstring's verb list matches what
+`--help` prints; adding a subcommand without listing it failed that test immediately. This is the shape worth having
+more of: the omission is a failure rather than an absence.
+
+**Suite green at 1,617 passed, 3 skipped.** The door was mutated (removing the `admissible` call) and two tests fail, so
+they exercise the door rather than the library beside it.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
