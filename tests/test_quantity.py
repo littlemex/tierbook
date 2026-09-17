@@ -386,3 +386,170 @@ def test_no_door_can_leak_a_refusal_as_a_stack_trace(tmp_path, capsys):
     # Only the doors added with this mechanism are required to wear it today; the assertion exists so a NEW door
     # cannot be added without a decision about it.
     assert set(undecorated).isdisjoint({"cmd_admissible_quantities", "cmd_admit_judge"})
+
+
+# --- a strength reported per stratum rather than pooled ---------------------------------------------------------------
+
+def strength(value=0.5350, n=537, lo=0.49, hi=0.58, statistic="auc", method="bootstrap"):
+    return qt.Strength(value=value, n=n, interval=(lo, hi), statistic=statistic, interval_method=method)
+
+
+def test_a_wilson_interval_is_refused_around_anything_but_a_proportion():
+    """The trap this vocabulary exists for: the numbers this module was built from are areas under a curve, and the
+    nearest interval already in the package is Wilson's. It would return plausible-looking bounds computed for a
+    statistic nobody measured, and nothing downstream could tell that from a correct one."""
+    with pytest.raises(qt.Inadmissible, match="for a binomial proportion"):
+        strength(statistic="auc", method="wilson_on_a_proportion")
+    assert strength(value=0.75, n=100, lo=0.66, hi=0.83, statistic="proportion",
+                    method="wilson_on_a_proportion").value == 0.75
+
+
+def test_an_interval_that_does_not_contain_the_value_is_refused():
+    with pytest.raises(qt.Inadmissible, match="computed over something else"):
+        strength(value=0.90, lo=0.49, hi=0.58)
+
+
+@pytest.mark.parametrize("field,bad", [("statistic", "score"), ("interval_method", "eyeballed")])
+def test_the_two_vocabularies_are_closed(field, bad):
+    with pytest.raises(qt.Inadmissible, match="is not one of"):
+        strength(**{"statistic" if field == "statistic" else "method": bad})
+
+
+def _stratified(stratifier_availability="after_generation", fit="carried_from_pooled", pooled=True, strata=None):
+    kw = dict(availability=stratifier_availability)
+    if stratifier_availability == "during_compute":
+        kw.update(register="active_probe", price=price(2))
+    stratifier = q(name="settling_depth", **kw)
+    per = strata if strata is not None else {
+        "fast": strength(value=0.7482, n=1827, lo=0.72, hi=0.77),
+        "slow": strength(value=0.5350, n=537, lo=0.49, hi=0.58)}
+    return qt.StratifiedPerformance(
+        stratum_of=stratifier, per_stratum=per, fit_source=fit,
+        pooled=strength(value=0.75, n=2364, lo=0.73, hi=0.77) if pooled else None)
+
+
+def test_the_pooled_figure_sits_above_the_stratum_that_matters():
+    """A pooled 0.75 is an average over a population where the signal is strong on the easy half and absent on the half
+    that matters. The gap is what the pooled number hides."""
+    sp = _stratified()
+    assert sp.weakest[0] == "slow"
+    assert sp.pooling_hides() == pytest.approx(0.75 - 0.5350)
+
+
+def test_no_pooled_figure_means_no_gap_rather_than_a_negative_one():
+    assert _stratified(pooled=False).pooling_hides() == 0.0
+
+
+def test_one_stratum_is_a_pooled_report_wearing_a_conditional_name():
+    with pytest.raises(qt.Inadmissible, match="wearing a conditional name"):
+        _stratified(strata={"all": strength()})
+
+
+def test_bare_numbers_in_the_strata_are_refused():
+    with pytest.raises(qt.Inadmissible, match="bare numbers"):
+        _stratified(strata={"fast": 0.7482, "slow": 0.5350})
+
+
+def test_the_stratifier_must_be_a_quantity_so_its_availability_is_known():
+    """A bare name would not say when the stratifier is available, which is what decides whether the report can be used
+    at all."""
+    with pytest.raises(qt.Inadmissible, match="not a Quantity"):
+        qt.StratifiedPerformance(stratum_of="settling_depth", fit_source="refitted_in_stratum",
+                                 per_stratum={"a": strength(), "b": strength(value=0.62, lo=0.58, hi=0.66)})
+
+
+def test_an_open_ended_fit_source_is_refused():
+    with pytest.raises(qt.Inadmissible, match="is not one of"):
+        _stratified(fit="probably_refitted")
+
+
+# --- what a production policy may take from it -------------------------------------------------------------------------
+
+def test_a_split_on_a_post_generation_quantity_cannot_be_performed_at_decision_time():
+    """Settling depth is known only after generation, so which stratum a request falls in is not knowable when the
+    decision is made -- however true the report is of the corpus."""
+    sp = _stratified(stratifier_availability="after_generation")
+    assert sp.reproducible_in_production is False
+    with pytest.raises(qt.Inadmissible, match="not knowable when the decision is made"):
+        sp.production_strength("slow")
+
+
+def test_a_carried_fit_cannot_stand_as_the_stratums_strength():
+    """Refitting within the group moved the measured case from 0.5350 to 0.5787, so a carried figure cannot tell an
+    absence of information here from a direction learned for another stratum."""
+    sp = _stratified(stratifier_availability="after_prefill", fit="carried_from_pooled")
+    assert sp.reproducible_in_production is True
+    with pytest.raises(qt.Inadmissible, match="carried from the pooled fit"):
+        sp.production_strength("slow")
+    assert sp.production_strength("slow", allow_carried_fit=True).value == pytest.approx(0.5350)
+
+
+def test_a_decision_time_split_with_a_refit_hands_over_the_number():
+    sp = _stratified(stratifier_availability="after_prefill", fit="refitted_in_stratum",
+                     strata={"fast": strength(value=0.7779, n=1827, lo=0.75, hi=0.80),
+                             "slow": strength(value=0.5787, n=537, lo=0.53, hi=0.63)})
+    assert sp.production_strength("slow").value == pytest.approx(0.5787)
+
+
+def test_an_unknown_stratum_is_refused():
+    sp = _stratified(stratifier_availability="after_prefill", fit="refitted_in_stratum")
+    with pytest.raises(qt.Inadmissible, match="is not one of"):
+        sp.production_strength("medium")
+
+
+def test_the_availability_refusal_comes_before_the_fit_one():
+    """A stratifier read after generation cannot be evaluated at decision time at all, so no amount of statistics
+    rescues the report -- reporting the fit problem first would send a reader to refit something unusable."""
+    sp = _stratified(stratifier_availability="after_generation", fit="carried_from_pooled")
+    with pytest.raises(qt.Inadmissible, match="not knowable when the decision is made"):
+        sp.production_strength("slow", allow_carried_fit=True)
+
+
+# --- through the door ---------------------------------------------------------------------------------------------------
+
+def _run_strat(tmp_path, capsys, stratified):
+    from tierbook import cli
+    served = _snapshot(tmp_path / "m")
+    tmpl = tmp_path / "t.txt"
+    tmpl.write_text("Answer with one letter.")
+    code = cli.main(["admissible-quantities", "--served", str(served), "--elicitation-name", "terse",
+                     "--elicitation-template", str(tmpl),
+                     "--quantity", "jlens:scalar:after_prefill:passive_observation:1:30:r1",
+                     "--quantity", "settling_depth:scalar:after_generation:passive_observation:1:30:r1",
+                     "--quantity", "entropy:scalar:after_prefill:passive_observation:1:30:r1",
+                     "--stratified", stratified])
+    cap = capsys.readouterr()
+    return code, cap.out + cap.err
+
+
+def test_the_door_names_the_weakest_stratum_and_both_problems(tmp_path, capsys):
+    code, text = _run_strat(tmp_path, capsys,
+                            "jlens:settling_depth:carried_from_pooled:"
+                            "fast@0.7482@1827@0.72@0.77,slow@0.5350@537@0.49@0.58")
+    assert code == 0
+    assert "weakest stratum 'slow'" in text
+    assert "NOT reproducible in production" in text
+    assert "pooled fold" in text
+
+
+def test_the_door_is_quiet_when_neither_problem_applies(tmp_path, capsys):
+    code, text = _run_strat(tmp_path, capsys,
+                            "jlens:entropy:refitted_in_stratum:"
+                            "fast@0.7779@1827@0.75@0.80,slow@0.5787@537@0.53@0.63")
+    assert code == 0
+    assert "weakest stratum 'slow'" in text
+    assert "NOT reproducible" not in text and "pooled fold" not in text
+
+
+def test_the_door_refuses_a_stratifier_it_was_never_shown(tmp_path, capsys):
+    """A stratifier this command has not been shown cannot have its availability checked, and availability is what
+    decides whether the report can be used at all."""
+    code, text = _run_strat(tmp_path, capsys, "jlens:mystery:refitted_in_stratum:a@0.7@10@0.6@0.8,b@0.6@10@0.5@0.7")
+    assert code == 1
+    assert "not among the declared quantities" in text
+
+
+def test_the_door_refuses_a_malformed_stratum_with_the_shape_it_wanted(tmp_path, capsys):
+    code, text = _run_strat(tmp_path, capsys, "jlens:entropy:refitted_in_stratum:fast@0.7482")
+    assert code == 1
+    assert "LABEL@VALUE@N@LO@HI" in text

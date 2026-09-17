@@ -704,7 +704,7 @@ def _refuses(fn):
     return door
 
 
-def _fields(spec: str, names: tuple[str, ...], *, option: str) -> list[str]:
+def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -> list[str]:
     """Split a colon-separated option value, refusing the wrong count with the shape it wanted.
 
     Shared by every option of this form, and shared because it went wrong twice. `admit-judge`'s box spec raised a
@@ -712,11 +712,11 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str) -> list[str]:
     which is the signature of a defect fixed at the instance rather than at the class. A third option of this shape
     cannot repeat it without deleting this call.
     """
-    parts = spec.split(":")
+    parts = spec.split(sep)
     if len(parts) != len(names):
         raise EvidenceError(
             f"{option} {spec!r} has {len(parts)} field(s); it takes {len(names)} as "
-            f"{':'.join(n.upper() for n in names)}. An operator cannot act on a stack trace, and a value that "
+            f"{sep.join(n.upper() for n in names)}. An operator cannot act on a stack trace, and a value that "
             f"happens to split into the right number of pieces by accident is what a positional format costs")
     return parts
 
@@ -747,6 +747,28 @@ def cmd_floor_feasibility(args) -> int:
     print(f"satisfiable: gamma {bar.gamma:.4f} of the available headroom, at least "
           f"{bar.minimum_net_rescues} net rescues needed")
     return 0
+
+
+def _stratified_from_spec(spec: str, quantities: dict):
+    """NAME:STRATIFIER:FIT_SOURCE:LABEL@VALUE@N@LO@HI,LABEL@...
+
+    The stratifier is named rather than described, and is looked up among the declared quantities -- so a report cannot
+    claim its strata are readable at decision time, it can only name a quantity whose availability already says.
+    """
+    name, stratifier, fit, strata = _fields(spec, ("name", "stratifier", "fit_source", "strata"),
+                                            option="--stratified")
+    if stratifier not in quantities:
+        raise EvidenceError(
+            f"--stratified names stratifier {stratifier!r}, which is not among the declared quantities "
+            f"{sorted(quantities)}. A stratifier this command has not been shown cannot have its availability checked, "
+            f"and availability is what decides whether the report can be used at all")
+    per = {}
+    for chunk in strata.split(","):
+        label, value, n, lo, hi = _fields(chunk, ("label", "value", "n", "lo", "hi"),
+                                          option="--stratified stratum", sep="@")
+        per[label] = qt.Strength(value=float(value), n=int(n), interval=(float(lo), float(hi)),
+                                 statistic="auc", interval_method="bootstrap")
+    return name, qt.StratifiedPerformance(stratum_of=quantities[stratifier], per_stratum=per, fit_source=fit)
 
 
 @_refuses
@@ -788,6 +810,8 @@ def cmd_admissible_quantities(args) -> int:
         # sentence naming what to fix, because argparse cannot check inside a positional string.
         print(f"refused: --quantity needs a whole number of PASSES and a numeric FRESH_DAYS ({e})", file=sys.stderr)
         return 1
+    by_name = {q.name: q for q in declared}
+    stratified = dict(_stratified_from_spec(spec, by_name) for spec in args.stratified)
     usable = qt.admissible_for_a_gate(declared, elicitation=elicitation, served=served)
     for q in declared:
         mark = "usable" if q in usable else "not usable"
@@ -799,8 +823,22 @@ def cmd_admissible_quantities(args) -> int:
             lost = q.performance.loses_to_any(price=args.price)
             print(f"  at price {args.price:g}: {q.performance.at(args.price):.4f}, "
                   + (f"loses to {', '.join(lost)}" if lost else "beats every baseline it was measured against"))
-        elif q.performance is None:
+        elif q.performance is None and q.name not in stratified:
             print("  performance unmeasured, so nothing here says whether it is worth conditioning on")
+        # A stratified report is printed as the WEAKEST stratum and the gap the pooled figure hides, because the pooled
+        # figure is the one that gets quoted and the weakest stratum is where escalation is needed.
+        if q.name in stratified:
+            sp = stratified[q.name]
+            label, worst = sp.weakest
+            print(f"  weakest stratum {label!r}: {worst}")
+            if sp.pooling_hides() > 0:
+                print(f"  a pooled figure would sit {sp.pooling_hides():.4f} above it")
+            if not sp.reproducible_in_production:
+                print(f"  NOT reproducible in production: strata are defined by {sp.stratum_of.name!r}, available "
+                      f"{sp.stratum_of.availability}")
+            if sp.fit_source == "carried_from_pooled":
+                print("  fitted on the pooled fold, so it cannot tell an absence of information here from a "
+                      "direction learned for another stratum")
     print(f"{len(usable)} of {len(declared)} quantities are admissible to a pre-generation gate")
     # Exit 2 rather than 1 when none is admissible: nothing is malformed, and the gate has nothing to decide with,
     # which is a different problem from a declaration this command could not read.
@@ -1109,6 +1147,11 @@ def main(argv: list[str] | None = None) -> int:
     aq.add_argument("--performance", action="append", default=[],
                     metavar="NAME:PRICE=VALUE,...:KIND=VALUE,...",
                     help="a measured curve and its baselines for one declared quantity, repeatable")
+    aq.add_argument("--stratified", action="append", default=[],
+                    metavar="NAME:STRATIFIER:FIT_SOURCE:LABEL@VALUE@N@LO@HI,...",
+                    help="a strength reported per stratum for one declared quantity, repeatable. STRATIFIER must be "
+                         "another declared quantity, so its availability decides whether the split can be performed at "
+                         "decision time at all")
     aq.set_defaults(fn=cmd_admissible_quantities, registry=None)
 
     aj = sub.add_parser("admit-judge", parents=[common],

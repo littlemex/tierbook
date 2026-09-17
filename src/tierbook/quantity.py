@@ -310,6 +310,136 @@ class Performance:
                 f"{', '.join(str(b) for b in self.baselines)}")
 
 
+#: What kind of number a strength is. Closed, because the interval that is correct for one is wrong for another, and
+#: that mistake does not announce itself: a Wilson interval is for a binomial proportion, and putting one around an
+#: area under a curve produces a plausible-looking pair of bounds computed for a statistic nobody measured.
+STATISTICS = ("proportion", "auc", "mean")
+
+#: How the interval was obtained. `wilson_on_a_proportion` is refused for anything but a proportion, which is the
+#: specific trap this vocabulary exists for -- the numbers this module was built from are areas under a curve, and the
+#: nearest interval already in this package is Wilson's.
+INTERVAL_METHODS = ("wilson_on_a_proportion", "bootstrap", "delong", "declared")
+
+#: Whether a stratum's number came from a model fitted inside that stratum or carried in from the pooled fit. Measured
+#: to matter: a probe fitted on the pooled fold read **0.5350** on the slow group and **0.5787** when refitted within
+#: it -- a gap of 0.0437 -- so a carried figure cannot tell "no information here" from "a direction learned for the
+#: other group".
+FIT_SOURCES = ("refitted_in_stratum", "carried_from_pooled")
+
+
+@dataclass(frozen=True)
+class Strength:
+    """One measured strength, with the sample it came from and an interval computed for the right statistic."""
+
+    value: float
+    n: int
+    interval: tuple[float, float]
+    statistic: str
+    interval_method: str
+
+    def __post_init__(self) -> None:
+        if self.statistic not in STATISTICS:
+            raise Inadmissible(f"{self.statistic!r} is not one of {STATISTICS}")
+        if self.interval_method not in INTERVAL_METHODS:
+            raise Inadmissible(f"{self.interval_method!r} is not one of {INTERVAL_METHODS}")
+        if self.interval_method == "wilson_on_a_proportion" and self.statistic != "proportion":
+            raise Inadmissible(
+                f"a Wilson interval is for a binomial proportion and this is a {self.statistic!r}. It would return a "
+                f"plausible-looking pair of bounds computed for a statistic nobody measured, and nothing downstream "
+                f"could tell that from a correct one -- use a bootstrap or DeLong for an area under a curve")
+        if self.n <= 0:
+            raise Inadmissible("a strength over zero items is not a measurement")
+        lo, hi = self.interval
+        if not lo <= self.value <= hi:
+            raise Inadmissible(f"the interval [{lo}, {hi}] does not contain {self.value}, so at least one of the three "
+                               f"was computed over something else")
+
+    def __str__(self) -> str:
+        lo, hi = self.interval
+        return f"{self.value:.4f} [{lo:.4f}, {hi:.4f}] over {self.n} ({self.statistic}, {self.interval_method})"
+
+
+@dataclass(frozen=True)
+class StratifiedPerformance:
+    """A strength reported per stratum rather than pooled, and what makes the report usable in production.
+
+    **Pooling makes the number a property of the mix.** Split by the box's own settling depth, one probe read 0.7482 on
+    the 1,827 items that settle early and **0.5350** on the 537 that settle late -- and the late group is where the box
+    is wrong seven times in ten. A pooled 0.75 is an average over a population where the signal is strong on the easy
+    half and **absent on the half that matters**, and the pooled number hides that completely.
+
+    **And the stratifier has to be available when the decision is made.** Settling depth is known only after
+    generation, so a report conditioned on it cannot be reproduced in production however true it is. That is not a
+    reason to refuse recording it -- the analysis that found the collapse is worth keeping -- so this is constructible
+    and `reproducible_in_production` is False, with `production_strength` refusing rather than the constructor.
+    """
+
+    stratum_of: Quantity
+    per_stratum: dict
+    fit_source: str
+    pooled: Strength | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.stratum_of, Quantity):
+            raise Inadmissible(f"stratum_of={self.stratum_of!r} is not a Quantity. A bare name would not say when the "
+                               f"stratifier is available, which is what decides whether this report can be used at all")
+        if self.fit_source not in FIT_SOURCES:
+            raise Inadmissible(
+                f"{self.fit_source!r} is not one of {FIT_SOURCES}. A probe fitted on the pooled fold read 0.5350 on the "
+                f"slow group and 0.5787 refitted within it, so which of the two produced a number is part of the number")
+        if len(self.per_stratum) < 2:
+            raise Inadmissible(
+                f"{len(self.per_stratum)} stratum/strata is a pooled report wearing a conditional name. The whole point "
+                f"is the comparison between them: one number over one group says nothing about the mix it came from")
+        bad = [k for k, v in self.per_stratum.items() if not isinstance(v, Strength)]
+        if bad:
+            raise Inadmissible(f"strata {sorted(bad)} carry bare numbers rather than a Strength; a strength used to "
+                               f"rule something out needs its sample size and its interval beside it")
+
+    @property
+    def reproducible_in_production(self) -> bool:
+        """Whether the stratifier can be read when the decision is made."""
+        return self.stratum_of.usable_before_generating()
+
+    @property
+    def weakest(self) -> tuple[str, Strength]:
+        """The stratum the signal is worst on, which is the one a pooled figure hides."""
+        return min(self.per_stratum.items(), key=lambda kv: kv[1].value)
+
+    def pooling_hides(self) -> float:
+        """How far the pooled figure sits above the worst stratum, or 0.0 when no pooled figure was recorded.
+
+        The number F8 is about: 0.75 pooled against 0.5350 on the group that matters is a gap of 0.215, and the pooled
+        figure is the one that gets quoted.
+        """
+        if self.pooled is None:
+            return 0.0
+        return max(0.0, self.pooled.value - self.weakest[1].value)
+
+    def production_strength(self, stratum: str, *, allow_carried_fit: bool = False) -> Strength:
+        """The number a production policy may use for this stratum, or a refusal naming why it may not.
+
+        Two refusals, and they are different problems. A stratifier read after generation cannot be evaluated at
+        decision time at all, so no amount of statistics rescues the report. A figure carried from the pooled fit
+        cannot tell "no information here" from "a direction learned for the other group" -- measured at 0.0437 -- so it
+        is readable as an upper or lower bound on the stratum and not as the stratum's strength.
+        """
+        if stratum not in self.per_stratum:
+            raise Inadmissible(f"{stratum!r} is not one of {sorted(self.per_stratum)}")
+        if not self.reproducible_in_production:
+            raise Inadmissible(
+                f"the strata are defined by {self.stratum_of.name!r}, available {self.stratum_of.availability}, so which "
+                f"stratum a request falls in is not knowable when the decision is made. This report describes a split "
+                f"that cannot be performed in production, however true it is of the corpus")
+        if self.fit_source == "carried_from_pooled" and not allow_carried_fit:
+            raise Inadmissible(
+                f"the figure for {stratum!r} was carried from the pooled fit, which cannot distinguish an absence of "
+                f"information in this stratum from a direction learned for another one; refitting within the group "
+                f"moved the measured case from 0.5350 to 0.5787. Pass allow_carried_fit=True to read it as a bound "
+                f"rather than as this stratum's strength")
+        return self.per_stratum[stratum]
+
+
 def admissible_for_a_gate(quantities: list[Quantity], *, elicitation: Elicitation,
                           served: WeightDigest) -> list[Quantity]:
     """Which of these a pre-generation gate may condition on, and nothing else.

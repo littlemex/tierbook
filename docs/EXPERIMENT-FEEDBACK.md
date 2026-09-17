@@ -5259,6 +5259,47 @@ that makes the last part checkable; the structure is not built.
 **Suite green at 1,861 passed, 3 skipped.** Four mechanisms mutated and each fails tests, including reverting `clears`
 to the point estimate.
 
+## F117 — A strength reported per stratum, and a Wilson interval refused around an area under a curve
+
+**F8 and F11, the pair I named as owed last entry.** F8: a strength reported **conditional on the population it will be
+used on** rather than pooled, because "a pooled AUC of 0.75 is an average over a population where the signal is strong on
+the easy half and **absent on the half that matters**". F11: the report must say whether the model was **refitted within
+the stratum or carried from the pooled fit**, and must condition on something **available at decision time**.
+
+**Both measured facts come out of the implementation.**
+
+| | items | probe | what it says |
+|---|---|---|---|
+| settles early | 1,827 | 0.7482 | the box is already right three times in four |
+| settles late | 537 | **0.5350** | the box is wrong seven times in ten and the readout is a coin |
+| pooled | 2,364 | 0.75 | **sits 0.2150 above the stratum that matters** |
+
+And F11's separation: the same slow group read **0.5787** when the probe was refitted inside it, against 0.5350 carried
+from the pooled fold -- a gap of **0.0437**, so a carried figure cannot tell an absence of information here from a
+direction learned for the other group.
+
+**The refusal with the most teeth is about availability, not statistics.** Settling depth is known only **after
+generation**, so which stratum a request falls in is not knowable when the decision is made -- the report is true of the
+corpus and cannot be performed in production. It stays *constructible*, because the analysis that found the collapse is
+worth keeping, and `production_strength` refuses instead of the constructor. The availability refusal comes **before** the
+fit one, so a reader is not sent to refit something unusable.
+
+**A defect I was one step from writing.** The numbers here are areas under a curve and the nearest interval already in
+this package is Wilson's -- which is **for a binomial proportion**. Putting one around an AUC returns a plausible pair of
+bounds computed for a statistic nobody measured, and nothing downstream could tell that from a correct one. So a
+`Strength` names its statistic and its interval method, and `wilson_on_a_proportion` is refused for anything but a
+proportion.
+
+**Then I audited every existing `wilson()` caller against that rule** -- sixteen call sites across four modules -- and
+**every one wraps a genuine count over a count**: solved over items, stopped over items, wrong-stopped over items. The
+audit came back clean, and that is the result rather than a step skipped.
+
+**One class-level fix.** The shared colon-spec parser refused my own `@`-separated stratum chunks, correctly, and the fix
+was to give it a separator rather than to write a second parser -- so the one thing that reports a malformed option stays
+one thing.
+
+**Suite green at 1,880 passed, 3 skipped.** Six mechanisms mutated and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
