@@ -26,6 +26,7 @@ rather than of this project's fussiness**. Half of what an LLM is used for has n
 | OCR / document parsing | **OmniDocBench v1.5** | `executable`, edit distance + TEDS + CDM | **no** | research use only, no commercial |
 | OCR, Japanese | **NTCIR-18 U4** (`stockmark/u4-table-cell-qa`) | `executable`, exact match | **yes, real EDINET filings** | best Japanese option found: official 10,300 / 1,441 / 2,898 split, CC BY-4.0 |
 | agentic tool use | SWE-bench Verified, tau-bench | `executable`, tests / database state | n/a | SWE-bench is code *fix*, not review |
+| **agent construction** | **Hyper-tau-bench** (`sierra-research/hyper-tau-bench`, MIT, 53 tasks) | `executable`, exact match on final database state and on what was told to the customer | no | **its official metric subtracts a budget penalty from the pass rate**, so the headline number cannot be used here at all -- see the note below |
 | document review (contracts) | CUAD, ContractNLI, MAUD, LegalBench (148 of 162 tasks) | `executable`, F1 / accuracy / AUPR | no | **contamination binds harder than the scorer**: all 2021-era SEC EDGAR |
 | constrained writing | **IFEval** | `executable`, Python constraint checkers | no | measures constraint compliance, **not writing quality** |
 
@@ -86,6 +87,50 @@ not correct.
 refusing COMET outright would leave translation with surface overlap only -- but the record carries the fact.
 One licence trap while we are here: **COMET-Kiwi is CC-BY-NC-SA and cannot be used commercially.**
 
+## Hyper-tau-bench: admissible, and not through its own metric
+
+Added on the strength of its scorer, which is the class this ledger can use: **one point per conversation if the final
+database state and the content conveyed to the customer match the specification exactly**, zero otherwise. Deterministic,
+no judge model, 53 tasks over four domains, MIT licence -- confirmed from the repository's own `LICENSE`, because the
+write-up that prompted this does not state one.
+
+**What it measures is a different unit from everything above it in the table, and the mapping has to be stated or it
+will be assumed wrong.** Every other row scores a *candidate answering an item*. Here the unit is a **developer building
+an agent**: a task hands over an evidence corpus (377 files for airline, about 1,700 for banking), a simulated client, a
+REST API that may be defective, and a token budget; the thing scored is the agent that gets built. It maps onto this
+ledger only as **candidate = the developer model, item = the task**, and it is a real mapping -- binary outcome per
+(model, task) is exactly the outcome table's shape. What it is not is a routing benchmark for serving a request.
+
+**Its official metric is unusable here, and that is the sharpest catch.** The reported score is
+
+    S = max(0, pass_rate - p),   p = max(0, mean_credits / budget - 1)
+
+which **subtracts a cost term from an accuracy term inside one number**. This project's cost apparatus exists to keep
+those apart: the exchange rate between accuracy and spend is the buyer's declaration, not the benchmark's, and a figure
+with the trade already applied cannot be re-decided by anybody downstream. Usable only by taking the **raw pass/fail per
+task and the credits separately** -- both are reported in the paper's discussion -- and discarding `S`.
+
+**No official split is documented**, which binds harder than it looks: a threshold chosen on these 53 tasks and then
+scored on them is the state that cannot support a verdict, so a split has to be declared before the first run and it will
+be this project's split rather than the benchmark's.
+
+**The task counts limit what can be concluded, computed rather than asserted.** Using this project's own interval and
+sign-test arithmetic:
+
+| population | n | a 50% pass rate reads | smallest attainable two-sided p |
+|---|---|---|---|
+| all tasks | 53 | [0.361, 0.621] | 2.2e-16 |
+| banking | 35 | [0.330, 0.644] | 5.8e-11 |
+| airline, retail, telecom | 6 each | [0.188, 0.812] | **0.031** |
+
+So a **pooled** comparison has room to say something, a banking-only one does too, and a **per-domain** claim on the
+other three has an interval 0.625 wide -- wider than the gap between any two models anybody would compare. And 35 of the
+53 tasks are banking, so an unstratified pooled figure is largely a banking figure.
+
+**Cost makes repeats the binding constraint.** The write-up measures 34-46 minutes per task and estimates roughly **15
+hours and $370** for one full pass at three-way parallelism. This ledger already records that repeats are what bound a
+gate's cost and that a single run leaves it unmeasurable; at this price a repeat is a decision rather than a formality.
+
 ## What to run next, in order
 
 1. **NTCIR-18 U4** -- the only Japanese, real-document, executable benchmark with an official three-way split.
@@ -94,7 +139,8 @@ One licence trap while we are here: **COMET-Kiwi is CC-BY-NC-SA and cannot be us
 3. **IFEval** -- cheap, fully executable, and per-item results for named models are already published in a form
    built for reuse.
 4. **tau2-bench** -- extends the one non-nested family already measured here.
-5. CUAD or ContractNLI -- a document-review family, for relative ranking only, with the contamination stated.
+5. **Hyper-tau-bench**, on the raw pass/fail only, and only after a split is declared. Priced last on purpose: $370 and 15 hours a pass makes it the one entry here where a second run has to be argued for.
+6. CUAD or ContractNLI -- a document-review family, for relative ranking only, with the contamination stated.
 
 Summarisation and long-form writing enter the ledger as **diagnostic families**: measurable, reportable, and
 structurally unable to assign a routing decision. That is a constraint to build around rather than argue with.
