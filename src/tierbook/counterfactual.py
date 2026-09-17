@@ -48,11 +48,13 @@ field name.
 """
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 from math import comb
 from typing import Callable, Sequence
 
-from tierbook.evidence import UNOBSERVED, EvidenceError
+from tierbook.evidence import UNOBSERVED, EvidenceError, z_for_one_sided
 from tierbook.outcomes import Cell, OutcomeTable
 from tierbook.reproduce import wilson
 
@@ -318,6 +320,12 @@ class OperatingPoint:
         return "over the whole curve" if self.kind == "integrated" else "no tunable setting"
 
 
+#: Where an equivalence margin came from. The distinction is the whole content of an equivalence claim: a margin
+#: chosen after seeing the difference is a margin chosen to contain it, and the test then answers a question nobody
+#: asked before the data arrived.
+MARGIN_SOURCES = ("pre_justified", "post_hoc")
+
+
 @dataclass(frozen=True)
 class Comparison:
     """A paired comparison of two runs on the same items."""
@@ -357,14 +365,101 @@ class Comparison:
                 f"allow_point_chosen_on_scored_items=True to read it as the best case rather than as a verdict")
         return self.p_value < 0.05
 
+    @property
+    def discordant(self) -> int:
+        """The pairs that carry all the information. Concordant pairs cancel in a paired test and do not enter it."""
+        return self.a_only + self.b_only
+
+    @property
+    def minimum_attainable_p(self) -> float:
+        """The smallest p this test could produce on this many discordant pairs, whatever the data said.
+
+        The exact two-sided sign test puts both extremes in the tail, so with `d` discordant pairs the floor is
+        `2 / 2**d`. With five or fewer it is 0.0625, above every level anybody uses, so **no outcome at all could have
+        been significant** -- and reporting "not significant" from such a test says something about the sample size and
+        nothing about the world. The same arithmetic is why a sign-flip permutation over eight prompts has a floor of
+        1/256 and no power worth having; the fix is more units, not a different test.
+        """
+        return 1.0 if self.discordant == 0 else min(1.0, 2.0 / 2 ** self.discordant)
+
+    def can_attain(self, alpha: float = 0.05) -> bool:
+        return self.minimum_attainable_p <= alpha
+
+    def is_significant(self, *, allow_point_chosen_on_scored_items: bool = False,
+                       alpha: float = 0.05) -> bool:
+        """Whether the paired difference clears the level -- refused when no outcome could have.
+
+        Two refusals, and they close different holes. The setting one is F18's: a verdict from a point chosen on the
+        scored items is not the verdict of the procedure that produced it. This one is F95's: a test whose floor is
+        above `alpha` cannot return True for any data, so a False from it is not evidence of anything, and the danger
+        is precisely that it reads like evidence of no difference.
+        """
+        if not self.can_attain(alpha):
+            raise Unsupported(
+                f"{self.a} vs {self.b} has {self.discordant} discordant pair(s), so the exact sign test's smallest "
+                f"possible p is {self.minimum_attainable_p:.4f}, above alpha={alpha}. No outcome could have been "
+                f"significant, so a False here would describe the sample size rather than the world; collect more "
+                f"units, or ask `equivalent_within` with a margin if the claim you want is that they are the same")
+        if not self.operating_point.supports_a_verdict and not allow_point_chosen_on_scored_items:
+            raise Unsupported(
+                f"{self.a} vs {self.b} was compared at {self.operating_point.knob}={self.operating_point.value:g}, "
+                f"chosen on the items it is scored on. p = {self.p_value:.4f} is the p-value of a test that did not "
+                f"include choosing the setting, so it is not the p-value of this result; pass "
+                f"allow_point_chosen_on_scored_items=True to read it as the best case rather than as a verdict")
+        return self.p_value < alpha
+
+    def equivalent_within(self, margin: float, *, margin_source: str, alpha: float = 0.05) -> bool:
+        """Whether the two are the same to within `margin` in accuracy -- the claim `is_significant() == False` is NOT.
+
+        This exists because "not significant" was being read as "no difference" in this study's own ledger, twice. The
+        two are different claims and the second needs its own test: a confidence interval on the paired difference
+        lying wholly inside the margin, which is the two-one-sided-tests form (Lakens 2017).
+
+        `margin_source` is required and `post_hoc` is refused. A margin chosen after seeing the difference is a margin
+        chosen to contain it, and this is the one place where the order of operations decides whether the answer means
+        anything.
+        """
+        if margin_source not in MARGIN_SOURCES:
+            raise EvidenceError(f"{margin_source!r} is not one of {MARGIN_SOURCES}")
+        if margin_source == "post_hoc":
+            raise Unsupported(
+                f"the margin {margin} was chosen after seeing a difference of {self.accuracy_delta:+.4f}, so it is a "
+                f"margin chosen to contain it. An equivalence claim from a post-hoc margin answers a question nobody "
+                f"asked before the data arrived; the number is computable and is recorded here as such, but it is not "
+                f"a verdict")
+        if margin <= 0:
+            raise EvidenceError(f"an equivalence margin of {margin} declares that only an exact tie counts as the "
+                                f"same, which no finite sample can show")
+        lo, hi = self.difference_interval(alpha=alpha)
+        return -margin < lo and hi < margin
+
+    def difference_interval(self, *, alpha: float = 0.05) -> tuple[float, float]:
+        """A one-sided-at-each-end interval on the paired accuracy difference, as the equivalence test needs.
+
+        On the discordant counts rather than the two marginals, because that is where a paired design's information
+        is: two marginals whose intervals overlap can still hide a difference every item agrees on.
+        """
+        n = self.items
+        if n == 0:
+            return (-1.0, 1.0)
+        b, c = self.a_only, self.b_only
+        var = (b + c - (b - c) ** 2 / n) / (n * n)
+        half = z_for_one_sided(alpha) * math.sqrt(max(0.0, var))
+        centre = (b - c) / n
+        return (centre - half, centre + half)
+
     def __str__(self) -> str:
         try:
             verdict = ("a significant accuracy difference" if self.is_significant()
                        else "no significant accuracy difference")
         except Unsupported:
             # Said rather than swallowed: a comparison that cannot support a verdict prints what it is instead of
-            # printing the verdict it cannot support, and prints it in the place a reader looks for the verdict.
-            verdict = "no verdict: the setting was chosen on the scored items"
+            # printing the verdict it cannot support, and prints it in the place a reader looks for the verdict. The
+            # two cases are named separately because the reader's next move differs -- one needs the setting chosen
+            # elsewhere, the other needs more units.
+            verdict = ("no verdict: only %d discordant pair(s), so the smallest possible p is %.4f"
+                       % (self.discordant, self.minimum_attainable_p) if not self.can_attain()
+                       else "no verdict: the setting was chosen on the scored items")
         return (f"{self.a} vs {self.b} on {self.items} items {self.operating_point}: "
                 f"{self.a_only} / {self.b_only} discordant, p = {self.p_value:.4f} ({verdict}); "
                 f"accuracy {self.accuracy_delta:+.1%}, "

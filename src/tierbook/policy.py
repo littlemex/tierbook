@@ -25,7 +25,7 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tierbook.evidence import EvidenceError
+from tierbook.evidence import EvidenceError, z_for_one_sided
 from tierbook.evidence import load as _load_evidence
 from tierbook.evidence import paired as _evidence_paired
 
@@ -79,17 +79,7 @@ def paired_difference_lcb(n11: int, n10: int, n01: int, n00: int, alpha: float =
     var = (n10 + n01 - (n10 - n01) ** 2 / n) / n**2
     if var <= 0:
         return diff
-    z = 1.6449 if abs(alpha - 0.05) < 1e-9 else _z_for(alpha)
-    return diff - z * math.sqrt(var)
-
-
-def _z_for(alpha: float) -> float:
-    """One-sided normal quantile, good enough for the few alphas a margin table uses."""
-    table = {0.10: 1.2816, 0.05: 1.6449, 0.025: 1.9600, 0.01: 2.3263, 0.005: 2.5758}
-    for a, z in sorted(table.items()):
-        if alpha <= a + 1e-12:
-            return z
-    return 1.6449
+    return diff - z_for_one_sided(alpha) * math.sqrt(var)
 
 
 # --- the ledger ---------------------------------------------------------------------------------

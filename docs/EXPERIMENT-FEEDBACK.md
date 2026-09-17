@@ -4850,6 +4850,51 @@ docstring, producing a syntax error at an unrelated line. Anchoring on `@datacla
 count is exactly one is the fix; a `replace` that does not check how many times it matched is not an edit, it is a
 guess.
 
+## F107 — "Not significant" is not "no difference", and a test with five discordant pairs could never have said either
+
+**The ledger recorded this error twice** -- F30 ("a p-value of 0.17 to 0.39 is not evidence of equivalence without an
+equivalence margin and power") and F95 ("**'not significant' is not 'no difference'**: claiming the template does not
+matter needs an equivalence test with a pre-justified margin"). Neither existed in the code, so
+`is_significant() == False` was the only answer available and it is not the claim anyone wanted.
+
+**`equivalent_within(margin, margin_source=...)`** is the second claim, as a confidence interval on the paired
+difference lying wholly inside the margin (Lakens 2017). The interval is built from the **discordant counts**, not the
+two marginals, because that is where a paired design's information is -- two marginals whose intervals overlap can hide
+a difference every item agrees on.
+
+**`post_hoc` is refused, and that refusal is the entry's point.** A margin chosen after seeing the difference is a
+margin chosen to contain it, and this is the one place where the order of operations decides whether the answer means
+anything. A margin of zero is refused too: it declares that only an exact tie counts as the same, which no finite
+sample can show.
+
+**And a second guard, which the same passage implies and which turned out to be the sharper one.** The exact two-sided
+sign test puts both extremes in the tail, so with `d` discordant pairs **the smallest p it can ever produce is
+`2/2**d`**, whatever the data said:
+
+| discordant pairs | smallest possible p | can reach alpha=0.05 |
+|---|---|---|
+| 4 | 0.1250 | no |
+| 5 | 0.0625 | no |
+| 6 | 0.0312 | yes |
+
+**With five or fewer, no outcome could have been significant** -- so a `False` from that test describes the sample size
+and not the world, and the danger is exactly that it reads like evidence of no difference. `is_significant()` now raises
+rather than returning False there, and the message names both ways out: collect more units, or ask `equivalent_within`
+if the claim you want is sameness. This is the same arithmetic that makes a sign-flip permutation over **eight prompts**
+bottom out at 1/256 with no power worth having.
+
+**The printed form names which verdict is missing and why**, separately for the two refusals, because the reader's next
+move differs: one needs the setting chosen elsewhere, the other needs more units.
+
+**One duplication removed while wiring it.** `policy` held a private five-entry normal-quantile table and
+`counterfactual` needed the same one. It now lives in `evidence`, the leaf both already import, because two copies are
+one edit from disagreeing about what alpha=0.05 means. It stays **conservative between entries** -- a finer alpha
+returns the next coarser quantile, widening the interval -- since an interpolation would be a number nobody checked
+sitting where it decides whether a result is claimed. A test asserts `_z_for` no longer appears in `policy`.
+
+**Suite green at 1,679 passed, 3 skipped.** Five mechanisms mutated -- the attainability guard, the post-hoc refusal,
+the interval containment, the p-floor formula, and the quantile table -- and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

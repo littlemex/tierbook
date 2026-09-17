@@ -363,3 +363,20 @@ def paired(candidate: Evidence, reference: Evidence) -> Paired:
     }
     return Paired(both=both, candidate_only=cand_only, reference_only=ref_only, neither=neither,
                   excluded=excluded)
+
+def z_for_one_sided(alpha: float) -> float:
+    """A one-sided normal quantile, to the precision the few alphas a margin table uses actually need.
+
+    Here rather than in either caller because `policy` and `counterfactual` both need it and this module is the leaf
+    they already import: a second copy of a five-entry table is a second thing to get wrong, and the two copies would
+    be one edit from disagreeing about what alpha=0.05 means.
+
+    Conservative between table entries: an alpha finer than the table returns the quantile for the next coarser one,
+    which widens the interval rather than narrowing it. An interpolation would be a number nobody checked, sitting in
+    the position that decides whether a result is claimed.
+    """
+    table = {0.10: 1.2816, 0.05: 1.6449, 0.025: 1.9600, 0.01: 2.3263, 0.005: 2.5758}
+    for a, z in sorted(table.items()):
+        if alpha <= a + 1e-12:
+            return z
+    return 1.6449
