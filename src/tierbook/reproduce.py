@@ -574,3 +574,60 @@ def compare(first: OutcomeTable, second: OutcomeTable, *, candidates: list[str],
             ))
 
     return rep
+
+@dataclass(frozen=True)
+class Rate:
+    """A rate that cannot be reported without its sample size, and cannot rule anything out with its point estimate.
+
+    The measured failure: a conclusion rested on **0.8934**, and it "would never have carried its conclusion if 0.9156
+    had been printed beside it" -- the upper end of the same interval. The point estimate was not wrong; it was reported
+    alone, and alone it looked like a fact about the world rather than about a sample.
+
+    So `__str__` always prints the count and the interval, and `rules_out` uses the **interval** rather than the point.
+    A rate whose interval straddles a threshold does not rule that threshold out, whatever its centre says, and the
+    difference between those two readings is the whole content of this type.
+    """
+
+    successes: int
+    n: int
+
+    def __post_init__(self) -> None:
+        if self.n <= 0:
+            raise EvidenceError("a rate over zero observations is not a rate; reporting one would put a number where "
+                                "the fact is that nothing was measured")
+        if not 0 <= self.successes <= self.n:
+            raise EvidenceError(f"{self.successes} of {self.n} is not a count")
+
+    @property
+    def value(self) -> float:
+        """The point estimate. Available, and deliberately not what `rules_out` reads."""
+        return self.successes / self.n
+
+    @property
+    def interval(self) -> tuple[float, float]:
+        return wilson(self.successes, self.n)
+
+    def rules_out(self, threshold: float, *, above: bool = False) -> bool:
+        """Whether this rate excludes `threshold` -- by the interval, never by the centre.
+
+        `above=False` asks "is the rate below the threshold", which is how a floor is failed; `above=True` asks the
+        other direction. Both require the whole interval to be on one side, because a threshold inside the interval is
+        one this sample cannot decide, and calling that a decision is the error this type exists to stop.
+        """
+        lo, hi = self.interval
+        return lo > threshold if above else hi < threshold
+
+    def cannot_decide(self, threshold: float) -> bool:
+        """Whether the threshold lies inside the interval -- a first-class answer, not a failure to answer.
+
+        Reported rather than folded into a False, because "the rate is below the floor" and "this sample cannot tell
+        which side of the floor the rate is on" send a reader to different places: the first is a finding and the second
+        is a request for more items.
+        """
+        lo, hi = self.interval
+        return lo <= threshold <= hi
+
+    def __str__(self) -> str:
+        lo, hi = self.interval
+        return f"{self.successes}/{self.n} = {self.value:.4f} [{lo:.4f}, {hi:.4f}]"
+

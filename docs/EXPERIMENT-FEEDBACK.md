@@ -5224,6 +5224,41 @@ not be read.
 
 **Suite green at 1,848 passed, 3 skipped.** Five mechanisms mutated and each fails tests.
 
+## F116 — A rate that cannot be reported bare, and an existing check that was reading the centre
+
+**F32's first mechanical rule**: "a rate reported with its sample size and interval, never as a bare number, whenever it
+is used to rule something out. **F19's 0.8934 would never have carried its conclusion if 0.9156 had been printed beside
+it.**"
+
+**Reproduced before implementing anything.** At every plausible sample size, a rate of 0.8934 has an interval that
+**contains 0.90** -- n=300 gives [0.8533, 0.9234], n=1000 gives [0.8723, 0.9107]. The point estimate was not wrong; it
+was reported alone, and alone it read as a fact about the world rather than about a sample.
+
+**`Rate` has no formatting that shows the centre alone**, and `rules_out` reads the **interval**. `cannot_decide` is a
+first-class answer beside it, because "the rate is below the floor" and "this sample cannot tell which side of the floor
+it is on" send a reader to different places: the first is a finding, the second is a request for more items.
+
+**And the rule found a live defect in code written four entries ago.** `judge.BaseRate.clears` compared the **point
+estimate** to the floor, so a base rate of **0.2137 over 234 items cleared a floor of 0.20** while its interval ran from
+**0.166 to 0.272** -- a sample that cannot tell which side of the floor it is on, admitted as evidence that the readout
+works. It now reads the interval, and admission has two refusals with different messages rather than one.
+
+**The refusal that mattered was decisive anyway, and checking that was the point.** The broken readout at 21/234 has an
+interval of [0.0594, 0.1333], **entirely below** 0.20 -- so refusing that judge was a finding and not a point-estimate
+accident. Both refusals now print the interval, so the number that would have stopped a conclusion is beside it.
+
+**F32's second rule is already discharged and is recorded as such** rather than reimplemented: "a threshold or
+hyper-parameter chosen on the data it is scored on flagged automatically" is `OperatingPoint.chosen_on ==
+"scored_items"`, which refuses a verdict outright.
+
+**Still owed from this cluster**: F8 and F11 ask for a strength reported **conditional on the population it will be used
+on**, stating whether the model was refitted within the stratum or carried from the pooled fit -- a measured difference of
+0.045 -- and conditioning only on quantities available at decision time. `Quantity.usable_before_generating` is the piece
+that makes the last part checkable; the structure is not built.
+
+**Suite green at 1,861 passed, 3 skipped.** Four mechanisms mutated and each fails tests, including reverting `clears`
+to the point estimate.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

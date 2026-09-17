@@ -43,6 +43,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tierbook.reproduce import Rate
+
 #: What a measured constant may be measured on. `published_weights` is the only honest answer this mechanism can
 #: check: it is the artefact both the builder and the server can hash independently. `loaded_tensors` is named so
 #: that the attempt is refused with its reason rather than silently accepted, because it is the mistake a careful
@@ -177,8 +179,25 @@ class BaseRate:
         return self.correct / self.total
 
     @property
+    def as_rate(self) -> Rate:
+        """The same counts as a rate that cannot be read without its interval."""
+        return Rate(successes=self.correct, n=self.total)
+
+    @property
     def clears(self) -> bool:
-        return self.rate >= self.floor
+        """Whether the whole interval sits above the floor -- not whether the centre does.
+
+        DEFECT this closes: this compared the point estimate to the floor, so a base rate of 0.2137 over 234 items
+        "cleared" a floor of 0.20 while its interval ran from 0.166 to 0.272. That is a sample which cannot tell which
+        side of the floor it is on, admitted as evidence that the readout works. The measured form of the same error is
+        a conclusion carried by 0.8934 that would not have survived 0.9156 printed beside it.
+        """
+        return self.as_rate.rules_out(self.floor, above=True)
+
+    @property
+    def cannot_decide(self) -> bool:
+        """Whether the floor is inside the interval, which is a different answer from failing to clear it."""
+        return self.as_rate.cannot_decide(self.floor)
 
 
 @dataclass(frozen=True)
@@ -249,11 +268,17 @@ def admissible(contract: JudgeContract, *, served: WeightDigest, base_rate: Base
             f"judge {contract.judge_id!r} has no base rate for this candidate. A readout convention is neither "
             f"declared nor measurable from the weights, and a broken one produced 0.0899 against a 0.10 floor on a "
             f"model whose digest matched; the base rate is the only check that sees it")
+    if base_rate.cannot_decide:
+        raise Inadmissible(
+            f"the candidate answers {base_rate.as_rate} on the buyer's items and the floor {base_rate.floor} lies "
+            f"inside that interval, so this sample cannot tell which side of the floor the candidate is on. That is a "
+            f"request for more items rather than a finding, and admitting it would let a rate indistinguishable from "
+            f"the floor stand as evidence that the readout works")
     if not base_rate.clears:
         raise Inadmissible(
-            f"the candidate answers {base_rate.correct}/{base_rate.total} = {base_rate.rate:.4f} on the buyer's "
-            f"items, below the declared floor of {base_rate.floor}. Whatever the judge then reports is an ordering "
-            f"of noise, and a comparison built on it returns a number rather than an error")
+            f"the candidate answers {base_rate.as_rate} on the buyer's items, below the declared floor of "
+            f"{base_rate.floor}. Whatever the judge then reports is an ordering of noise, and a comparison built on it "
+            f"returns a number rather than an error")
 
 #: Why a standing box could not be bound to. Closed, because the difference between these decides whether the answer
 #: is "provision one" or "ask for access", and conflating them is how every judge ends up with its own box.
