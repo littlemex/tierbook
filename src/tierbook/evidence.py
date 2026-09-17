@@ -27,8 +27,11 @@ close:
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 from dataclasses import dataclass
+
+_SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 from pathlib import Path
 
 SOLVED = "solved"
@@ -380,3 +383,57 @@ def z_for_one_sided(alpha: float) -> float:
         if alpha <= a + 1e-12:
             return z
     return 1.6449
+
+#: A name is not the key. The study labelled its two prompt conditions "terse" and "explaining" and both labels were
+#: reused across templates that were not the same text, which is the same failure `judge.REFUSED_KEYS` records for
+#: model identity: a human-chosen label is stable while the thing it names moves underneath it.
+ELICITATION_REFUSED_KEYS = ("name", "condition", "prompt_style")
+
+
+class Substituted(EvidenceError):
+    """Two numbers measured under different conditions were about to be compared as though they were one quantity.
+
+    Named for what it prevents rather than for the check: the process audit of this project's own withdrawals found
+    the common cause to be a **silent substitution of the subject** between two numbers, with the estimand, the
+    population, the aggregation, the comparator and the operating condition never fixed in a form anything could
+    check. This is the operating-condition half of that, made checkable.
+    """
+
+
+@dataclass(frozen=True)
+class Elicitation:
+    """How an answer was asked for, keyed on the template's text rather than on what the template was called.
+
+    A box's accuracy is not one number. The same weights under a terse instruction and under an instruction that
+    asks for reasoning give different answers, and every economic threshold in this project is conditioned on "the
+    box accuracy" while naming no condition. So this travels with an outcome the way the model and the endpoint
+    already do, and comparing two outcomes elicited differently is refused rather than performed.
+
+    `name` is kept because a reader needs it, and is explicitly NOT the key: two templates both called "terse" are
+    two templates. `template_digest` is what decides comparability.
+    """
+
+    name: str
+    template_digest: str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise Substituted("an elicitation with no name cannot be reported to a reader, who then sees a digest "
+                              "where they needed to know whether reasoning was asked for")
+        if not _SHA256_HEX.fullmatch(self.template_digest):
+            raise Substituted(
+                f"template_digest={self.template_digest!r} is not a lowercase 64-character sha256. A label is not the "
+                f"key: {ELICITATION_REFUSED_KEYS} were each used as one in this study and each stayed constant while "
+                f"the template underneath it changed")
+
+    def __str__(self) -> str:
+        return f"{self.name}/{self.template_digest[:8]}"
+
+
+def elicitation_from_template(name: str, template: str) -> Elicitation:
+    """Digest the template text, so the key is derived from the thing rather than asserted about it."""
+    if not template.strip():
+        raise Substituted("an empty template is not an elicitation; if the answer was asked for with nothing, there "
+                          "is no condition to record and no two runs can be shown to share it")
+    return Elicitation(name=name, template_digest=hashlib.sha256(template.encode()).hexdigest())
+

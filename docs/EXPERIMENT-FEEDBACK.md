@@ -4939,6 +4939,50 @@ leaving `dmin` behind. Building the argument with `printf` into a variable fixes
 silently produces a failure that looks exactly like a bug in the program under test, and the tell was that the same
 values passed through `argv` in Python worked first time.
 
+## F109 — The one defect this ledger names five times: a number that does not carry the condition it was measured under
+
+**F1, F15, F16, F22 and F31 are the same defect in five places.** F15 states the ask exactly: "a number carrying the
+condition it was measured under, so that a comparison between two conditions is **refused instead of performed**" --
+and then the fact that makes it urgent: **every economic threshold in this project is conditioned on a box accuracy,
+and none of them says which box.** F31's process audit found the common cause of every withdrawal in this study to be
+a **silent substitution of the subject** between two numbers.
+
+**F1 also said exactly where it goes**: "`serves` already records the model, endpoint and deployment; the prompt is the
+same kind of fact and is currently absent." It was still absent.
+
+**`Elicitation` keys on the template's text, not on what the template was called.** This study labelled its conditions
+"terse" and "explaining" and **reused both labels across templates that were not the same text** -- the identical
+failure the model-identity digest records, and the reason `name` is kept for the reader and explicitly refused as the
+key. Two templates both called "terse" are two templates; the same template under two names is one condition.
+
+**The refusal is at the comparison door**, so it needed no churn: `compare()` raises `Substituted` when both sides
+recorded a condition and the digests differ, naming both, with the reason spelled out -- **the difference between the
+two numbers is not a difference between the arms, it is partly the difference between the questions.**
+
+**What is deliberately left representable, and why.** An *unrecorded* elicitation is allowed, because every run written
+before this field existed is in that state and refusing it would make the mechanism unusable on the data that exists.
+What is not representable is comparing two **different recorded** conditions -- which is the defect that was actually
+measured. And an unrecorded comparison is made **visible** rather than silent: the printed form says "elicitation
+unrecorded", because printing nothing leaves a reader unable to tell "both arms were asked the same way" from "nobody
+wrote down how either was asked".
+
+**One recorded side carries its condition onto the result** rather than being dropped, since losing it would make that
+result indistinguishable from one where neither side recorded anything.
+
+**Still owed, and stated rather than implied.** F1's other half is a field on the **tier record** itself, which is a
+schema change; this discharges the comparison half only. F16's variant -- a quantity from a fitted model carrying its
+hyper-parameters and geometry -- and F22's -- an effect saying whether it is one setting or a sweep, with the control's
+value beside it -- are the same shape in two more places and are not done.
+
+**Suite green at 1,715 passed, 3 skipped.** Five mechanisms mutated -- the digest comparison, the condition travelling
+onto the result, the bare-string refusal, the sha256 check, and digesting the template rather than the name -- and each
+fails tests.
+
+**One process note.** A field insertion anchored on a two-line pattern silently matched nothing because comment lines
+added in an earlier iteration now sat between them, and `compare()` then passed twelve positional arguments to a
+ten-field dataclass. Asserting the match count is exactly one caught it on the retry; the first attempt reported
+success while changing nothing, which is the failure mode of every edit that does not check what it matched.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

@@ -54,7 +54,8 @@ from dataclasses import dataclass, field
 from math import comb
 from typing import Callable, Sequence
 
-from tierbook.evidence import UNOBSERVED, EvidenceError, z_for_one_sided
+from tierbook.evidence import (UNOBSERVED, Elicitation, EvidenceError, Substituted,
+                              z_for_one_sided)
 from tierbook.outcomes import Cell, OutcomeTable
 from tierbook.reproduce import wilson
 
@@ -110,8 +111,20 @@ class Run:
     #: NOT do is let a token-measured run pass as a dollar-measured one silently -- a caller measuring tokens has to
     #: say so, and `compare` then refuses to subtract it from a dollar cost.
     cost_unit: str = "usd"
+    #: How the answers in this run were asked for. `None` means not recorded, which is the state every run written
+    #: before this field existed is in -- and it is left representable rather than refused because refusing it would
+    #: make the mechanism unusable on the data that exists. What is NOT left representable is comparing two runs
+    #: recorded under DIFFERENT elicitations, which is the defect that was measured: a box's accuracy under a terse
+    #: instruction and under one asking for reasoning are different numbers, and every economic threshold in this
+    #: project is conditioned on "the box accuracy" while naming no condition.
+    elicitation: Elicitation | None = None
 
     def __post_init__(self) -> None:
+        if self.elicitation is not None and not isinstance(self.elicitation, Elicitation):
+            raise Substituted(
+                f"{self.label!r} carries elicitation={self.elicitation!r}, which is not an Elicitation. A bare string "
+                f"here would be the label-as-key this type exists to refuse: two templates both called 'terse' are "
+                f"two templates")
         if self.cost_unit not in COST_UNITS:
             raise EvidenceError(
                 f"{self.cost_unit!r} is not one of {COST_UNITS}. An open-ended unit cannot be checked for "
@@ -345,6 +358,10 @@ class Comparison:
     #: to anything would put the unnamed comparison back, wearing a field that claims it was named.
     operating_point: OperatingPoint
     cost_unit: str = "usd"
+    #: The condition both arms share, or `None` when neither recorded one. Carried so an unlabelled comparison is
+    #: VISIBLE: printing nothing would leave a reader unable to tell "both arms were asked the same way" from "nobody
+    #: wrote down how either was asked".
+    elicitation: Elicitation | None = None
 
     def is_significant(self, *, allow_point_chosen_on_scored_items: bool = False) -> bool:
         """Whether the paired difference clears the level -- refused when the setting was chosen on these items.
@@ -460,7 +477,9 @@ class Comparison:
             verdict = ("no verdict: only %d discordant pair(s), so the smallest possible p is %.4f"
                        % (self.discordant, self.minimum_attainable_p) if not self.can_attain()
                        else "no verdict: the setting was chosen on the scored items")
-        return (f"{self.a} vs {self.b} on {self.items} items {self.operating_point}: "
+        elicited = (f"elicited by {self.elicitation}" if self.elicitation is not None
+                    else "elicitation unrecorded")
+        return (f"{self.a} vs {self.b} on {self.items} items {self.operating_point}, {elicited}: "
                 f"{self.a_only} / {self.b_only} discordant, p = {self.p_value:.4f} ({verdict}); "
                 f"accuracy {self.accuracy_delta:+.1%}, "
                 f"cost {'+' if self.cost_delta >= 0 else '-'}"
@@ -477,6 +496,13 @@ def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
         raise EvidenceError(
             f"cannot pair {a.label!r} over {len(a.items)} items with {b.label!r} over {len(b.items)}: "
             f"a policy scored on the items it happens to cover is scored on a subset it chose")
+    if (a.elicitation is not None and b.elicitation is not None
+            and a.elicitation.template_digest != b.elicitation.template_digest):
+        raise Substituted(
+            f"cannot compare {a.label!r} elicited by {a.elicitation} with {b.label!r} elicited by {b.elicitation}. "
+            f"The two numbers are of different quantities, so the difference between them is not a difference between "
+            f"the arms -- it is partly the difference between the questions. This is the refusal F15 asked for: "
+            f"refused instead of performed")
     if a.cost_unit != b.cost_unit:
         raise EvidenceError(
             f"cannot compare {a.label!r} measured in {a.cost_unit!r} with {b.label!r} measured in {b.cost_unit!r}. "
@@ -488,7 +514,7 @@ def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
     return Comparison(a.label, b.label, len(a.items), a_only, b_only,
                       _sign_test(a_only, b_only),
                       a.cost_per_item - b.cost_per_item, a.accuracy - b.accuracy,
-                      operating_point, a.cost_unit)
+                      operating_point, a.cost_unit, a.elicitation or b.elicitation)
 
 
 @dataclass
