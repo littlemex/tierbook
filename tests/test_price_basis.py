@@ -141,3 +141,53 @@ def test_the_gap_text_names_what_cannot_be_re_derived():
     src = inspect.getsource(sv.route_once)
     assert "unrecorded_price_basis" in src
     assert "cannot be re-derived" in src
+
+
+# --- when a price is knowable, which decides whether it can be an argument ---------------------------------------------
+
+def test_every_source_is_classified_so_forgetting_one_is_a_failure():
+    """A total map rather than a list of the bad ones: adding a source without deciding when it is known breaks this
+    test rather than defaulting the new source to usable."""
+    assert set(rec.PRICE_KNOWN_BEFORE_THE_CALL) == set(rec.PRICE_SOURCES)
+
+
+def test_a_metered_charge_does_not_exist_until_the_call_is_over():
+    assert rec.PRICE_KNOWN_BEFORE_THE_CALL["gateway_metered"] is False
+    assert basis(source="gateway_metered").known_before_the_call is False
+
+
+def test_a_rate_is_readable_in_advance_whether_it_is_static_or_fetched():
+    """The date on a live reading is what makes it re-readable, not what makes it late."""
+    for source in ("published_rate_card", "live_price_api"):
+        assert basis(source=source).known_before_the_call is True
+
+
+def test_a_metered_basis_is_constructible_and_refused_only_where_it_would_be_an_argument():
+    """Recording what was actually charged is legitimate; using it to decide is not. 87% of a price term's measured
+    value was leakage of exactly this shape."""
+    b = basis(source="gateway_metered")
+    assert b.source == "gateway_metered"
+    with pytest.raises(rec.Incomplete, match="does not exist until the call is over"):
+        rec.Candidate(id="box", excluded_because="chosen", cost_usd=0.004, price_basis=b)
+
+
+def test_the_refusal_names_where_the_charge_does_belong():
+    """A refusal that does not say where the number should go gets worked around by dropping the number."""
+    with pytest.raises(rec.Incomplete) as exc:
+        rec.Candidate(id="box", excluded_because="chosen", cost_usd=0.004,
+                      price_basis=basis(source="gateway_metered"))
+    assert "outcome" in str(exc.value)
+
+
+def test_a_rate_based_basis_is_accepted_on_a_candidate():
+    c = rec.Candidate(id="box", excluded_because="chosen", cost_usd=0.004, price_basis=basis())
+    assert c.price_basis.known_before_the_call is True
+
+
+def test_the_after_the_call_figure_has_its_own_homes():
+    """Nothing is lost by refusing it on a candidate: the quote before the call and the charge after it both already
+    have fields, so the refusal removes an argument rather than a record."""
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(rec.Decision)}
+    assert "gateway_quote_usd" in fields          # the pre-call quote
+    assert "outcome" in fields                    # attached after, by attach_outcome

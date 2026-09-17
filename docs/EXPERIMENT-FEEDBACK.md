@@ -5381,6 +5381,37 @@ marks as the one I keep breaking, and it cost three failures in one entry.
 **Suite green at 1,912 passed, 3 skipped.** Five mechanisms mutated -- the ordering check, the ordering requirement, the
 date requirement, the asserted-price note and the gap itself -- and each fails tests.
 
+## F120 — A price that does not exist until the call is over cannot be an argument to the call
+
+**F28's ask, and it lands directly on what F119 built.** "An `availability` field on it -- F21's word -- that makes
+'realised after the call' unusable as an input to a decision made before it. The second half is the general fix... and
+that is checkable rather than a matter of care."
+
+**The number that makes it urgent: 87% of a price term's measured value was leakage.** The rule read what the gateway
+**actually charged** -- a figure that does not exist until the call it was supposed to inform is finished. What survived
+was the tier's rate, not the item's charge.
+
+**`PRICE_KNOWN_BEFORE_THE_CALL` is a total classification over `PRICE_SOURCES`, not a list of the bad ones.** That is
+the move that makes forgetting a failure: adding a source without deciding when it is known **breaks a test** rather than
+defaulting the new source to usable. A rate is readable in advance whether static or fetched -- the date on a live
+reading is what makes it re-readable, not what makes it late -- and a metered charge is not.
+
+**Refused where it would be an argument, and nowhere else.** A `Candidate` is by its own docstring "one member of the
+candidate set", so its price **was** an input to the decision that chose between candidates, and a metered basis there is
+leakage by construction. A metered `PriceBasis` stays constructible, because recording what was actually charged is
+legitimate; what is refused is attaching it to a decision input. **Nothing is lost by that refusal**, and the tests say
+so: `Decision.gateway_quote_usd` holds the pre-call quote and `Decision.outcome` holds what arrived afterwards, so the
+refusal removes an argument rather than a record -- and the message names both homes, because a refusal that does not say
+where the number should go gets worked around by dropping the number.
+
+**The audit came back clean, and here is what was checked.** Every place a decision reads something money-shaped:
+`metered_authorised` is a **forward-looking authorisation flag supplied by the caller** before the call, not a charge;
+`compile_policy`'s `metered_ids` is a set of candidate ids, not amounts. Nothing else feeds an after-the-call number into
+a decision.
+
+**Suite green at 1,919 passed, 3 skipped.** Three mechanisms mutated -- the refusal, the classification of the metered
+source, and the property that reads it -- and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

@@ -212,6 +212,21 @@ PRICE_SOURCES = (
 )
 
 
+#: When each source's number is knowable, as a TOTAL classification over PRICE_SOURCES rather than a list of the bad
+#: ones. A total map is what makes forgetting a failure: adding a source without deciding when it is known breaks the
+#: test below rather than defaulting the new source to usable.
+#:
+#: DEFECT this closes: **87% of a price term's measured value was leakage**, because the rule read what the gateway
+#: actually charged -- a number that exists only after the call it was supposed to inform. What survived was the tier's
+#: rate, not the item's charge. So this is checkable rather than a matter of care, which is exactly how the ledger asked
+#: for it.
+PRICE_KNOWN_BEFORE_THE_CALL = {
+    "published_rate_card": True,    # a rate, readable in advance
+    "live_price_api": True,         # also a rate; the date is what makes it re-readable, not what makes it late
+    "gateway_metered": False,       # what was actually charged, which does not exist until the call is over
+    "operator_asserted": True,      # a human's figure, available whenever they say it
+}
+
 @dataclass(frozen=True)
 class PriceBasis:
     """Enough to obtain a price again, rather than the price itself.
@@ -226,6 +241,11 @@ class PriceBasis:
     as_of: str
     ordering: tuple[str, ...]
     note: str = ""
+
+    @property
+    def known_before_the_call(self) -> bool:
+        """Whether this number exists in time to inform the decision it is attached to."""
+        return PRICE_KNOWN_BEFORE_THE_CALL[self.source]
 
     def __post_init__(self) -> None:
         if self.source not in PRICE_SOURCES:
@@ -302,6 +322,17 @@ class Candidate:
                              f"price that is not there")
         # READ rather than merely recorded, which is what `admissible` does with `corrected_over`: an ordering that
         # contradicts the costs beside it cannot have produced them, and catching that needs both in one place.
+        # A `Candidate` is by its own definition a member of the set the decision chose from, so its price was an
+        # INPUT to that decision. A charge that only exists after the call therefore cannot be here: 87% of a price
+        # term's measured value was leakage of exactly this kind. The after-the-call figure has a home already --
+        # `Decision.outcome`, attached later -- and `gateway_quote_usd` holds the pre-call quote, so nothing is lost by
+        # refusing it in the one place it would be read as an argument.
+        if self.price_basis is not None and not self.price_basis.known_before_the_call:
+            raise Incomplete(
+                f"the price for {self.id!r} comes from {self.price_basis.source!r}, which does not exist until the call "
+                f"is over, and a candidate's price is an input to the decision that chose between candidates. Recording "
+                f"what was actually charged belongs in the decision's outcome; 87% of a price term's measured value was "
+                f"leakage of this shape")
         if self.price_basis is not None and self.id not in self.price_basis.ordering:
             raise Incomplete(
                 f"the price basis orders {self.price_basis.ordering} and this candidate is {self.id!r}, which is not in "
