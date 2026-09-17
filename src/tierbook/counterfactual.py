@@ -65,6 +65,35 @@ def _cell(table: OutcomeTable, item: str, tier: str) -> Cell:
     return table.cells.get(item, {}).get(tier) or Cell(UNOBSERVED, None)
 
 
+#: What a cost is measured in. Closed, because the three are not interchangeable and no conversion between them is
+#: available here.
+#:
+#: `usd` is what a metered API bills and the only unit in which two candidates of different kinds are directly
+#: comparable. `tokens` is what every experiment in this study actually measured, and it is a **weak proxy**: a policy
+#: ahead in tokens can lose in `gpu_seconds`, because a token count does not see KV-cache occupancy or the effect of a
+#: long trace on every other request sharing the batch. `gpu_seconds` is what a self-hosted machine actually spends,
+#: and it is the one a serving system feels.
+#:
+#: There is deliberately no conversion function. `tokens` to `usd` needs a price card, `tokens` to `gpu_seconds` needs
+#: a throughput measured under load rather than more items, and a coefficient assumed instead of measured once moved a
+#: published figure in this project by a factor of six and changed which candidate was selected.
+COST_UNITS = ("usd", "tokens", "gpu_seconds")
+
+#: How a cost in this unit prints, so a token count is never rendered with a currency symbol.
+_UNIT_FORMAT = {"usd": ("$", "{:.5f}"), "tokens": ("", "{:.1f} tokens"), "gpu_seconds": ("", "{:.3f} GPU-s")}
+
+
+def format_cost(value: float, unit: str) -> str:
+    """Render a cost with its unit, so a token count never appears behind a currency symbol.
+
+    A number printed with the wrong unit is the report-level form of the same defect the refusals below prevent: a
+    reader comparing two figures assumes they are in the same thing, and a `$` in front of a token count is the
+    strongest possible reason to assume it.
+    """
+    prefix, fmt = _UNIT_FORMAT[unit]
+    return prefix + fmt.format(value)
+
+
 @dataclass
 class Run:
     """One policy's exact behaviour on one item list."""
@@ -74,14 +103,42 @@ class Run:
     solved: tuple[bool, ...]
     usd: tuple[float, ...]
     calls: tuple[tuple[str, ...], ...]
+    #: Defaults to `usd`, and that default is honest rather than plausible-looking: the field above is named `usd`, so
+    #: every existing caller put dollars in it and "usd" is the true statement about those runs. What the default does
+    #: NOT do is let a token-measured run pass as a dollar-measured one silently -- a caller measuring tokens has to
+    #: say so, and `compare` then refuses to subtract it from a dollar cost.
+    cost_unit: str = "usd"
+
+    def __post_init__(self) -> None:
+        if self.cost_unit not in COST_UNITS:
+            raise EvidenceError(
+                f"{self.cost_unit!r} is not one of {COST_UNITS}. An open-ended unit cannot be checked for "
+                f"commensurability, and the whole reason to name it is that a policy ahead in tokens can lose in "
+                f"GPU-seconds")
 
     @property
     def accuracy(self) -> float:
         return sum(self.solved) / len(self.solved) if self.solved else 0.0
 
     @property
-    def usd_per_item(self) -> float:
+    def cost_per_item(self) -> float:
+        """The mean cost per item, in whatever `cost_unit` says. The unit-agnostic accessor; prefer this one."""
         return sum(self.usd) / len(self.usd) if self.usd else 0.0
+
+    @property
+    def usd_per_item(self) -> float:
+        """The mean cost per item, refused unless it really is in dollars.
+
+        The name is kept because fifty-nine call sites use it and, for a run in dollars, it says exactly the right
+        thing. What it must not do is keep saying it for a run measured in tokens: a name asserting a unit the value is
+        not in is what makes an incommensurable comparison look like arithmetic.
+        """
+        if self.cost_unit != "usd":
+            raise EvidenceError(
+                f"{self.label!r} measured cost in {self.cost_unit!r}, so there is no dollar figure to return. Read "
+                f"`cost_per_item` with `cost_unit` instead: converting would need a price card for tokens, or a "
+                f"throughput measured under load for GPU-seconds, and neither is something this property can invent")
+        return self.cost_per_item
 
     @property
     def calls_per_item(self) -> float:
@@ -93,7 +150,8 @@ class Run:
     def __str__(self) -> str:
         lo, hi = self.accuracy_interval()
         return (f"{self.label}: {self.accuracy:.1%} [{lo:.1%}, {hi:.1%}], "
-                f"${self.usd_per_item:.5f}/item, {self.calls_per_item:.2f} calls/item")
+                f"{format_cost(self.cost_per_item, self.cost_unit)}/item, "
+                f"{self.calls_per_item:.2f} calls/item")
 
 
 def simulate(table: OutcomeTable, rule: Rule, items: Sequence[str], *, label: str) -> Run:
@@ -270,12 +328,15 @@ class Comparison:
     a_only: int                 # items a solved and b did not
     b_only: int                 # items b solved and a did not
     p_value: float              # exact sign test on the discordant pairs
-    usd_delta: float            # a minus b, per item
+    #: Renamed from `usd_delta`: a field naming dollars while holding tokens is the lie COST_UNITS exists
+    #: to stop, and four call sites made the rename cheap where `usd_per_item`'s fifty-nine did not.
+    cost_delta: float           # a minus b, per item, in `cost_unit`
     accuracy_delta: float       # a minus b
     #: No default. A comparison whose operating point is unstated reads as a general ranking, and F18's measurement
     #: is that it is not one -- three signals that separate at one floor converge at the last tenth. Defaulting this
     #: to anything would put the unnamed comparison back, wearing a field that claims it was named.
     operating_point: OperatingPoint
+    cost_unit: str = "usd"
 
     def is_significant(self, *, allow_point_chosen_on_scored_items: bool = False) -> bool:
         """Whether the paired difference clears the level -- refused when the setting was chosen on these items.
@@ -306,7 +367,9 @@ class Comparison:
             verdict = "no verdict: the setting was chosen on the scored items"
         return (f"{self.a} vs {self.b} on {self.items} items {self.operating_point}: "
                 f"{self.a_only} / {self.b_only} discordant, p = {self.p_value:.4f} ({verdict}); "
-                f"accuracy {self.accuracy_delta:+.1%}, cost {self.usd_delta:+.5f}/item")
+                f"accuracy {self.accuracy_delta:+.1%}, "
+                f"cost {'+' if self.cost_delta >= 0 else '-'}"
+                f"{format_cost(abs(self.cost_delta), self.cost_unit)}/item")
 
 
 def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
@@ -319,12 +382,18 @@ def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
         raise EvidenceError(
             f"cannot pair {a.label!r} over {len(a.items)} items with {b.label!r} over {len(b.items)}: "
             f"a policy scored on the items it happens to cover is scored on a subset it chose")
+    if a.cost_unit != b.cost_unit:
+        raise EvidenceError(
+            f"cannot compare {a.label!r} measured in {a.cost_unit!r} with {b.label!r} measured in {b.cost_unit!r}. "
+            f"Subtracting them produces a number in no unit at all, and it looks exactly like a cost advantage; "
+            f"converting needs a price card or a throughput measured under load, which is a measurement rather than "
+            f"a coefficient")
     a_only = sum(1 for x, y in zip(a.solved, b.solved) if x and not y)
     b_only = sum(1 for x, y in zip(a.solved, b.solved) if y and not x)
     return Comparison(a.label, b.label, len(a.items), a_only, b_only,
                       _sign_test(a_only, b_only),
-                      a.usd_per_item - b.usd_per_item, a.accuracy - b.accuracy,
-                      operating_point)
+                      a.cost_per_item - b.cost_per_item, a.accuracy - b.accuracy,
+                      operating_point, a.cost_unit)
 
 
 @dataclass

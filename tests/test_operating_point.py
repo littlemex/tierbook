@@ -76,14 +76,14 @@ def test_an_integrated_comparison_supports_a_verdict():
 
 def cmp_at(point, p_value=0.01):
     return cf.Comparison(a="gate", b="always-escalate", items=571, a_only=34, b_only=28, p_value=p_value,
-                         usd_delta=-0.0012, accuracy_delta=0.010, operating_point=point)
+                         cost_delta=-0.0012, accuracy_delta=0.010, operating_point=point)
 
 
 def test_a_comparison_cannot_be_built_without_an_operating_point():
     """Defaulting it would put the unnamed comparison back, wearing a field that claims it was named."""
     with pytest.raises(TypeError):
         cf.Comparison(a="gate", b="always", items=1, a_only=1, b_only=0, p_value=0.5,
-                      usd_delta=0.0, accuracy_delta=0.0)
+                      cost_delta=0.0, accuracy_delta=0.0)
 
 
 def test_a_verdict_is_refused_when_the_setting_was_chosen_on_the_scored_items():

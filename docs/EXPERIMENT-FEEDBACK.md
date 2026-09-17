@@ -4813,6 +4813,43 @@ rule, and the kind vocabulary -- and each fails tests.
 before I knew the fixture's shape. A guard that makes a helper silently return `None` is worse than the helper being
 absent.
 
+## F106 — A cost names its unit, so two units can no longer be subtracted
+
+**F93 records this as unaddressed and gives the reason:** tokens are a weak proxy for cost, and a policy ahead in
+tokens can lose in GPU-seconds, because a token count does not see KV-cache occupancy or the effect of a long trace on
+every other request sharing the batch. **Measuring GPU-seconds needs load rather than more items, so that half stays
+owed.** What is checkable without the measurement is the part that was silently wrong: nothing said what unit a cost
+was in, and every experiment in this study measured **tokens** while the field holding the number was named `usd`.
+
+**`COST_UNITS = ("usd", "tokens", "gpu_seconds")`, and deliberately no conversion function.** `tokens` to `usd` needs a
+price card; `tokens` to `gpu_seconds` needs a throughput measured under load. A coefficient assumed instead of measured
+once moved a published figure in this project **by a factor of six and changed which candidate was selected**, so a
+`convert` helper here would invite exactly that. A test asserts no name in the module contains "convert".
+
+**The default is `usd`, and that is honest rather than plausible-looking.** The field is named `usd`, so every existing
+caller put dollars in it and "usd" is the true statement about those runs. What the default does not do is let a
+token-measured run pass as a dollar one: a caller measuring tokens has to say so.
+
+**Two names, split by how many call sites they had.** `usd_delta` had four uses, so it is renamed `cost_delta`.
+`usd_per_item` had **fifty-nine**, so it is kept and now **refuses unless the run really is in dollars** — a name
+asserting a unit the value is not in is what makes an incommensurable comparison look like arithmetic. `cost_per_item`
+is the unit-agnostic accessor beside it.
+
+**`compare()` refuses two runs measured in different units.** Subtracting them produces a number in no unit at all, and
+it looks exactly like a cost advantage.
+
+**And the report cannot put a currency symbol on something that is not currency.** A `$` in front of a token count is
+the strongest possible reason for a reader to assume two figures are in the same thing, so a token cost prints as
+"300.0 tokens" and a GPU-second cost as "0.300 GPU-s".
+
+**Suite green at 1,657 passed, 3 skipped.** Four mechanisms mutated -- the cross-unit refusal, the dollar-only accessor,
+the vocabulary, and the formatter -- and each fails tests.
+
+**One process note.** The first attempt anchored an insertion on `class Run:` and hit an indented occurrence inside a
+docstring, producing a syntax error at an unrelated line. Anchoring on `@dataclass\nclass Run:` and asserting the match
+count is exactly one is the fix; a `replace` that does not check how many times it matched is not an edit, it is a
+guess.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
