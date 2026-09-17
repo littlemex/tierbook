@@ -4775,6 +4775,44 @@ from this package, so no edge closes a loop.
 
 **Suite green at 1,624 passed, 3 skipped.** Both whole-log checks were mutated and each fails a test.
 
+## F105 — F18's requirement, discharged in the code: a comparison names its setting or has none
+
+**F18 named a mechanism-level duty** -- "a policy comparison must name its operating point or integrate over it" --
+and `counterfactual.Comparison`, the general paired-comparison surface, reported an accuracy delta, a cost delta and
+a p-value **while naming no setting at all.** A comparison reported that way reads as a general ranking, and F18's own
+measurement is that it is not one: three signals that separate cleanly at one floor all converge at the last tenth.
+
+**`OperatingPoint` is required on every comparison, with no default**, and `compare()` takes it keyword-only. A default
+would put the unnamed comparison back wearing a field that claims it was named.
+
+| kind | what it means | what it may carry |
+|---|---|---|
+| `fixed` | true at one setting | the value, the knob it sets, and where the setting came from -- all three, refused apart |
+| `integrated` | reported over the whole curve | no setting; a value here would be read as the one it holds at |
+| `not_applicable` | neither arm has a tunable setting | the honest answer for two fixed candidates, a dishonest default for anything with a gate |
+
+**The sharp part is `chosen_on`, and it is the one thing here that was measured rather than reasoned.** Choosing the
+setting on the items then scored gave **seven candidate settings at every price of accuracy**, and taking the best of
+them inflated the reported interval directly. So a comparison built that way is representable -- it says what the best
+case looked like -- and **cannot support a verdict**: `is_significant()` raises `Unsupported` with the sentence that the
+p-value is not the p-value of the procedure that produced the number. The escape is an explicit argument at the call
+site, on the shape `table.lookup` already uses for an unvalidated entry, so a reader of that line sees the claim being
+made. `__str__` prints "no verdict: the setting was chosen on the scored items" **in the place a reader looks for the
+verdict**, rather than omitting it.
+
+**Three existing tests broke, and one of them is the evidence.** Two were mechanical. The third asserted
+`c.significant` on a comparison that named no setting -- the behaviour this change declares wrong -- so it was changed
+deliberately with the reason recorded beside it. A test that has to change is the argument; the two arms in that
+fixture are fixed candidates with no gate, so `not_applicable` is the true statement about them rather than a way past
+the requirement.
+
+**Suite green at 1,642 passed, 3 skipped.** Three mechanisms mutated -- the verdict refusal, the `supports_a_verdict`
+rule, and the kind vocabulary -- and each fails tests.
+
+**One piece of cruft removed from my own test file**: a helper referencing `cf.Run` behind a `hasattr` guard, written
+before I knew the fixture's shape. A guard that makes a helper silently return `None` is worse than the helper being
+absent.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

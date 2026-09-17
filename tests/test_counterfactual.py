@@ -9,11 +9,17 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from tierbook import counterfactual as cf
 from tierbook.counterfactual import (  # noqa: E402
     Run, abandonment_oracle, bracket_gated_escalation, compare, oracle, regret, simulate,
 )
 from tierbook.evidence import INCORRECT, SOLVED, UNOBSERVED, EvidenceError  # noqa: E402
 from tierbook.outcomes import Cell, OutcomeTable  # noqa: E402
+
+
+#: Both arms in this fixture are fixed candidates with no gate, so `not_applicable` is the true statement about them
+#: rather than a way past the requirement. A comparison of two GATED policies here would have to name its coverage.
+NO_KNOB = cf.OperatingPoint(kind="not_applicable")
 
 
 def _t(n: int = 100) -> OutcomeTable:
@@ -68,7 +74,7 @@ def test_comparing_runs_over_different_items_is_refused():
     a = simulate(t, lambda tb, i: ("cheap",), list(t.items), label="a")
     b = simulate(t, lambda tb, i: ("cheap",), list(t.items)[:50], label="b")
     with pytest.raises(EvidenceError) as exc:
-        compare(a, b)
+        compare(a, b, operating_point=NO_KNOB)
     assert "subset it chose" in str(exc.value)
 
 
@@ -78,7 +84,7 @@ def test_the_paired_comparison_reports_both_discordant_counts():
     items = list(t.items)
     a = simulate(t, lambda tb, i: ("cheap",), items, label="cheap")
     b = simulate(t, lambda tb, i: ("dear",), items, label="dear")
-    c = compare(a, b)
+    c = compare(a, b, operating_point=NO_KNOB)
     assert c.a_only + c.b_only > 0
     assert c.accuracy_delta == pytest.approx(a.accuracy - b.accuracy)
     assert "discordant" in str(c)
@@ -90,9 +96,13 @@ def test_a_dominating_policy_shows_zero_losses_and_a_significant_test():
     # "always dear" strictly dominates "always cheap" on accuracy here.
     a = simulate(t, lambda tb, i: ("dear",), items, label="dear")
     b = simulate(t, lambda tb, i: ("cheap",), items, label="cheap")
-    c = compare(a, b)
+    c = compare(a, b, operating_point=NO_KNOB)
     assert c.b_only == 0, "cheap never rescues an item dear misses in this fixture"
-    assert c.significant
+    # CHANGED DELIBERATELY, and the change is the argument that F18's requirement is real: this line asserted a
+    # verdict from a comparison that named no setting. `significant` is now `is_significant()`, which refuses when the
+    # setting was chosen on the scored items -- and a comparison of two FIXED candidates, as these are, names
+    # `not_applicable` and gets its verdict with no escape.
+    assert c.is_significant()
 
 
 def test_regret_splits_the_two_currencies_and_they_move_independently():

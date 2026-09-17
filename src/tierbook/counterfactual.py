@@ -185,6 +185,81 @@ def _sign_test(wins: int, losses: int) -> float:
     return min(1.0, 2 * tail / 2 ** n)
 
 
+#: How a comparison relates to the knob whose setting it depends on. Closed, because the three are not degrees of
+#: the same thing and the difference decides what the comparison may be read as.
+#:
+#: `fixed` -- true at one setting, which must be named. `integrated` -- reported over the whole curve, so no single
+#: setting applies. `not_applicable` -- neither run has a tunable setting at all, which is an honest answer for two
+#: fixed candidates and a dishonest default for anything with a gate in it.
+OPERATING_POINT_KINDS = ("fixed", "integrated", "not_applicable")
+
+#: Where the setting came from. This distinction is the one that was MEASURED to matter: choosing the coverage on the
+#: items the comparison is then scored on gave seven candidate settings at every price of accuracy, and picking the
+#: best of them inflated the reported interval directly. A comparison built that way is still worth recording -- it
+#: says what the best case looked like -- but it cannot support a verdict, which is why `Unsupported` exists rather
+#: than a refusal at construction.
+CHOSEN_ON = ("calibration", "declared_in_advance", "scored_items")
+
+
+class Unsupported(RuntimeError):
+    """The comparison is readable and cannot support the verdict being asked of it. Distinct from an error: nothing
+    about it is malformed, and the number it holds is the number that was computed. What is missing is the licence to
+    read that number as a verdict, which is a property of how the setting was chosen rather than of the arithmetic."""
+
+
+@dataclass(frozen=True)
+class OperatingPoint:
+    """The setting a comparison was made at, and where that setting came from.
+
+    Required on every `Comparison`, with no default, because a comparison reported without it reads as a general
+    ranking and is not one. Signals cross: on the deferral curve measured for this study, three signals that separate
+    cleanly at one floor all converge at the last tenth, so a ranking taken at one floor does not hold at another.
+    """
+
+    kind: str
+    value: float | None = None
+    chosen_on: str | None = None
+    knob: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in OPERATING_POINT_KINDS:
+            raise EvidenceError(f"{self.kind!r} is not one of {OPERATING_POINT_KINDS}; an open-ended kind cannot be "
+                                f"aggregated over a set of comparisons, and the three differ in what may be read "
+                                f"from them")
+        if self.kind == "fixed":
+            if self.value is None:
+                raise EvidenceError(
+                    "a fixed operating point with no value names nothing. The whole point of naming it is that a "
+                    "ranking taken at one setting does not hold at another, so 'fixed' without the setting is the "
+                    "unnamed comparison this field exists to stop")
+            if self.chosen_on not in CHOSEN_ON:
+                raise EvidenceError(
+                    f"chosen_on={self.chosen_on!r} is not one of {CHOSEN_ON}. Where the setting came from decides "
+                    f"whether the comparison supports a verdict: chosen on the scored items it does not, and that "
+                    f"was measured rather than assumed")
+            if not self.knob:
+                raise EvidenceError(
+                    "a fixed operating point with no knob named says a number without saying what it sets. A "
+                    "coverage of 0.30 and a price of accuracy of 0.30 are different facts and would be read as the "
+                    "same one")
+        else:
+            for name in ("value", "chosen_on"):
+                if getattr(self, name) is not None:
+                    raise EvidenceError(
+                        f"kind={self.kind!r} carries {name}={getattr(self, name)!r}. Only a fixed point has a "
+                        f"setting: an integrated comparison spans them all and a not_applicable one has no knob, so "
+                        f"a value here would be read as the setting the comparison holds at")
+
+    @property
+    def supports_a_verdict(self) -> bool:
+        return not (self.kind == "fixed" and self.chosen_on == "scored_items")
+
+    def __str__(self) -> str:
+        if self.kind == "fixed":
+            return f"at {self.knob}={self.value:g} (chosen on {self.chosen_on})"
+        return "over the whole curve" if self.kind == "integrated" else "no tunable setting"
+
+
 @dataclass(frozen=True)
 class Comparison:
     """A paired comparison of two runs on the same items."""
@@ -197,21 +272,49 @@ class Comparison:
     p_value: float              # exact sign test on the discordant pairs
     usd_delta: float            # a minus b, per item
     accuracy_delta: float       # a minus b
+    #: No default. A comparison whose operating point is unstated reads as a general ranking, and F18's measurement
+    #: is that it is not one -- three signals that separate at one floor converge at the last tenth. Defaulting this
+    #: to anything would put the unnamed comparison back, wearing a field that claims it was named.
+    operating_point: OperatingPoint
 
-    @property
-    def significant(self) -> bool:
+    def is_significant(self, *, allow_point_chosen_on_scored_items: bool = False) -> bool:
+        """Whether the paired difference clears the level -- refused when the setting was chosen on these items.
+
+        A method with an explicit escape rather than a property, on the same shape `table.lookup` uses for an
+        unvalidated entry: the caller who wants the number anyway says so at the call site, where a reader of that
+        line can see the claim being made.
+
+        The refusal is not pedantry about a fold. Choosing the setting on the items then scored gave seven candidate
+        settings at every price of accuracy, and taking the best of them inflated the reported interval directly --
+        so the p-value below is not the p-value of the procedure that produced this number.
+        """
+        if not self.operating_point.supports_a_verdict and not allow_point_chosen_on_scored_items:
+            raise Unsupported(
+                f"{self.a} vs {self.b} was compared at {self.operating_point.knob}={self.operating_point.value:g}, "
+                f"chosen on the items it is scored on. p = {self.p_value:.4f} is the p-value of a test that did not "
+                f"include choosing the setting, so it is not the p-value of this result; pass "
+                f"allow_point_chosen_on_scored_items=True to read it as the best case rather than as a verdict")
         return self.p_value < 0.05
 
     def __str__(self) -> str:
-        verdict = ("a significant accuracy difference" if self.significant
-                   else "no significant accuracy difference")
-        return (f"{self.a} vs {self.b} on {self.items} items: "
+        try:
+            verdict = ("a significant accuracy difference" if self.is_significant()
+                       else "no significant accuracy difference")
+        except Unsupported:
+            # Said rather than swallowed: a comparison that cannot support a verdict prints what it is instead of
+            # printing the verdict it cannot support, and prints it in the place a reader looks for the verdict.
+            verdict = "no verdict: the setting was chosen on the scored items"
+        return (f"{self.a} vs {self.b} on {self.items} items {self.operating_point}: "
                 f"{self.a_only} / {self.b_only} discordant, p = {self.p_value:.4f} ({verdict}); "
                 f"accuracy {self.accuracy_delta:+.1%}, cost {self.usd_delta:+.5f}/item")
 
 
-def compare(a: Run, b: Run) -> Comparison:
-    """Pair two runs item by item. Refuses runs over different item lists."""
+def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
+    """Pair two runs item by item. Refuses runs over different item lists, and requires the setting be named.
+
+    `operating_point` is keyword-only and has no default for the reason the field does not: a signature that let it
+    be omitted would make the unnamed comparison the easy one to write.
+    """
     if a.items != b.items:
         raise EvidenceError(
             f"cannot pair {a.label!r} over {len(a.items)} items with {b.label!r} over {len(b.items)}: "
@@ -220,7 +323,8 @@ def compare(a: Run, b: Run) -> Comparison:
     b_only = sum(1 for x, y in zip(a.solved, b.solved) if y and not x)
     return Comparison(a.label, b.label, len(a.items), a_only, b_only,
                       _sign_test(a_only, b_only),
-                      a.usd_per_item - b.usd_per_item, a.accuracy - b.accuracy)
+                      a.usd_per_item - b.usd_per_item, a.accuracy - b.accuracy,
+                      operating_point)
 
 
 @dataclass
