@@ -5649,6 +5649,125 @@ manifest should be pre-registered and signed (one view) or absent from the recor
 (the other). Both concede the full design only ever made tuning **loud**, not impossible. That single question
 is the next thing to settle.
 
+## F125 — The protocol is named Surround, and the four consumers do NOT need the same information
+
+Requested: name the protocol provisionally, take whatever is takeable as-is, leave the use of it to the
+judge, and settle whether the information a log needs and the information routing needs have to be the same
+set — accepting some flexibility rather than a rigid thing nobody can use.
+
+**Design in `docs/DESIGN-surround-protocol.md`. Reviewed once by Fable 5.1 and GPT-5.6 sol, independently. Two
+findings were fatal and the document was rewritten.**
+
+### The answer to the question asked
+
+**The four consumers cannot need the same set, for a structural reason.** Routing decides before the call; a
+trajectory exists only after it. The axis is already in the code — `quantity.AVAILABILITY` — and
+`Quantity.usable_before_generating()` is already derived from its order rather than from a list of the good
+values, because the first version of that predicate excluded `during_compute` and reported this study's own
+readout as useless to its own gate.
+
+So the bar differs by **what being wrong costs**: a bad route is one avoidable escalation, bounded and priced
+and recoverable next call, so it proceeds on a partial record. A bad verdict is a published false claim,
+unbounded and not recoverable, so it refuses. **One bar for both is wrong in both directions**: strict enough
+for the verdict and routing stops serving traffic whenever a part is missing, which is most of the time since
+four of the eight parts still have no collector (T8); loose enough for routing and a verdict is published on a
+partial record, which is what F124 withdrew a number for.
+
+### The sentence both reviewers rejected, and the object it confused
+
+The draft said "collection never refuses; the judge refuses". That conflates two refusals about different
+objects, and the correct form is:
+
+> **Execution never refuses because of collection. A record may still be refused as a record.**
+
+**Toward the sender the collector is maximally permissive; about itself it must be exact.** The defect that
+forces it: **a collector cannot record its own absence.** Not only the crude case where nothing is emitted —
+the case that would have shipped is shim version N+1 losing the ability to read `decoding` and writing the
+same absence reason it writes when the sender genuinely sent none. Every consumer then behaves exactly as
+designed while the regression stays invisible. **A closed vocabulary constrains spelling, not truth.**
+
+Four additions, and they are the minimum that makes an absence checkable: an envelope created before any part
+is extracted carrying `complete` / `aborted` / `collector_failed`; absence reasons that say **whose** absence
+it is (`not_provided`, `not_reachable`, `extraction_failed`, `redacted`, `not_observable`); a shim capability
+manifest, so `not_reachable` becomes checkable and a manifest claiming a part the record reports absent is a
+contradiction; and a contradiction mark when a pushed claim and an observation disagree **inside one record**
+(owner pushes `turn_budget: 5`, transcript shows nine turns — both facts are in one hand and deferring the
+join discards it for free). This is SCITT's own separation applied to the collector rather than only to the
+sender, which the draft borrowed and then failed to use on itself.
+
+### The fatal finding: the router leaks into the judge, and the reviewers split on the object
+
+Two runs identical on every identifying part; run A's shim reached `context_partitioning` and run B's did not.
+The router falls back for B and sends it elsewhere. **The judge compares them as the same surround, because
+nothing it keys identity on differs**, and publishes a delta that is an artefact of missingness — correlated
+with whichever side has the weaker shim.
+
+One reviewer proposed a tenth harness part keyed into identity. **That is wrong and the other reviewer said
+why**: a routing decision is not something around the model, it is the **treatment assignment**. Keying it
+into harness identity would make two runs of one harness sent to two destinations count as different
+harnesses, destroying the grouping the identifier exists to provide. And recording the fallback does not
+remove the confounding: missingness changed which model was tried, how many attempts ran, what context
+accumulated and what it cost, and adaptive escalation loads the harder requests into the later tiers — so
+judging only the final attempt hides the cheap model's failures while keeping some of their cost.
+
+It is therefore a **separate object**: assignment provenance, mandatory for the judge, invisible to the
+router's bar. Per attempt: policy digest, the facts consulted **and their missingness**, the fallback applied,
+the destination, the attempt number and parent, the termination reason, and the selection probability when
+randomised. The judge may then **refuse a model-against-model claim when assignment depended on state nobody
+recorded**.
+
+### `tool_behaviour -> not_observable` was too strong, and the veto that replaced it was unsound
+
+The classification is true of a tool as a *function* and false of a tool *restricted to the inputs actually
+exercised* — and those are bytes the run produced, the strongest mode in the vocabulary, held here and
+contemporaneous. So the part splits: `tool_extension` stays unobservable; `tool_trace` is collected, **may
+never key an identity** (a per-run outcome is unique per run), and is **not always collectable** either, since
+a client shim cannot see a server-side or provider-managed tool runner.
+
+The draft's veto — equal arguments plus unequal response digest proves different tools — was refuted three
+ways, and any one of them is disqualifying:
+
+1. **It could fire against a single run.** Write `k`, then read `k`: equal arguments, unequal responses, one
+   run, one tool. The rule said "some call has equal arguments" and **never used the ordering it had already
+   collected**.
+2. **It fires on essentially every networked tool.** Request ids, timestamps and trace headers sit in response
+   bodies, and canonicalisation is refused, so any two runs touching such a tool veto each other. An
+   always-firing veto means the judge can never publish for a harness with a real tool — **the pathway
+   destroys itself**.
+3. **The conclusion was false even when firing is right.** A clock, a live search, a moved index: blocking the
+   comparison is correct and "different tools, proven" is not what was observed.
+
+Restated: **equal effective invocation context and an unequal stable projection of the response establish a
+divergence in recorded execution**, for that invocation and nothing else — where the context is the trace
+prefix, the arguments, the credentials class and the attempt number, and the projection is over the response
+**as rendered to the model**. Graded rather than absolute: automatic veto only where the tool's contract
+declares determinism over the recorded context, **widen to unknown** for a stochastic or mutable tool, no veto
+for a known-volatile field.
+
+**One-sidedness survives, and a review case proves it**: two serialisations of the same logical arguments make
+the arguments compare unequal, so the veto misses a real difference. That miss is safe **only** because the
+rule can refuse and can never authorise.
+
+### Three boundaries, so a digest says what it is a digest of
+
+Refusing canonicalisation is right and is not sufficient, because three things were being called "the bytes":
+`transport`, `parsed`, and `model_visible`. **Only a `model_visible` digest may support a claim that two runs
+had the same input.** A canonical digest is permitted as an **index** that may narrow candidates and may never
+authorise a comparison — the same one-sided shape as the veto. Two SDK versions can serialise differently and
+decode to an identical model-visible string; two strings that canonicalise to one JSON value can behave
+differently embedded verbatim in a prompt.
+
+### The fourth consumer, and one arithmetic error worth recording
+
+Both reviewers named a consumer the draft missed: the **replayer**, whose bar is genuinely distinct — it needs
+bytes where the judge needs digests, and refuses on missing payloads rather than on missing identity. Naming it
+is the whole action; the mistake it prevents is folding its requirements into the log because the log happens
+to be the thing that stores things.
+
+And the draft said "nine parts" while listing ten, then wrote a done-when condition about eight. **A protocol
+whose own part inventory is inconsistent cannot enumerate an absence**, which is the entire mechanism above.
+Ten parts.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

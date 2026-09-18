@@ -75,16 +75,48 @@ Cache eligibility depends on the previous call in the same context. A per-reques
 by construction, and the counterfactual "what would this have cost unrouted" is undefined without the
 context-partitioning policy (T13).
 
-### T13 -- The ninth harness part: the context-partitioning policy
+### T13 -- `context_partitioning`, and the tenth part beside it
 
 How many contexts exist and what crosses between them. Local Fusion's entire reported saving ($7.47 to $4.54,
-39.2%) lives in this part, and the current eight cannot express it.
+39.2%) lives in this part, and the current eight cannot express it. Named `context_partitioning` in
+[DESIGN-surround-protocol.md](DESIGN-surround-protocol.md), which also splits `tool_behaviour` into
+`tool_extension` (unobservable, as now) and `tool_trace` (collected, never identifying, veto only) -- so the
+inventory is **ten**, not nine.
 
 ### T14 -- Settle the one question the reviewers split on
 
 Pre-registered signed cohort manifest, or no cohort digest in the record with grouping enumerated per
 analysis. Both reviewers concede the full design only made tuning loud rather than impossible, so this is a
 choice about where the loudness lives.
+
+### T15 -- The collector cannot currently record its own absence
+
+`harness.py` has one undifferentiated hole: a part is present or it is not. A shim that loses the ability to
+read a part writes the same absence a sender's genuine silence writes, so a collector regression is invisible
+while every consumer behaves exactly as designed (F125).
+
+**Done when.** An absence says whose it is (`not_provided`, `not_reachable`, `extraction_failed`, `redacted`,
+`not_observable`); a record carries a terminal status and is refused by the judge when that status is not
+`complete`; and a shim capability manifest claiming a part the record reports `not_reachable` fails a test.
+
+### T16 -- Assignment provenance, which the judge needs and the router must not be slowed by
+
+The router may proceed on a partial record; that is the design (F125). What is missing is the record of what it
+decided and on what, so a verdict can tell a real delta from an artefact of missingness. **This is not a
+harness part** -- keying a destination into harness identity would make two runs of one harness count as two
+harnesses.
+
+**Done when.** Every attempt records the policy digest, the facts consulted and their missingness, the fallback
+applied, the destination, the attempt number and parent, and the termination reason -- and a model-against-model
+claim is refused when the assignment depended on state nobody recorded.
+
+### T17 -- A digest has to say which boundary it is over
+
+Every digest here is implicitly over "the bytes", and three different things wear that name: `transport`,
+`parsed`, `model_visible` (F125). Only `model_visible` can support a claim that two runs had the same input.
+
+**Done when.** A digest carries its boundary, an identity claim built on a non-`model_visible` digest is
+refused, and a canonical digest can narrow a candidate set while being unable to authorise a comparison.
 
 ## Blocked on something outside this repository
 
