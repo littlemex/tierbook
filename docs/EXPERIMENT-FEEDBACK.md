@@ -6013,6 +6013,55 @@ Six mutations, all caught: removing the call from `avoided`, dropping either hal
 two legs, letting them exceed the input side, and letting a mixed mean claim a split. Suite: **1,724 passing,
 3 skipped.**
 
+## F130 — Cost at conversation scope, and the one invariant that is arithmetic
+
+Closes T12, and closes the recordable half only — the part that is genuinely blocked is named at the end rather
+than papered over.
+
+**A per-request cost is incomplete by construction.** Whether a turn's input is billed as a cache read depends on
+the turn *before* it in the same context, so the cheapest turn in a sequence is cheap because an earlier one paid
+to populate the cache. Attributing that discount to the turn that received it credits the wrong request, and
+subtracting two such turns from different sequences subtracts two numbers that mean different things.
+
+### `Conversation`, and the invariant worth having
+
+`Conversation(context, turns)` with `total` over the sequence, and four refusals — no context identifier (nothing
+says which turns shared a cache prefix), no turns, mixed units, and turns that disagree about whether they are
+split (a total over that mixture would put the unrecorded turns' whole input into the fresh leg).
+
+The fifth is the one that is **arithmetic rather than convention**: **the first turn of a context cannot have been
+served from a cache belonging to it**, because nothing was in the context before it. A record that says otherwise
+is either mis-ordered or is charging another context's cache to this one, and in both cases the discount is
+credited to a turn that did not earn it.
+
+`paid_for_nothing` is **reported rather than refused**: a single turn that paid a cache write bought a discount
+for a turn that never came. That is a real thing that happens and the record should show it.
+
+### `refuse_incomparable_shapes` — the check the withdrawn number needed
+
+Two sequences of different length are not two prices for the same work. The measured reason is the same one
+throughout: identical content billed **0%** as one long message and **99.9%** as a growing conversation, so most
+of the difference between a one-turn arm and a five-turn arm is the number of turns. **Routing changes the shape
+of every turn after the one it moved**, which is why a routing verdict is exactly the claim that needs this.
+
+Production caller: `tierbook conversation-cost`, which prices one sequence or refuses a pair. The three input
+legs are taken separately and summed into the input side, because asking an operator for a total *and* two of its
+parts lets the three disagree.
+
+### What this does NOT settle, and why it is not a gap in this entry
+
+**The counterfactual.** "What would this have cost unrouted" needs to know how many contexts exist and what
+crosses between them, which is the context-partitioning policy — T13, still open. This type makes the **shape
+recordable**; it does not make the **alternative computable**. T10's note stands: if a published run's shape was
+never recorded, there may be no defensible replacement figure, and leaving it withdrawn is then the correct end
+state rather than a gap.
+
+### Verified by breaking it
+
+Six mutations, all caught: letting the first turn claim a cache read, totalling mixed splits, totalling mixed
+units, allowing an empty conversation, comparing different lengths, and dropping the write from
+`paid_for_nothing`. Suite: **1,734 passing, 3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

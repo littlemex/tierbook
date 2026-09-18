@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook conversation-cost  what a sequence of turns in one context cost, and whether two compare
     tierbook admit-comparison  whether two arms may be compared, given what each was missing
     tierbook collect-harness  what a harness record holds, what it does not, and whose absence each is
     tierbook registered-criteria  whether a conclusion is supported by every criterion registered
@@ -728,6 +729,47 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -
 
 
 @_refuses
+def cmd_conversation_cost(args) -> int:
+    """What a sequence of turns in one context cost, and whether two such sequences may be compared at all.
+
+    A door because the failure it prevents is the one that withdrew a published number. A per-request cost is
+    incomplete by construction -- whether a turn's input is billed as a cache read depends on the turn before it -- and
+    the ledger's own note on the withdrawn routing saving says the replacement may not exist because the run's shape,
+    single calls against multi-turn sequences, was never recorded.
+
+    Exit 2 when both sequences are well formed and cannot be compared: a finding about the pair, not an error.
+    """
+    def build(label: str, specs: list[str]) -> sp_mod.Conversation:
+        turns = []
+        for spec in specs:
+            fresh, cached, write, gen = _fields(
+                spec, ("fresh", "cached", "cache_write", "generation"), option=f"--{label}-turn")
+            # The three input legs are given separately here and `Spend` takes the input side whole, so the prefill is
+            # their sum. Asking an operator for a total and two of its parts would let the three disagree.
+            f, c, w = float(fresh), float(cached), float(write)
+            turns.append(sp_mod.Spend(prefill=f + c + w, generation=float(gen), cached_in=c, cache_write=w))
+        return sp_mod.Conversation(context=label, turns=tuple(turns))
+
+    a = build(args.a, args.a_turn)
+    print(f"{a}")
+    if a.paid_for_nothing:
+        print("note: this sequence populated a cache nobody read -- a discount was bought for a turn that never came")
+    if not args.b_turn:
+        return 0
+    b = build(args.b, args.b_turn)
+    print(f"{b}")
+    if b.paid_for_nothing:
+        print("note: this sequence populated a cache nobody read")
+    try:
+        sp_mod.refuse_incomparable_shapes(a, b)
+    except EvidenceError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    print(f"comparable: both sequences are {a.turn_count} turn(s), so the difference between them is not the shape")
+    return 0
+
+
+@_refuses
 def cmd_admit_comparison(args) -> int:
     """Whether two arms may be compared at all, given what each one's decisions were missing.
 
@@ -1217,6 +1259,19 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    cc = sub.add_parser("conversation-cost", parents=[common],
+                        help="what a sequence of turns in one context cost, and whether two may be compared")
+    cc.add_argument("--a", default="a", help="the first sequence's context identifier")
+    cc.add_argument("--b", default="b", help="the second sequence's context identifier")
+    cc.add_argument("--a-turn", action="append", default=[], required=True,
+                    metavar="FRESH:CACHED:CACHE_WRITE:GENERATION",
+                    help="repeatable, one per turn in order. The three input legs are given separately and summed "
+                         "into the input side, so a total cannot disagree with its parts")
+    cc.add_argument("--b-turn", action="append", default=[],
+                    metavar="FRESH:CACHED:CACHE_WRITE:GENERATION",
+                    help="repeatable. Omit to price one sequence without comparing")
+    cc.set_defaults(fn=cmd_conversation_cost, registry=None)
 
     ac = sub.add_parser("admit-comparison", parents=[common],
                         help="whether two arms may be compared, given what each one's decisions were missing")

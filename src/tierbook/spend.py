@@ -288,3 +288,96 @@ class SignalPrice:
             raise EvidenceError("a signal's share of a saving of zero is undefined, and returning a large number "
                                 "instead would read as 'too expensive' when the fact is that nothing was saved")
         return (self.marginal_cost if marginal else self.cost).total / saving.total
+
+
+@dataclass(frozen=True)
+class Conversation:
+    """The turns that shared one context, and the cost of the whole of it rather than of any one request.
+
+    **A per-request cost is incomplete by construction.** Whether a request's input is billed as a cache read depends on
+    the request BEFORE it in the same context, so the cheapest turn in a sequence is cheap because an earlier one paid
+    to populate the cache. Attributing that discount to the turn that received it credits the wrong request, and
+    subtracting two such turns from different sequences subtracts two numbers that mean different things.
+
+    This is the object the withdrawn routing saving needed and did not have. The ledger's own note on it says the
+    replacement may not exist because the run's shape -- single calls against multi-turn sequences -- was never
+    recorded. A cost with a `turns` count is that record.
+
+    What this does NOT settle is the counterfactual. "What would this have cost unrouted" needs to know how many
+    contexts exist and what crosses between them, which is the context-partitioning policy (T13). This type makes the
+    shape recordable; it does not make the alternative computable.
+    """
+
+    context: str
+    turns: tuple[Spend, ...]
+
+    def __post_init__(self) -> None:
+        if not self.context:
+            raise EvidenceError(
+                "a conversation with no context identifier cannot say which turns shared a cache prefix, which is the "
+                "only thing that makes it a conversation rather than a list of unrelated costs")
+        if not self.turns:
+            raise EvidenceError("a conversation with no turns is not a conversation; it is the absence of a record "
+                                "about one")
+        units = {s.unit for s in self.turns}
+        if len(units) != 1:
+            raise EvidenceError(f"the turns are measured in {sorted(units)}; a total over them would be a number in no "
+                                f"unit at all")
+        splits = {s.cache_split for s in self.turns}
+        if len(splits) != 1:
+            raise EvidenceError(
+                "some turns record which input leg they were billed on and some do not, so a total over them would put "
+                "the unrecorded turns' whole input into the fresh leg. That is the direction that makes a cache effect "
+                "look like a saving, and it is the reason the split is all-or-nothing on a single cost too")
+        # The one invariant that is arithmetic rather than convention: there is nothing in a context before its first
+        # turn, so the first turn cannot have been served from a cache belonging to it. A record that says otherwise is
+        # either mis-ordered or is attributing another context's cache to this one, and both make the total wrong.
+        if self.turns[0].served_from_cache:
+            raise EvidenceError(
+                f"the first turn of {self.context!r} reports {self.turns[0].cached_in} billed as a cache read, and "
+                f"nothing was in this context before it. Either the turns are out of order, or a cache belonging to "
+                f"another context is being charged to this one -- and in both cases the discount is credited to a turn "
+                f"that did not earn it")
+
+    @property
+    def turn_count(self) -> int:
+        return len(self.turns)
+
+    @property
+    def total(self) -> Spend:
+        """The cost of the whole sequence. This is the quantity a comparison may use; a single turn's cost is not."""
+        out = self.turns[0]
+        for s in self.turns[1:]:
+            out = out + s
+        return out
+
+    @property
+    def paid_for_nothing(self) -> bool:
+        """Whether this conversation populated a cache nobody read.
+
+        A single turn that paid a cache write bought a discount for a turn that never came. Reported rather than
+        refused, because it is a real thing that happens and the record should show it rather than reject it.
+        """
+        return self.turn_count == 1 and self.turns[0].cache_split and self.turns[0].cache_write > 0
+
+    def __str__(self) -> str:
+        tail = " (paid for a cache nobody read)" if self.paid_for_nothing else ""
+        return f"{self.context}: {self.turn_count} turn(s), {self.total}{tail}"
+
+
+def refuse_incomparable_shapes(a: Conversation, b: Conversation) -> None:
+    """Refuse to compare two sequences of different length as though they were two prices for the same work.
+
+    The measured reason: the cache discount attaches to the shape of a request, and identical content billed 0% as one
+    long message billed 99.9% as a growing conversation. So a one-turn arm and a five-turn arm carrying the same words
+    are not two prices for one thing -- most of the difference between them is the number of turns.
+
+    This is the check the withdrawn saving needed. Routing breaks a cache prefix, so a decision that changes destination
+    changes the shape of everything after it; comparing arms of different shape reports that as the decision's effect.
+    """
+    if a.turn_count != b.turn_count:
+        raise EvidenceError(
+            f"cannot compare {a.context!r} over {a.turn_count} turn(s) with {b.context!r} over {b.turn_count}: the "
+            f"cache discount attaches to the shape of a request rather than to its text, and identical content measured "
+            f"0% as one long message against 99.9% as a growing conversation. Most of the difference between arms of "
+            f"different length is the length, and routing changes the shape of every turn after the one it moved")

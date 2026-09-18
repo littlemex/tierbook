@@ -375,3 +375,76 @@ def test_adding_a_split_cost_to_an_unsplit_one_gives_an_unsplit_total():
 def test_the_printed_form_distinguishes_a_split_cost_from_an_unsplit_one():
     assert "cached" in str(cached()) and "cache write" in str(cached())
     assert "prefill" in str(sp.Spend(prefill=0.010, generation=0.90))
+
+
+# --- cost at conversation scope, because a per-request cost is incomplete by construction ---------------------------------
+
+def first_turn(cache_write=0.002):
+    """A turn that populates a cache. Nothing was in the context before it, so it cannot be a cache read."""
+    return sp.Spend(prefill=0.010 + cache_write, generation=0.90, cached_in=0.0, cache_write=cache_write)
+
+
+def warm_turn():
+    """A later turn whose input was mostly served from the cache the first turn paid for."""
+    return sp.Spend(prefill=0.010, generation=0.90, cached_in=0.008, cache_write=0.0)
+
+
+def test_the_total_is_over_the_sequence_because_the_discount_was_earned_by_an_earlier_turn():
+    c = sp.Conversation(context="ctx", turns=(first_turn(), warm_turn(), warm_turn()))
+    assert c.turn_count == 3
+    assert abs(c.total.cached_in - 0.016) < 1e-12
+    assert abs(c.total.cache_write - 0.002) < 1e-12
+
+
+def test_the_first_turn_cannot_have_been_served_from_a_cache_that_did_not_exist_yet():
+    """Arithmetic rather than convention: either the turns are out of order, or another context's cache is being
+    charged to this one, and both credit the discount to a turn that did not earn it."""
+    with pytest.raises(EvidenceError, match="nothing was in this context before it"):
+        sp.Conversation(context="ctx", turns=(warm_turn(), first_turn()))
+
+
+def test_a_conversation_needs_a_context_identifier():
+    with pytest.raises(EvidenceError, match="which turns shared a cache prefix"):
+        sp.Conversation(context="", turns=(first_turn(),))
+
+
+def test_an_empty_conversation_is_the_absence_of_a_record():
+    with pytest.raises(EvidenceError, match="absence of a record"):
+        sp.Conversation(context="ctx", turns=())
+
+
+def test_turns_that_disagree_about_whether_they_are_split_cannot_be_totalled():
+    with pytest.raises(EvidenceError, match="whole input into the fresh leg"):
+        sp.Conversation(context="ctx", turns=(first_turn(), sp.Spend(prefill=0.010, generation=0.90)))
+
+
+def test_turns_in_two_units_cannot_be_totalled():
+    with pytest.raises(EvidenceError, match="no unit at all"):
+        sp.Conversation(context="ctx", turns=(
+            first_turn(),
+            sp.Spend(prefill=0.010, generation=0.90, unit="tokens", cached_in=0.0, cache_write=0.0)))
+
+
+def test_a_single_turn_that_paid_a_cache_write_bought_a_discount_for_a_turn_that_never_came():
+    """Reported rather than refused: it is a real thing that happens, and the record should show it."""
+    assert sp.Conversation(context="ctx", turns=(first_turn(),)).paid_for_nothing is True
+    assert sp.Conversation(context="ctx", turns=(first_turn(cache_write=0.0),)).paid_for_nothing is False
+    assert sp.Conversation(context="ctx", turns=(first_turn(), warm_turn())).paid_for_nothing is False
+
+
+def test_two_sequences_of_different_length_are_not_two_prices_for_the_same_work():
+    """The check the withdrawn saving needed: routing changes the shape of every turn after the one it moved."""
+    long_ = sp.Conversation(context="warm", turns=(first_turn(), warm_turn(), warm_turn()))
+    short = sp.Conversation(context="single", turns=(first_turn(cache_write=0.0),))
+    with pytest.raises(EvidenceError, match="Most of the difference between arms of different length is the length"):
+        sp.refuse_incomparable_shapes(long_, short)
+
+
+def test_two_sequences_of_the_same_length_are_comparable():
+    a = sp.Conversation(context="a", turns=(first_turn(), warm_turn()))
+    b = sp.Conversation(context="b", turns=(first_turn(), warm_turn()))
+    sp.refuse_incomparable_shapes(a, b)
+
+
+def test_the_printed_form_says_when_a_cache_was_paid_for_and_never_read():
+    assert "nobody read" in str(sp.Conversation(context="ctx", turns=(first_turn(),)))

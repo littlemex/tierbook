@@ -67,11 +67,15 @@ that the measurement cannot be reconstructed.
 `reusable_cache_tokens` as fields on a `Spend` -- they are properties of a tier's price card rather than of one
 request's cost, and no experiment has needed them on the cost object.
 
-### T12 -- Attach cost at conversation scope, not per request
+### T12 -- DONE (F130) for the recordable half. The counterfactual half is T13
 
-Cache eligibility depends on the previous call in the same context. A per-request cost is therefore incomplete
-by construction, and the counterfactual "what would this have cost unrouted" is undefined without the
-context-partitioning policy (T13).
+`spend.Conversation` with a total over the sequence, the arithmetic invariant that a context's first turn cannot
+have been served from its own cache, `paid_for_nothing` reported rather than refused, and
+`refuse_incomparable_shapes` so two sequences of different length are not compared as two prices for one thing.
+Production caller `tierbook conversation-cost`.
+
+**Still open and moved to T13:** the counterfactual needs to know how many contexts exist and what crosses
+between them. The shape is now recordable; the alternative is not computable.
 
 ### T13 -- `context_partitioning`, and the tenth part beside it
 
