@@ -125,11 +125,15 @@ def test_the_owners_description_of_their_own_loop_does_not_move_the_identity():
     assert a.identity == b.identity
 
 
-def test_a_harness_with_nothing_we_hold_bytes_for_is_refused():
-    """Its identity would be constant across every possible harness."""
-    with pytest.raises(hn.Unidentified, match="constant across every possible harness"):
-        hn.Harness(parts=(part(kind="loop", sourcing="pushed_by_owner", label="x", digest="a" * 64),
+def test_a_harness_with_nothing_we_hold_bytes_for_has_no_identity_to_read():
+    """Refused where the identity is READ rather than where the object is built. The parts are real -- a pushed loop
+    description is a fact worth keeping -- and it is the identity that does not exist."""
+    h = hn.Harness(parts=(part(kind="loop", sourcing="pushed_by_owner", label="x", digest="a" * 64),
                           part(kind="tool_extension", sourcing="not_observable", label="", digest="")))
+    assert h.has_identity is False
+    with pytest.raises(hn.Unidentified, match="constant across every possible harness"):
+        h.identity
+    assert "no identity" in str(h)
 
 
 def test_two_parts_of_one_kind_leave_nothing_saying_which_applied():
@@ -302,11 +306,15 @@ def test_a_bad_status_is_refused():
 # --- a digest says which of three things it is a digest of ----------------------------------------------------------------
 
 def test_only_the_text_the_model_read_may_key_an_identity():
-    """The two mistakes run in opposite directions, so neither is fixed by being careful."""
+    """Non-identifying rather than refused, and the difference matters: a `tools` array is in the request and is not text
+    the model reads, so `in_the_request` with a `parsed` digest is the COMMON case. Refusing it made the ordinary part
+    unrepresentable; excluding it from the hash makes the wrong identity unrepresentable instead."""
     assert DIGEST_BOUNDARIES == ("transport", "parsed", "model_visible")
     assert IDENTIFYING_BOUNDARIES == ("model_visible",)
-    with pytest.raises(hn.Unidentified, match="opposite directions"):
-        part(boundary="transport")
+    for boundary in ("transport", "parsed"):
+        p = part(boundary=boundary)
+        assert p.identifying is False, boundary
+    assert part(boundary="model_visible").identifying is True
 
 
 def test_a_non_identifying_part_may_carry_any_boundary():
@@ -322,6 +330,17 @@ def test_an_unknown_boundary_is_refused():
         part(boundary="whatever_the_sdk_sent")
 
 
+def test_a_non_model_visible_digest_never_enters_the_hash():
+    """What the deleted refusal was protecting, now protected by construction."""
+    text = "Answer with the option letter only."
+    only_parsed = hn.Harness(parts=(
+        part(digest=hn.digest_bytes(text)),
+        part(kind="decoding", sourcing="in_the_request", label="t=0",
+             digest=hn.digest_bytes("temperature=0.0"), boundary="parsed")))
+    just_instruction = hn.Harness(parts=(part(digest=hn.digest_bytes(text)),))
+    assert only_parsed.identity == just_instruction.identity
+
+
 def test_the_collision_is_unrepresentable_rather_than_hashed_around():
     """The first attempt at this hashed the boundary into the identity so two digests of different things could not
     collide. That is variation which cannot occur: every part that enters an identity has already been refused unless
@@ -329,11 +348,7 @@ def test_the_collision_is_unrepresentable_rather_than_hashed_around():
 
     What this pins is the reachability claim -- there is no way to construct an identifying part on another boundary."""
     for boundary in DIGEST_BOUNDARIES:
-        if boundary in IDENTIFYING_BOUNDARIES:
-            assert part(boundary=boundary).identifying is True
-        else:
-            with pytest.raises(hn.Unidentified):
-                part(boundary=boundary)
+        assert part(boundary=boundary).identifying is (boundary in IDENTIFYING_BOUNDARIES), boundary
 
 
 def test_the_default_boundary_is_the_true_statement_about_existing_callers():
@@ -364,9 +379,11 @@ def test_the_trace_may_never_key_an_identity_even_though_we_hold_its_bytes():
     assert p.identifying is False
 
 
-def test_a_harness_of_nothing_but_a_trace_has_no_identity_and_is_refused():
+def test_a_harness_of_nothing_but_a_trace_has_no_identity():
+    h = hn.Harness(parts=(part(kind="tool_trace", sourcing="in_the_request", label="", digest="a" * 64),))
+    assert h.has_identity is False
     with pytest.raises(hn.Unidentified, match="identified by bytes we hold"):
-        hn.Harness(parts=(part(kind="tool_trace", sourcing="in_the_request", label="", digest="a" * 64),))
+        h.identity
 
 
 def test_every_determinism_licenses_something_so_forgetting_one_is_a_failure():
@@ -433,3 +450,115 @@ def test_a_call_missing_any_of_the_three_digests_is_refused():
 def test_an_unknown_determinism_is_refused_rather_than_defaulted_to_the_harmless_answer():
     with pytest.raises(hn.Unidentified, match="not one of"):
         hn.license_for("probably_fine")
+
+
+# --- the first real collector, and what writing it revealed ---------------------------------------------------------------
+
+TERSE_BODY = {
+    "messages": [{"role": "system", "content": TERSE}, {"role": "user", "content": "Q1"}],
+    "tools": [{"function": {"name": "search", "parameters": {"type": "object"}}}],
+    "temperature": 0.0,
+    "top_p": 1.0,
+}
+
+
+def collected(body=None):
+    return hn.collect_from_request(body if body is not None else TERSE_BODY,
+                                  collector="surround-shim", version="0.1")
+
+
+def test_a_harness_read_from_a_request_is_identified_by_its_instruction_and_nothing_else():
+    """The finding, not a limitation. A tools array, a response format and the sampler settings are protocol values the
+    provider renders however it likes, and we do not hold that rendering -- so only the instruction is provably text the
+    model read. It is also the part measured to move accuracy 12.04 points."""
+    c = collected()
+    assert [p.kind for p in c.harness.parts if p.identifying] == ["instruction"]
+    assert {p.kind for p in c.harness.parts if not p.identifying} == {"tool_schemas", "decoding"}
+    assert hn.REQUEST_BOUNDARIES["instruction"] == "model_visible"
+    assert set(hn.REQUEST_BOUNDARIES.values()) - {"model_visible"} == {"parsed"}
+
+
+def test_the_senders_silence_is_not_a_contradiction():
+    """The defect writing this collector found: the manifest claims 'I can reach this IF it is there', and comparing it
+    against the parts held called every ordinary request a collector regression."""
+    c = collected({"messages": [{"role": "system", "content": TERSE}]})
+    assert "decoding" not in [p.kind for p in c.harness.parts]
+    assert c.contradictions == ()
+    assert c.our_failures == ()
+    assert c.admissible_to_a_verdict() is True
+
+
+def test_a_denial_of_the_manifests_claim_is_still_a_contradiction():
+    """The alarm has to survive the fix that stopped it firing on the sender."""
+    c = hn.Collection(
+        manifest=hn.Manifest(collector="s", version="1", reaches=("instruction", "decoding")),
+        harness=hn.Harness(parts=(part(),)),
+        absences=(hn.Absence(kind="decoding", reason="not_reachable", detail="SDK renamed the sampling block"),))
+    assert c.contradictions == ("decoding",)
+
+
+def test_a_claimed_part_nobody_said_anything_about_is_a_contradiction():
+    c = hn.Collection(manifest=hn.Manifest(collector="s", version="1", reaches=("instruction", "decoding")),
+                      harness=hn.Harness(parts=(part(),)))
+    assert c.contradictions == ("decoding",)
+
+
+def test_a_request_with_no_system_message_keeps_its_parts_and_supports_no_claim():
+    """The permissive half on a real body, and the data-loss bug that found it: the sampler setting IS collected, so
+    discarding it made a part the collector had reached look like one it never mentioned -- which the contradiction check
+    then correctly flagged against us."""
+    c = collected({"messages": [{"role": "user", "content": "Q"}], "temperature": 0.0})
+    assert [p.kind for p in c.harness.parts] == ["decoding"]
+    assert c.harness.has_identity is False
+    assert c.admissible_to_a_verdict() is False
+    assert c.contradictions == ()
+    assert "no part was identified" in c.why_not()
+
+
+def test_every_part_the_collector_cannot_reach_says_whose_absence_it_is():
+    c = collected()
+    by_kind = {a.kind: a for a in c.absences}
+    for pushed in ("loop", "turn_budget", "retry_policy", "context_partitioning"):
+        assert by_kind[pushed].blames == "sender"
+    assert by_kind["tool_extension"].blames == "nobody"
+    assert by_kind["tool_trace"].blames == "sender"
+    assert c.unaccounted == ()
+
+
+def test_the_toolset_digest_does_not_depend_on_the_order_the_caller_listed_them():
+    """An unsorted digest would make two identical toolsets look different."""
+    two = dict(TERSE_BODY, tools=[{"function": {"name": "a", "parameters": {}}},
+                                  {"function": {"name": "b", "parameters": {}}}])
+    flipped = dict(TERSE_BODY, tools=list(reversed(two["tools"])))
+    d1 = {p.kind: p.digest for p in collected(two).harness.parts}["tool_schemas"]
+    d2 = {p.kind: p.digest for p in collected(flipped).harness.parts}["tool_schemas"]
+    assert d1 == d2
+
+
+def test_the_instruction_is_hashed_raw_so_two_wordings_are_two_harnesses():
+    a = collected()
+    b = collected(dict(TERSE_BODY, messages=[{"role": "system", "content": EXPLAIN},
+                                             {"role": "user", "content": "Q1"}]))
+    assert a.harness.identity != b.harness.identity
+
+
+def test_the_instruction_is_hashed_raw_down_to_case_and_whitespace():
+    """The invariant the whole module rests on, and a mutation that lowercased the instruction passed every other test
+    here. The model reads the STRING, not its meaning: 0.6243 against 0.7447 came from one sentence's wording, so two
+    spellings are two harnesses even when a human would call them the same instruction.
+
+    This is also exactly where canonicalising is forbidden while it is allowed for the protocol values beside it -- the
+    difference is who reads them."""
+    base = collected()
+    for variant in (TERSE.lower(), TERSE.upper(), "  " + TERSE, TERSE + "\n", TERSE.replace(". ", ".  ")):
+        assert variant != TERSE or True
+        other = collected(dict(TERSE_BODY, messages=[{"role": "system", "content": variant},
+                                                     {"role": "user", "content": "Q1"}]))
+        assert other.harness.identity != base.harness.identity, repr(variant)
+
+
+def test_the_manifest_is_static_per_version_so_it_can_actually_contradict():
+    """A manifest that adapted to what it happened to find could never contradict a record, which is the one thing it is
+    for."""
+    assert collected().manifest.reaches == hn.FROM_A_REQUEST
+    assert collected({"messages": [{"role": "user", "content": "Q"}]}).manifest.reaches == hn.FROM_A_REQUEST

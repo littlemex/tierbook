@@ -165,14 +165,6 @@ class Part:
                 f"measurement")
         if self.boundary not in DIGEST_BOUNDARIES:
             raise Unidentified(f"{self.boundary!r} is not one of {DIGEST_BOUNDARIES}")
-        if self.digest and self.identifying and self.boundary not in IDENTIFYING_BOUNDARIES:
-            raise Unidentified(
-                f"{self.kind!r} is identified by a digest over {self.boundary!r}, and only "
-                f"{list(IDENTIFYING_BOUNDARIES)} can support a claim that two runs had the same input. The two "
-                f"mistakes run in opposite directions: two client versions serialising differently decode to the same "
-                f"text the model read, so keying on the wire format splits runs that were identical; and two strings "
-                f"that canonicalise to one value can behave differently embedded verbatim, so keying on the parsed "
-                f"value merges runs that were not")
         if self.read_lag_seconds is not None and self.read_lag_seconds < 0:
             raise Unidentified(f"read_lag_seconds={self.read_lag_seconds!r} would mean it was read after the request it "
                                f"describes")
@@ -185,8 +177,18 @@ class Part:
 
     @property
     def identifying(self) -> bool:
-        """Whether this part may contribute to the harness's identity."""
+        """Whether this part may contribute to the harness's identity. Three conditions, and all of them are needed.
+
+        The first version refused a part whose digest was over the wrong boundary. That was the wrong mechanism, and
+        writing the first real collector is what showed it: a `tools` array and a sampler setting are **in the request**
+        and are **not text the model reads**, so `in_the_request` with a `parsed` digest is the common case and the
+        refusal made it unrepresentable. Widening this predicate instead makes the wrong identity unrepresentable rather
+        than the ordinary part refused -- and the two mistakes the boundary rule exists to stop are still stopped,
+        because such a part simply never enters the hash.
+        """
         if self.kind in Part.NEVER_IDENTIFYING:
+            return False
+        if self.digest and self.boundary not in IDENTIFYING_BOUNDARIES:
             return False
         return self.sourcing in IDENTIFYING_SOURCING
 
@@ -221,15 +223,28 @@ class Harness:
         kinds = [p.kind for p in self.parts]
         if len(set(kinds)) != len(kinds):
             raise Unidentified(f"two parts share a kind in {sorted(kinds)}, so nothing says which one applied")
-        if not any(p.identifying for p in self.parts):
-            raise Unidentified(
-                "no part of this harness is identified by bytes we hold, so its identity would be constant across every "
-                "possible harness. At minimum the instruction is in the request; a record without it is a record of "
-                "somebody's description of a run rather than of the run")
+
+    @property
+    def has_identity(self) -> bool:
+        """Whether anything here is identified by bytes we hold that the model provably read."""
+        return any(p.identifying for p in self.parts)
 
     @property
     def identity(self) -> str:
-        """Derived from the identifying parts, in a fixed order, so it cannot be kept across a change to them."""
+        """Derived from the identifying parts, in a fixed order, so it cannot be kept across a change to them.
+
+        Raised rather than returned when nothing identifies this harness. The refusal used to be at CONSTRUCTION, and
+        writing the first collector showed that was the wrong place: a request carrying sampler settings and no system
+        message yields parts that are real and cannot key anything, and refusing the object threw those parts away --
+        they then appeared neither held nor explained, which the contradiction check correctly flagged as the collector
+        saying nothing about a part it claimed. The parts are not the problem. The identity is, and it is missing exactly
+        where it is read.
+        """
+        if not self.has_identity:
+            raise Unidentified(
+                "no part of this harness is identified by bytes we hold that the model provably read, so an identity "
+                "would be constant across every possible harness. At minimum the instruction is in the request; a "
+                "record without it describes somebody's account of a run rather than the run")
         h = hashlib.sha256()
         for p in sorted((p for p in self.parts if p.identifying), key=lambda p: p.kind):
             h.update(f"{p.kind}={p.digest};".encode())
@@ -255,7 +270,8 @@ class Harness:
         return self.identity == other.identity
 
     def __str__(self) -> str:
-        return (f"harness {self.identity} from {len(self.parts)} part(s); "
+        who = self.identity if self.has_identity else "no identity"
+        return (f"harness {who} from {len(self.parts)} part(s); "
                 f"unobserved {list(self.unobserved) or 'none'}; unrecorded {list(self.missing) or 'none'}")
 
 
@@ -430,14 +446,29 @@ class Collection:
 
     @property
     def contradictions(self) -> tuple[str, ...]:
-        """Parts the collector claims it can reach and did not deliver.
+        """Parts the collector claims it can reach here and then said it could not see, or said nothing about.
 
-        The one alarm this structure exists to raise. A hole that the manifest says should not be there is not a
-        property of the run -- it is the collector regressing, and it is invisible in every other reading because the
-        absence is spelled exactly the way a legitimate one is.
+        The one alarm this structure exists to raise. A hole the manifest says should not be there is not a property of
+        the run -- it is the collector regressing, and it is invisible in every other reading because the absence is
+        spelled exactly the way a legitimate one is.
+
+        **The sender's silence is NOT a contradiction, and getting that wrong inverts the whole vocabulary.** A manifest
+        claims "I can reach this IF it is there", not "this will be there". The first version of this property compared
+        the manifest against the parts held and called every difference a contradiction, so a request that simply
+        carried no decoding settings was reported as the collector regressing -- blaming us for the sender's silence,
+        which is the exact confusion `ABSENCE_BLAMES` exists to prevent. It was found by writing the first real
+        collector, whose every ordinary run tripped it.
+
+        So the two cases that ARE contradictions: the part is absent as `not_reachable`, which directly denies the
+        manifest's claim; or the part is unaccounted for entirely, which claims a capability and then says nothing.
+        `extraction_failed` is consistent with the claim -- it says the capability exists and failed on this input --
+        and it is reported by `our_failures` instead.
         """
         held = {p.kind for p in self.harness.parts} if self.harness else set()
-        return tuple(k for k in self.manifest.reaches if k not in held)
+        denied = {a.kind for a in self.absences if a.reason == "not_reachable"}
+        explained = {a.kind for a in self.absences}
+        return tuple(k for k in self.manifest.reaches
+                     if k in denied or (k not in held and k not in explained))
 
     @property
     def our_failures(self) -> tuple[str, ...]:
@@ -452,7 +483,8 @@ class Collection:
         can be read at face value. And no identifying part means the identity would be constant across every possible
         harness, so a comparison against it groups things that have nothing in common.
         """
-        return self.status == "complete" and not self.contradictions and self.harness is not None
+        return (self.status == "complete" and not self.contradictions
+                and self.harness is not None and self.harness.has_identity)
 
     def why_not(self) -> str:
         """One sentence naming everything standing between this record and a published claim."""
@@ -465,13 +497,13 @@ class Collection:
         if self.contradictions:
             parts.append(f"the manifest claims to reach {list(self.contradictions)} and did not deliver them, so no "
                          f"absence here can be read at face value")
-        if self.harness is None:
-            parts.append("no part was identified by bytes we hold, so the identity would be the same for every "
-                         "possible harness")
+        if self.harness is None or not self.harness.has_identity:
+            parts.append("no part was identified by bytes we hold that the model provably read, so the identity would "
+                         "be the same for every possible harness")
         return "not admissible to a verdict -- " + "; and ".join(parts)
 
     def __str__(self) -> str:
-        who = self.harness.identity if self.harness else "no identity"
+        who = self.harness.identity if (self.harness and self.harness.has_identity) else "no identity"
         return (f"collection {who} ({self.status}); held "
                 f"{len(self.harness.parts) if self.harness else 0}; absent {len(self.absences)}; "
                 f"unaccounted {list(self.unaccounted) or 'none'}; contradictions {list(self.contradictions) or 'none'}")
@@ -588,3 +620,102 @@ def digest_bytes(payload: str) -> str:
         raise Unidentified("an empty payload has no content to identify; a part that is genuinely empty is a part that "
                            "was not applied, and that is a different record")
     return hashlib.sha256(payload.encode()).hexdigest()
+
+#: What this collector claims it can reach from a request body, and nothing more. Static per version on purpose: a
+#: manifest that adapted to what it happened to find could never contradict a record, which is the one thing it is for.
+FROM_A_REQUEST = ("instruction", "tool_schemas", "readout", "decoding")
+
+#: Which boundary each of those digests is actually over -- and this table is the finding rather than a detail.
+#:
+#: Only the instruction is text the model reads. A `tools` array, a `response_format` and the sampler settings are
+#: PROTOCOL VALUES: the provider renders them into the prompt however it likes, or does not render them at all, and we
+#: do not hold that rendering. So they are `parsed`, and because only a `model_visible` digest may key an identity,
+#: **a harness identified from a request body is identified by its instruction and by nothing else.**
+#:
+#: That is not a limitation of this function. It is the same fact the measurement found from the other side: the
+#: instruction moved accuracy 12.04 points, and it is also the only part of a request whose exact bytes we can prove the
+#: model read.
+REQUEST_BOUNDARIES = {
+    "instruction": "model_visible",
+    "tool_schemas": "parsed",
+    "readout": "parsed",
+    "decoding": "parsed",
+}
+
+
+def _canonical_scalars(pairs: list[tuple[str, object]]) -> str:
+    """Render protocol scalars for hashing, in the order given rather than sorted.
+
+    Canonicalising IS allowed here, and the rule that forbids it elsewhere says why: a machine reads these, so two
+    spellings of the same setting behave identically. The instruction is the opposite case and is hashed raw.
+    """
+    return ";".join(f"{k}={v!r}" for k, v in pairs)
+
+
+def collect_from_request(body: dict, *, collector: str, version: str) -> Collection:
+    """Read what a request body says about the harness around the model. The shim, reduced to a pure function.
+
+    No dependency and no network: this package has none by design, and a component that decides where money goes should
+    not be able to break because something it did not need moved. It takes the body a gateway already holds.
+
+    Everything it cannot reach becomes an absence that says WHOSE it is, which is the whole point of F126's vocabulary
+    meeting its first real caller:
+
+    * the four pushed parts (`loop`, `turn_budget`, `retry_policy`, `context_partitioning`) are `not_provided` when the
+      sender declared nothing -- **their absence is the sender's, not ours.** A request body has no place to put them.
+    * `tool_extension` is `not_observable`, structurally and permanently.
+    * `tool_trace` is `not_provided`: at request time the calls have not happened, so there is nothing to have sent.
+    """
+    parts: list[Part] = []
+    absences: list[Absence] = []
+
+    def add(kind: str, payload: str, label: str = "") -> None:
+        parts.append(Part(kind=kind, sourcing="in_the_request", label=label,
+                          digest=digest_bytes(payload), boundary=REQUEST_BOUNDARIES[kind]))
+
+    messages = body.get("messages") or []
+    system = "\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "system")
+    if system.strip():
+        add("instruction", system)
+    else:
+        absences.append(Absence(kind="instruction", reason="not_provided"))
+
+    tools = body.get("tools")
+    if tools:
+        # The declared shapes, not the implementations. Sorted by name, because the order a caller lists tools in is not
+        # part of what it offered -- and an unsorted digest would make two identical toolsets look different.
+        shapes = sorted(_canonical_scalars([("name", (tl.get("function") or tl).get("name")),
+                                            ("params", (tl.get("function") or tl).get("parameters"))])
+                        for tl in tools)
+        add("tool_schemas", "|".join(shapes), label=f"{len(tools)} tool(s)")
+    else:
+        absences.append(Absence(kind="tool_schemas", reason="not_provided"))
+
+    fmt = body.get("response_format")
+    if fmt:
+        add("readout", _canonical_scalars([("response_format", fmt)]),
+            label=str(fmt.get("type", "")) if isinstance(fmt, dict) else "")
+    else:
+        # Not our failure: without a declared format the answer is read out of prose by a convention that lives on the
+        # caller's side, and this repository has measured what that costs -- a mis-set convention put 1,822 of 2,364
+        # answers on one option.
+        absences.append(Absence(kind="readout", reason="not_provided"))
+
+    knobs = [(k, body[k]) for k in ("temperature", "top_p", "top_k", "seed") if k in body]
+    if knobs:
+        add("decoding", _canonical_scalars(knobs), label=",".join(k for k, _ in knobs))
+    else:
+        absences.append(Absence(kind="decoding", reason="not_provided"))
+
+    for kind in ("loop", "turn_budget", "retry_policy", "context_partitioning"):
+        absences.append(Absence(kind=kind, reason="not_provided"))
+    absences.append(Absence(kind="tool_extension", reason="not_observable"))
+    absences.append(Absence(kind="tool_trace", reason="not_provided"))
+
+    return Collection(manifest=Manifest(collector=collector, version=version, reaches=FROM_A_REQUEST),
+                      status="complete",
+                      # Every part that was reached is kept, whether or not any of them can key an identity. A
+                      # request carrying sampler settings and no system message holds real parts and identifies nothing,
+                      # and discarding them made them look like parts the collector never mentioned.
+                      harness=Harness(parts=tuple(parts)) if parts else None,
+                      absences=tuple(absences))

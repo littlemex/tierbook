@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook read-harness  read a request body: what it says about the harness, and what it cannot
     tierbook admit-traces  what two runs' tool traces license: refuse, unknown, or neither
     tierbook conversation-cost  what a sequence of turns in one context cost, and whether two compare
     tierbook admit-comparison  whether two arms may be compared, given what each was missing
@@ -730,6 +731,34 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -
 
 
 @_refuses
+def cmd_read_harness(args) -> int:
+    """Read a request body and print what it says about the harness, and what it cannot say.
+
+    The collector, at a door. It takes the JSON body a gateway already holds and needs nothing else -- no network and no
+    dependency, because a component deciding where money goes should not break because something it did not need moved.
+
+    What it exists to make visible: **a harness read from a request is identified by its instruction and nothing else.**
+    A tools array, a response format and the sampler settings are protocol values that the provider renders into the
+    prompt however it likes, and we do not hold that rendering, so they are recorded and cannot key an identity.
+
+    Exit 2 when the record is well formed and cannot support a claim.
+    """
+    with open(args.request, encoding="utf-8") as fh:
+        body = json.load(fh)
+    coll = hn.collect_from_request(body, collector=args.collector, version=args.collector_version)
+    print(f"manifest: {coll.manifest}")
+    for part in (coll.harness.parts if coll.harness else ()):
+        keys = "keys the identity" if part.identifying else f"recorded only ({part.boundary})"
+        print(f"held: {part} -- {keys}")
+    for absence in coll.absences:
+        print(f"{absence}")
+    if coll.our_failures:
+        print(f"ours to fix: {list(coll.our_failures)}")
+    print(coll.why_not())
+    return 0 if coll.admissible_to_a_verdict() else 2
+
+
+@_refuses
 def cmd_admit_traces(args) -> int:
     """What two runs' tool traces license: refuse the comparison, widen it to unknown, or neither.
 
@@ -1300,6 +1329,15 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    rh = sub.add_parser("read-harness", parents=[common],
+                        help="read a request body and print what it says about the harness, and what it cannot say")
+    rh.add_argument("--request", required=True, help="a JSON file holding the request body")
+    rh.add_argument("--collector", default="surround-shim", help="which collector this is, for the manifest")
+    rh.add_argument("--collector-version", default="0.1",
+                    help="its version. A part that stopped being readable between two versions cannot be attributed "
+                         "without it")
+    rh.set_defaults(fn=cmd_read_harness, registry=None)
 
     at = sub.add_parser("admit-traces", parents=[common],
                         help="what two runs' tool traces license: refuse, widen to unknown, or neither")

@@ -6244,6 +6244,75 @@ again. Six mutations, all caught: letting the trace key an identity, dropping th
 in two places), making an unstated promise refuse, allowing a missing digest, and defaulting an unknown
 determinism. Suite: **1,755 passing, 3 skipped.**
 
+## F134 — The first real collector, and the three defects it found in code already shipped
+
+Closes T8, and **T8's own premise was wrong**: it said four parts had no collector, implying the other six did.
+**None did.** `harness.py` had a vocabulary, a digest function and a door that took payloads from an operator, and
+nothing that read a request. So the work was not four collectors; it was the first one.
+
+`collect_from_request(body, collector=, version=)` takes the JSON body a gateway already holds. No dependency and
+no network, which is what this package's `dependencies = []` is for.
+
+### The finding: a harness read from a request is identified by its instruction and nothing else
+
+`REQUEST_BOUNDARIES` is the result, and it is the point rather than a detail:
+
+| part | boundary | keys the identity |
+|---|---|---|
+| `instruction` | `model_visible` | **yes** |
+| `tool_schemas` | `parsed` | no |
+| `readout` | `parsed` | no |
+| `decoding` | `parsed` | no |
+
+A `tools` array, a `response_format` and the sampler settings are **protocol values**. The provider renders them
+into the prompt however it likes, or not at all, and **we do not hold that rendering** — so only the instruction is
+provably text the model read. It is also the part measured to move accuracy **12.04 points**, which is the same
+fact arriving from the other side.
+
+### Defect 1 — `contradictions` blamed us for the sender's silence
+
+Shipped in F126 and wrong. A manifest claims *"I can reach this if it is there"*, not *"this will be there"*. The
+property compared the manifest against the parts held and called every difference a contradiction, so **a request
+that simply carried no sampler settings was reported as the collector regressing** — the exact inversion
+`ABSENCE_BLAMES` exists to prevent. Every ordinary run of the first collector tripped it.
+
+Now: a contradiction is the part being absent as `not_reachable` (which denies the claim directly) or unaccounted
+for entirely (which claims a capability and says nothing). `extraction_failed` is **consistent** with the claim —
+the capability exists and failed on this input — and belongs to `our_failures`.
+
+### Defect 2 — F128's refusal made the common case unrepresentable
+
+`Part.__post_init__` refused an identifying part whose digest was over a non-`model_visible` boundary. But
+`in_the_request` **with** a `parsed` digest is the ordinary case, so the collector could not represent a tools
+array at all.
+
+The refusal was the wrong mechanism. `identifying` now derives from all three conditions, so such a part is
+**recorded and never enters the hash** — the wrong identity is unrepresentable instead of the ordinary part being
+refused, and the two mistakes the boundary rule exists to stop are still stopped.
+
+### Defect 3 — collected parts were being discarded
+
+A request with sampler settings and no system message yields parts that are real and identify nothing. `Harness`
+refused to exist without an identifying part, so those parts were thrown away — and then appeared neither held nor
+explained, which the (now fixed) contradiction check correctly flagged.
+
+**The refusal moved from construction to use.** `Harness.identity` raises when nothing identifies it and
+`has_identity` reports it; admissibility requires an identity rather than merely a harness object. The parts were
+never the problem: the identity is, and it is now missing exactly where it is read.
+
+### The mutation that survived, and what it says
+
+Eight mutations, **seven caught and one missed**: lowercasing the instruction before hashing passed every test.
+That is the invariant the whole module rests on — **the model reads the string, not its meaning**, and 0.6243
+against 0.7447 came from one sentence's wording. The existing test compared two different instructions, which a
+case fold does not merge.
+
+The test now varies **only** case and whitespace, and both mutations fail against it. This is also the sharpest
+statement of why canonicalising is forbidden for the instruction and allowed for the protocol values beside it:
+**the difference is who reads them.**
+
+Production caller `tierbook read-harness`. Suite: **1,766 passing, 3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

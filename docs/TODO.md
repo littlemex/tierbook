@@ -169,11 +169,15 @@ token counts, and a field on the response for an action.
 effect to say whether it is one setting or a sweep, with the control's value beside it. The second is largely
 discharged by `OperatingPoint` (`fixed` against `integrated`) and `Baseline`; the first is not built.
 
-### T8 -- Harness parts that are declared and not yet collected
+### T8 -- DONE (F134), and the premise was wrong
 
-`harness.py` names eight parts and classifies how each can be reached. Four of them -- `turn_budget`, `retry_policy`,
-`readout`, `decoding` -- have no collector, so a real record reports them as unrecorded. The vocabulary exists so that
-absence is visible; closing it means writing the collectors.
+It said four parts had no collector, implying the rest did. **None did.** `collect_from_request` is the first one,
+with `tierbook read-harness` as its caller. It found three defects in code already shipped, and the finding worth
+carrying forward is that **a harness read from a request is identified by its instruction and nothing else** --
+everything else in a body is a protocol value whose rendering into the prompt we do not hold.
+
+**Not collected, and correctly so:** `loop`, `turn_budget`, `retry_policy` and `context_partitioning` are pushed by
+the owner, and a request body has no place to put them. Their absence is the sender's, which the record now says.
 
 ### T9 -- Repeats, which the ledger says bound everything
 
