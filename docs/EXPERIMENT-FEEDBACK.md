@@ -6434,7 +6434,7 @@ The generalisation worth keeping: **for an artefact whose value is that somebody
 independent construction finds a class of defect no amount of testing the first one reaches.** It cost less than a
 feature would have and it is the only thing that found any of these.
 
-Python 37 tests, TypeScript 29, five golden identities reproduced by both. Suite here: **1,782 passing, 3 skipped.**
+Python 37 tests, TypeScript 29, five golden identities reproduced by both. Suite here: **1,781 passing, 3 skipped.**
 
 ## Not requirements, deliberately
 
