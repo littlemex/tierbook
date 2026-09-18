@@ -91,6 +91,76 @@ class Validity:
                 f"expressed by not declaring it rather than by declaring it stale")
 
 
+
+#: How a claim that a probability is calibrated was established. Closed, and the distinction is the whole point: a
+#: vendor saying "all answers are accompanied with calibrated probabilities" has made a claim, not supplied a
+#: measurement, and the two are not interchangeable.
+#:
+#: `measured_here` means somebody binned this candidate's own outputs against outcomes on the buyer's items.
+#: `vendor_asserted` means it was stated. `unmeasured` is the honest state of anything nobody has binned -- and it is
+#: what a probability arriving from a new interface starts as.
+CALIBRATION_EVIDENCE = ("measured_here", "vendor_asserted", "unmeasured")
+
+
+@dataclass(frozen=True)
+class Confidence:
+    """A probability a candidate returns beside its answer, and what is known about whether it means anything.
+
+    Some interfaces return a decision **and** a probability in one call. That is worth having: it is a
+    `own_competence` signal at zero extra passes, which is the cheapest thing a gate can condition on. What it is not
+    is calibrated because it was described as calibrated.
+
+    **Two claims travel together in vendor copy and neither implies the other.** "The model never makes type errors"
+    is a statement about FORM -- a decoder held to a grammar cannot emit a non-member -- and it is checkable and true.
+    "Calibrated probabilities" is a statement about CONTENT, and a decoder can place 0.99 on the wrong member of an
+    enum without violating its grammar once. This project measured that shape: 1,822 of 2,364 answers on one option,
+    every one well formed. So `evidence` is required, `vendor_asserted` cannot support a decision that trusts the
+    number, and `reliability` is the measurement that would change that.
+    """
+
+    evidence: str
+    #: The measured gap between stated confidence and observed accuracy, when somebody measured it. Absent means
+    #: nobody did, which is not the same as zero -- and treating it as zero is exactly what accepting the claim does.
+    reliability_gap: float | None = None
+    bins: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.evidence not in CALIBRATION_EVIDENCE:
+            raise Inadmissible(f"{self.evidence!r} is not one of {CALIBRATION_EVIDENCE}")
+        if self.evidence == "measured_here" and (self.reliability_gap is None or self.bins is None):
+            raise Inadmissible(
+                "evidence='measured_here' claims somebody binned this candidate's outputs against outcomes, so the gap "
+                "and the number of bins are what that measurement produced; without them the claim is 'vendor_asserted' "
+                "wearing the stronger word")
+        if self.evidence != "measured_here" and (self.reliability_gap is not None or self.bins is not None):
+            raise Inadmissible(
+                f"evidence={self.evidence!r} carries a reliability measurement, which only 'measured_here' can have: a "
+                f"gap nobody measured here is a number from somewhere this project cannot check")
+        if self.reliability_gap is not None and not 0.0 <= self.reliability_gap <= 1.0:
+            raise Inadmissible(f"reliability_gap={self.reliability_gap!r} is not a gap between two probabilities")
+        if self.bins is not None and self.bins < 2:
+            raise Inadmissible(f"bins={self.bins} cannot show a reliability curve; one bin is a single average and says "
+                               f"nothing about whether high confidence means anything different from low")
+
+    def may_be_trusted(self, *, max_gap: float) -> bool:
+        """Whether a decision may condition on the NUMBER rather than merely on its ordering.
+
+        Refused for anything not measured here, because that is the state a claim leaves it in. An unmeasured
+        probability is still usable as a **ranking** -- ordering items by it needs no calibration at all -- and this
+        method is about the stronger use: reading 0.85 as 85%.
+        """
+        if self.evidence != "measured_here":
+            raise Inadmissible(
+                f"the calibration of this confidence is {self.evidence!r}, so reading its number as a probability is "
+                f"reading a claim. Rank items by it -- that needs no calibration -- or bin it against outcomes on the "
+                f"buyer's own items and record the gap")
+        return self.reliability_gap <= max_gap
+
+    def __str__(self) -> str:
+        if self.evidence != "measured_here":
+            return f"confidence, calibration {self.evidence}"
+        return f"confidence, gap {self.reliability_gap:.4f} over {self.bins} bins"
+
 @dataclass(frozen=True)
 class Quantity:
     """One measurable thing a policy may condition on, and everything needed to know whether it may.
@@ -115,6 +185,9 @@ class Quantity:
     #: that performed badly -- and the distinction matters at the door: an unmeasured quantity is admissible on the
     #: axes this structure checks and says nothing about whether it is worth conditioning on.
     performance: Performance | None = None
+    #: Set when this quantity IS a probability the candidate returned beside its answer. `None` means it is not that
+    #: kind of quantity -- an entropy or a queue length has no calibration claim to check.
+    confidence: Confidence | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -170,6 +243,9 @@ class Quantity:
                 f"{self.validity.calibrated_for}. Those are different conditions, and a quantity fitted in one does "
                 f"not transfer to the other by recalibration -- it is about different items, so the calibration does "
                 f"not describe this quantity at all")
+        if self.confidence is not None and not isinstance(self.confidence, Confidence):
+            raise Inadmissible(f"confidence={self.confidence!r} is not a Confidence; a bare flag would record that a "
+                               f"probability was returned and not whether anybody checked what it means")
         if self.performance is not None and not isinstance(self.performance, Performance):
             raise Inadmissible(
                 f"performance={self.performance!r} is not a Performance. A bare number here would be the stored scalar "

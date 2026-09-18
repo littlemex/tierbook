@@ -5461,6 +5461,51 @@ threshold** -- a floor, a cohort ceiling, section 2's clauses -- and not against
 
 **Suite green at 1,946 passed, 3 skipped.** Six mechanisms mutated and each fails tests.
 
+## F122 — A typed-output interface taken in: the form guarantee is real, the calibration claim is not a measurement
+
+**Where it came from.** A vendor shipping "unstructured state in, typed probabilistic decisions out", where "the model
+never makes type errors" and "all answers are accompanied with calibrated probabilities", at **$0.042 / MTok input**
+against a frontier range of $0.20-$10. This project audited its published claims in an earlier round; what is
+implemented here is the **interface**, not the claims.
+
+**It cannot be measured today: the API is early access behind a waitlist.** So the interface is representable and no
+number about it enters this ledger. That is stated rather than worked around.
+
+**Two claims travel together in the copy and neither implies the other.**
+
+| claim | about | verdict |
+|---|---|---|
+| "never makes type errors" | **form** | real, checkable, and now representable: `schema_constrained` |
+| "calibrated probabilities" | **content** | a claim. A decoder can place 0.99 on the wrong member of an enum without violating its grammar once |
+
+**The form half is a genuine capability and is recorded as one.** `RULE_CAN_FAIL_TO_PARSE` is a total classification
+over the extraction rules, so `schema_constrained` is the only rule whose unparsed share is **0 by construction** rather
+than small -- and adding a rule without deciding this breaks a test. It carries no cue, because the constraint is on
+what may be emitted rather than on where to look.
+
+**And the degeneracy check still runs for it, which is the point of taking it in this way.** This project's measured
+break was **1,822 of 2,364 answers on one option out of ten, every one of them perfectly well formed**. Skipping the
+check for a rule that cannot produce a parse failure would be reading "no format errors" as "no reader errors". A
+constrained run that clusters is refused exactly as any other is.
+
+**The content half gets a receptacle that cannot launder it.** `Confidence` requires `evidence` from a closed
+vocabulary, and `may_be_trusted` **refuses for anything but `measured_here`** -- with a message naming the use that needs
+no calibration at all: **ranking**. Ordering items by an uncalibrated score is free; reading 0.85 as 85% is the claim.
+`measured_here` cannot be declared without the gap and the bin count, so the weaker claim cannot wear the stronger word,
+and one bin is refused because a single average says nothing about whether high confidence differs from low.
+
+**Why this is worth having at all**, stated plainly: a probability returned **beside the answer costs zero extra
+passes**, which by this project's own cost arithmetic makes it the cheapest thing a gate can condition on -- and it is a
+`own_competence` signal, so it is admissible to a gate on every axis. What it does not touch is the gap this project has
+been unable to fill: routing turns on `P(strong correct) - P(box correct)`, and a confidence returned by the box is
+another estimator of the **second** term.
+
+**The audit came back clean, with the reason.** Every existing use of "confidence" in this codebase is a statistical
+**bound** -- `abstain`'s stop test deliberately uses an upper bound so an uncertain "probably hopeless" keeps spending --
+and nothing consumes a model-returned probability, because until now there was nowhere to put one.
+
+**Suite green at 1,964 passed, 3 skipped.** Four mechanisms mutated and each fails tests.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

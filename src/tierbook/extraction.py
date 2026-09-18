@@ -29,7 +29,25 @@ from tierbook.evidence import EvidenceError
 #: conditions comparable. `regex_in_reply` searches the whole reply, which cannot be told apart from the model
 #: mentioning an option in passing. `parsed_structure` reads a declared field. `unrecorded` is what every outcome
 #: written before this existed carries -- not a guess, but the true statement that nothing says.
-EXTRACTION_RULES = ("next_token", "answer_cue", "regex_in_reply", "parsed_structure", "unrecorded")
+EXTRACTION_RULES = ("next_token", "answer_cue", "regex_in_reply", "parsed_structure", "schema_constrained",
+                    "unrecorded")
+
+#: Whether the rule can fail to read a reply at all, as a TOTAL classification: adding a rule without deciding this
+#: breaks a test rather than defaulting the new rule to fallible.
+#:
+#: `schema_constrained` is the one that cannot. A decoder held to a grammar emits a member of the enum or nothing, so
+#: an unparsed reply is impossible **by construction** rather than rare -- which is a real and checkable property, and
+#: is exactly as far as it goes. A vendor describing this as "cannot hallucinate" is restating a format-violation rate
+#: of 0%: it does not stop the decoder placing 99% on the wrong member of the enum, and this ledger has the measured
+#: shape of that failure -- 1,822 of 2,364 items on one option, every one of them perfectly well formed.
+RULE_CAN_FAIL_TO_PARSE = {
+    "next_token": True,
+    "answer_cue": True,
+    "regex_in_reply": True,
+    "parsed_structure": True,
+    "schema_constrained": False,
+    "unrecorded": True,
+}
 
 #: The share of one option that was actually observed when the convention was wrong, and the number every bound here is
 #: answerable to. Not a threshold: a record of what a real break looked like.
@@ -129,7 +147,11 @@ class Extraction:
                 "rule 'answer_cue' reads what follows a cue and no cue is recorded, so nothing says where the answer "
                 "was read from. The cue is the whole content of this rule: appending it in one condition and not the "
                 "other is what made two runs' endpoints different kinds of position")
-        if self.rule != "answer_cue" and self.cue:
+        if self.rule == "schema_constrained" and self.cue:
+            raise EvidenceError(
+                f"rule 'schema_constrained' reads a decoder held to a grammar and carries cue={self.cue!r}; there is no "
+                f"cue to read after, because the constraint is on what may be emitted rather than on where to look")
+        if self.rule not in ("answer_cue", "schema_constrained") and self.cue:
             raise EvidenceError(f"rule {self.rule!r} carries cue={self.cue!r} but does not read one, so the cue "
                                 f"describes something that did not happen")
 
@@ -167,6 +189,10 @@ def refuse_degenerate(answers: list[str | None], extraction: Extraction, *,
     `modal_bound` defaults to `bound_from_options(extraction.options)`, so a caller who has not thought about it gets a
     bound derived from the task rather than a number this module invented.
     """
+    # A constrained decoder is checked here exactly like any other rule, and that is the point. Its guarantee is that
+    # every answer is a well-formed member of the enum; it says nothing about WHICH member, and the measured break in
+    # this project was 1,822 of 2,364 perfectly well-formed answers on one option. Skipping the check for a rule that
+    # cannot produce a parse failure would be reading "no format errors" as "no reader errors".
     if extraction.rule == "unrecorded":
         raise EvidenceError(
             "the extraction rule is 'unrecorded', so there is nothing to check these answers against: the same set of "
