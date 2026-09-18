@@ -5562,6 +5562,93 @@ structure that needed it first, because more than one place asks.
 file, and the `distributed-ai` dependency and its responsibility line — plus seven this side already knew, each with
 what would tell us it is finished, and a table of what is deliberately not being done.
 
+## F124 — The 1.0% routing saving is WITHDRAWN, and the standards survey that led there
+
+**Withdrawal first, because it is the actionable part.** The published figure "routing saved 1.0% of cost"
+(the corrected value after intersecting on item id, F88's neighbourhood) **is withdrawn as a claim.** The raw
+measurements stay as data, with the bias declared unknown.
+
+**Why.** Cache hits depend on whether the previous call in that context shared a prefix. **Routing breaks the
+prefix**, so one routing decision raises the cost of *subsequent* requests — and a per-request cost model
+attributes that nowhere. If those 1,187 items were independent single calls the bias is second-order; if they
+were multi-turn sequences where the cacheable prefix grows, the bias is **first-order and 1.0% could be zero
+or negative**. Which shape the run had is not recorded, so the sign is undetermined.
+
+**Two independent reviewers reached this separately**, and the sharper phrasing is worth keeping verbatim: *a
+published point estimate whose **sign** is undetermined is not an imprecise claim, it is a claim with no
+content beyond its framing. Keeping it published while labelled "unverifiable" is exactly the special
+pleading this design exists to police in others — a harness owner who published an accuracy number under the
+same conditions would be told to retract it.*
+
+**The accuracy findings are untouched.** 0.6243 against 0.7447 with per-item agreement 0.7346 is not a cost
+claim. Withdrawing the routing figure **strengthens** F123's thesis rather than weakening it, because the
+comparison's other side disappears.
+
+**Remediation, concretely.** Re-account both arms on the price card's four legs (`fresh_in`, `cached_in`,
+`cache_write`, `output`) plus `cache_hit_rate_observed`, attach `Spend` at the **conversation** scope rather
+than per request, and republish as an interval. Also: the counterfactual "what would this sequence have cost
+unrouted" is **only definable if the context-partitioning policy was recorded**, which is an independent
+reason for the ninth harness part.
+
+## Two implementation debts this exposes
+
+**`Spend` has two legs where this project's own price card has four.** The schema carries `fresh_in`,
+`cached_in`, `cache_write`, `output`, `cache_hit_rate_observed` and `reusable_cache_tokens`; `spend.LEGS` is
+`("prefill", "generation")`. **The cost model cannot express the price card it is priced against.**
+
+**Cost is attached at the wrong scope.** It is a property of a context trajectory, not of a request.
+
+## The standards survey, so it is not repeated
+
+Eight specifications checked against primary sources. **None carries a content digest of a configuration
+artifact; all identify by name plus version** — the failure this ledger records twice (a model whose every
+declarable field matched another, and a prompt condition called "terse" whose text differed).
+
+| specification | usable | absent |
+|---|---|---|
+| OTel GenAI semconv | 6 of 9 harness parts as named attributes; zero-code auto-instrumentation | `digest`/`sha256`: **0 occurrences in 122 KB**. No notion of who observed a fact or whether it is verifiable. `gen_ai.prompt.version` is explicitly "any versioning scheme chosen by the application" |
+| in-toto Statement v1 | subject identified **purely by digest**; `predicateType` is a URI so third parties extend it; `ResourceDescriptor` already pairs name with digest | no guidance on stating what an attestation does not cover |
+| SCITT — **RFC 9943**, Proposed Standard, 2026-06 | issuer mandatory and first-class; conflicting statements from multiple issuers are explicit; **"does not verify statement accuracy — only authenticity"** | subject is an issuer-defined claim, not a digest |
+| C2PA 2.1 | hash binding, can cover **a portion**; the only spec with a vocabulary for unverifiable provenance (`unknownProvenance`, well-formed against valid) | no assertion-level trust metadata |
+| MCP 2025-06-18 | tool definition: name, title, description, inputSchema, outputSchema, annotations | **no version, hash or digest.** Annotations explicitly untrusted unless the server is. Cannot express "behaviour changed, schema did not" |
+| CycloneDX ML-BOM | model and dataset inventory | not per-request; no inference-time configuration |
+| MLflow prompt registry | versions immutable | **no content addressing**; model config mutable without a version bump; creator an unverified tag |
+| OpenInference | LLM conventions over OTel | hashing: 0 |
+
+## What the two review rounds broke, and what survived
+
+**Four cores did not survive and are dropped rather than standardised.**
+
+1. **Canonicalisation reintroduces the failure in the unsafe direction.** The model consumes **tokens, not
+   semantics**: a tool schema embedded in the prompt pretty-printed in one deployment and minified in another
+   is two different token sequences, and JCS gives them **the same digest**. Applying JCS to a captured wire
+   body also alters it away from what was sent. Fix: **hash raw bytes for anything the model consumes**,
+   canonicalise only control-plane facts and say so, carry the **capture point** on every digest, and read
+   digest inequality as **"unknown", never "different meaning"**.
+2. **The cohort line is not a property of a fact.** Dynamically discovered tool schemas and a live example
+   corpus both sit on it. The rule becomes "anything the protocol holds fixed before workloads are assigned
+   and that can change the outcome distribution", and the honest consequence is that **a dynamic harness may
+   have no defensible cohort until its dependencies are frozen**.
+3. **A pushed fact can only subtract confidence.** A session caches `tools/list` at connect time and runs
+   after the owner's signed change window; the receiver records the new version and the run used the old one
+   — **undetectably**, because absence of observation is the channel's admission criterion. So a pushed fact
+   without a run-time-observable discriminator may only **widen** a verdict to unknown, never narrow one or be
+   recorded as the value used.
+4. **No comparability policy prevents loosening, only quiet loosening.** The smallest useful form is
+   default-deny over the **union** of both runs' coverage lists, with waivers enumerated in the verdict and
+   the policy content-addressed and dated. It **converts a false guarantee into an auditable confession** and
+   should be described that way.
+
+**What survived every attack, and is therefore what to build:** raw bytes at the capture point with no
+canonicalisation; a published list of the parts not captured; and cost at conversation scope on four legs.
+**No cohort digest in the record** — grouping is a downstream analysis whose key is enumerated per analysis.
+**No pushed-fact channel** — an unobservable change is recorded as unobserved.
+
+**One genuine divergence between the reviewers, left open rather than papered over.** Whether the cohort
+manifest should be pre-registered and signed (one view) or absent from the record with grouping done post hoc
+(the other). Both concede the full design only ever made tuning **loud**, not impossible. That single question
+is the next thing to settle.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

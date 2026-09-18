@@ -50,6 +50,42 @@ reproduced without `distributed-ai` says so in its own record rather than in som
 
 **Blocked on.** Nothing.
 
+### T10 -- Republish the routing saving as an interval, or leave it withdrawn
+
+The 1.0% figure is withdrawn (F124). Replacing it needs both arms re-accounted at conversation scope on the
+price card's four legs plus the observed cache hit rate. **If the run's shape was not recorded -- single calls
+against multi-turn sequences -- there may be no defensible replacement**, and leaving it withdrawn is then the
+correct end state rather than a gap.
+
+**Done when.** Either an interval is published with the accounting scope stated, or the ledger says plainly
+that the measurement cannot be reconstructed.
+
+### T11 -- `Spend` has two legs; the price card has four
+
+`spend.LEGS` is `("prefill", "generation")`. The schema's `price_card` carries `fresh_in`, `cached_in`,
+`cache_write`, `output`, `cache_hit_rate_observed` and `reusable_cache_tokens`. The cost model cannot express
+the price card it is priced against, and every cache-related conclusion depends on closing that.
+
+**Done when.** A `Spend` can represent a cached read and a cache write separately from a fresh read, and a
+comparison that mixes cached and uncached prefills is refused rather than averaged.
+
+### T12 -- Attach cost at conversation scope, not per request
+
+Cache eligibility depends on the previous call in the same context. A per-request cost is therefore incomplete
+by construction, and the counterfactual "what would this have cost unrouted" is undefined without the
+context-partitioning policy (T13).
+
+### T13 -- The ninth harness part: the context-partitioning policy
+
+How many contexts exist and what crosses between them. Local Fusion's entire reported saving ($7.47 to $4.54,
+39.2%) lives in this part, and the current eight cannot express it.
+
+### T14 -- Settle the one question the reviewers split on
+
+Pre-registered signed cohort manifest, or no cohort digest in the record with grouping enumerated per
+analysis. Both reviewers concede the full design only made tuning loud rather than impossible, so this is a
+choice about where the loudness lives.
+
 ## Blocked on something outside this repository
 
 ### T3 -- Cost in GPU-seconds rather than tokens
