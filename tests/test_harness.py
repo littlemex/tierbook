@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from tierbook import harness as hn  # noqa: E402
-from tierbook.evidence import HARNESS_SOURCING, IDENTIFYING_SOURCING  # noqa: E402
+from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, HARNESS_SOURCING,  # noqa: E402
+                              IDENTIFYING_SOURCING)
 
 TERSE = "Answer with the option letter only. Do not explain."
 EXPLAIN = "Think step by step, then answer with the option letter."
@@ -155,3 +156,143 @@ def test_the_parts_nothing_was_recorded_about_are_reported_too():
 def test_the_printed_form_carries_both():
     text = str(full())
     assert "unobserved" in text and "unrecorded" in text
+
+
+# --- whose absence it is: a collector cannot record its own absence -------------------------------------------------------
+
+def manifest(**kw):
+    base = dict(collector="surround-shim", version="0.1", reaches=("instruction",))
+    base.update(kw)
+    return hn.Manifest(**base)
+
+
+def test_every_absence_reason_is_classified_so_forgetting_one_is_a_failure():
+    """Total on purpose. A reason added without deciding whose absence it is would default to the harmless answer, and
+    the harmless answer is the one that hides a measurement failure."""
+    assert set(hn.ABSENCE_BLAMES) == set(ABSENCE_REASONS)
+    assert set(hn.ABSENCE_BLAMES.values()) == {"sender", "collector", "nobody"}
+
+
+def test_the_senders_silence_and_our_blindness_are_different_records():
+    """The defect that forced this vocabulary: both were one undifferentiated hole, so a shim losing the ability to read
+    a part was indistinguishable from a sender that sent nothing."""
+    assert hn.Absence(kind="decoding", reason="not_provided").blames == "sender"
+    ours = hn.Absence(kind="decoding", reason="not_reachable", detail="SDK renamed the sampling block")
+    assert ours.blames == "collector"
+
+
+def test_our_own_failure_has_to_say_what_we_were_doing():
+    with pytest.raises(hn.Unidentified, match="nobody can fix"):
+        hn.Absence(kind="decoding", reason="extraction_failed")
+
+
+def test_a_detail_is_refused_where_there_was_no_moment_to_describe():
+    with pytest.raises(hn.Unidentified, match="no such moment"):
+        hn.Absence(kind="decoding", reason="not_provided", detail="we were busy")
+
+
+def test_a_reachable_part_cannot_be_recorded_as_structurally_invisible():
+    """The direction that matters: it makes a collector's failure look like a fact about the world."""
+    with pytest.raises(hn.Unidentified, match="structurally invisible"):
+        hn.Absence(kind="decoding", reason="not_observable")
+
+
+def test_an_unobservable_part_cannot_be_blamed_on_anybody():
+    with pytest.raises(hn.Unidentified, match="claims somebody"):
+        hn.Absence(kind="tool_behaviour", reason="not_provided")
+
+
+def test_an_absence_of_something_the_vocabulary_does_not_name_is_refused():
+    with pytest.raises(hn.Unidentified, match="hole in the vocabulary"):
+        hn.Absence(kind="temperature_schedule", reason="not_provided")
+
+
+# --- the manifest, so that not_reachable is checkable rather than merely spelled -------------------------------------------
+
+def test_a_manifest_needs_a_collector_and_a_version():
+    with pytest.raises(hn.Unidentified, match="nobody can attribute"):
+        manifest(version="")
+
+
+def test_a_manifest_cannot_claim_a_part_no_mode_reaches():
+    """A collector claiming an impossible part reports a contradiction on every run it ever produces, which trains a
+    reader to ignore the one signal this structure raises."""
+    with pytest.raises(hn.Unidentified, match="no mode reaches"):
+        manifest(reaches=("instruction", "tool_behaviour"))
+
+
+def test_a_manifest_cannot_claim_an_unknown_part():
+    with pytest.raises(hn.Unidentified, match="not parts in"):
+        manifest(reaches=("instruction", "vibes"))
+
+
+# --- the collection: permissive toward the sender, exact about itself ------------------------------------------------------
+
+def test_a_record_with_one_part_is_valid_and_names_what_it_lacks():
+    """The permissive half. A collector that refused a partial record would produce no record, and a run that emitted
+    nothing is indistinguishable from a run that emitted a perfect record of nothing."""
+    coll = hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)))
+    assert coll.admissible_to_a_verdict() is True
+    assert "tool_schemas" in coll.unaccounted and "decoding" in coll.unaccounted
+
+
+def test_a_record_with_nothing_identifying_still_exists_and_supports_no_claim():
+    coll = hn.Collection(manifest=manifest(reaches=()), harness=None)
+    assert coll.admissible_to_a_verdict() is False
+    assert "the same for every" in coll.why_not()
+
+
+def test_a_collector_that_died_cannot_present_its_failure_as_the_senders_silence():
+    """The exact half. Fully usable as a log, refused by anything that publishes a claim."""
+    coll = hn.Collection(manifest=manifest(), status="collector_failed",
+                         harness=hn.Harness(parts=(part(),)))
+    assert coll.admissible_to_a_verdict() is False
+    assert "does not describe the run" in coll.why_not()
+    assert set(COLLECTION_STATUS) == {"complete", "aborted", "collector_failed"}
+
+
+def test_a_manifest_claiming_a_part_the_record_lacks_is_a_contradiction_not_a_fact():
+    """The one alarm this structure exists to raise. The absence is spelled exactly the way a legitimate one is, so it
+    is invisible in every other reading."""
+    coll = hn.Collection(
+        manifest=manifest(reaches=("instruction", "decoding")),
+        harness=hn.Harness(parts=(part(),)),
+        absences=(hn.Absence(kind="decoding", reason="not_reachable", detail="SDK renamed the sampling block"),))
+    assert coll.contradictions == ("decoding",)
+    assert coll.admissible_to_a_verdict() is False
+    assert "did not deliver" in coll.why_not()
+
+
+def test_our_failures_are_separated_because_only_they_are_ours_to_fix():
+    coll = hn.Collection(
+        manifest=manifest(), harness=hn.Harness(parts=(part(),)),
+        absences=(hn.Absence(kind="decoding", reason="not_provided"),
+                  hn.Absence(kind="readout", reason="extraction_failed", detail="no letter span matched")))
+    assert coll.our_failures == ("readout",)
+
+
+def test_a_part_cannot_be_held_and_absent_at_once():
+    with pytest.raises(hn.Unidentified, match="two ways"):
+        hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)),
+                      absences=(hn.Absence(kind="instruction", reason="not_provided"),))
+
+
+def test_two_absences_cannot_share_a_kind():
+    with pytest.raises(hn.Unidentified, match="nothing says why"):
+        hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)),
+                      absences=(hn.Absence(kind="decoding", reason="not_provided"),
+                                hn.Absence(kind="decoding", reason="redacted")))
+
+
+def test_unaccounted_is_not_the_same_as_absent():
+    """An absence is a statement; unaccounted is the silence an absence was invented to replace."""
+    coll = hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)),
+                         absences=(hn.Absence(kind="decoding", reason="not_provided"),))
+    assert "decoding" not in coll.unaccounted
+    assert "readout" in coll.unaccounted
+
+
+def test_a_bad_status_is_refused():
+    with pytest.raises(hn.Unidentified, match="is not one of"):
+        hn.Collection(manifest=manifest(), status="probably_fine",
+                      harness=hn.Harness(parts=(part(),)))

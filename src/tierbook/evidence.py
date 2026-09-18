@@ -485,3 +485,22 @@ HARNESS_SOURCING = ("in_the_request", "pulled_by_us", "pushed_by_owner", "not_ob
 #: thing it names changes, and a fetched copy describes a different moment than the request.
 IDENTIFYING_SOURCING = ("in_the_request",)
 
+#: Why a part of a harness is not in a record. Closed, and closed for a reason a single undifferentiated hole cannot
+#: serve: **a collector cannot record its own absence.** The case that would have shipped is not the crude one where
+#: nothing is emitted -- it is a collector that loses the ability to read a part and writes the same absence it writes
+#: when the sender genuinely sent none. Every consumer then behaves exactly as designed while the regression is
+#: invisible, because a closed vocabulary constrains spelling and not truth.
+#:
+#: So each entry names WHOSE absence it is. `not_provided` is the sender's silence. `not_reachable` is this collector,
+#: in this environment, unable to see a thing that may well be there. `extraction_failed` is worse than either: it was
+#: there and we failed on it. `redacted` is a deliberate withholding, which is a fact about policy rather than about the
+#: run. `not_observable` is the only structural one -- nobody can see it, and a tool's implementation behind an
+#: unchanged schema is the case that forced the entry to exist.
+ABSENCE_REASONS = ("not_provided", "not_reachable", "extraction_failed", "redacted", "not_observable")
+
+#: Whether a record is complete about ITSELF. Separate from anything about the sender, because the two refusals are
+#: about different objects: toward the sender a collector is maximally permissive, and about itself it must be exact.
+#: A record that is not `complete` stays fully usable as a log and is refused by anything that publishes a claim -- so
+#: a collector that died halfway cannot present its own failure as the sender's silence.
+COLLECTION_STATUS = ("complete", "aborted", "collector_failed")
+

@@ -89,15 +89,23 @@ Pre-registered signed cohort manifest, or no cohort digest in the record with gr
 analysis. Both reviewers concede the full design only made tuning loud rather than impossible, so this is a
 choice about where the loudness lives.
 
-### T15 -- The collector cannot currently record its own absence
+### T15 -- DONE (F126). The collector now records whose absence each hole is
 
-`harness.py` has one undifferentiated hole: a part is present or it is not. A shim that loses the ability to
-read a part writes the same absence a sender's genuine silence writes, so a collector regression is invisible
-while every consumer behaves exactly as designed (F125).
+Closed by F126: `ABSENCE_REASONS` with a total `ABSENCE_BLAMES` classification, `COLLECTION_STATUS`, a
+`Manifest` whose claim the record can contradict, and `tierbook collect-harness` as the production caller
+`harness.py` did not previously have.
 
-**Done when.** An absence says whose it is (`not_provided`, `not_reachable`, `extraction_failed`, `redacted`,
-`not_observable`); a record carries a terminal status and is refused by the judge when that status is not
-`complete`; and a shim capability manifest claiming a part the record reports `not_reachable` fails a test.
+### T18 -- Blame the four gap reasons the same way
+
+`decide.GAP_REASONS` has four entries and none says whose absence it is, and `uncollected_variable` carries
+the identical ambiguity F126 closed: "the state did not carry it" against "we failed to collect it".
+
+**Not urgent, and the reason is on the record.** `observe.py` documents that an absent variable becomes
+`uncollected_variable` and the decision declines to certify, so both readings produce the same conservative
+outcome. Fourteen references, no wrong answer among them.
+
+**Done when.** Either each gap reason is blamed, or this entry says plainly that a message which already
+fails safe is not worth fourteen edits.
 
 ### T16 -- Assignment provenance, which the judge needs and the router must not be slowed by
 

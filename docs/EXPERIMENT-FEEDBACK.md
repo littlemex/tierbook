@@ -5768,6 +5768,83 @@ And the draft said "nine parts" while listing ten, then wrote a done-when condit
 whose own part inventory is inconsistent cannot enumerate an absence**, which is the entire mechanism above.
 Ten parts.
 
+## F126 — An absence now says WHOSE it is, and the collector attests its own reach
+
+Closes T15. `harness.py` had one undifferentiated hole: a part was present or it was not. The failure that
+makes this worth building is not the crude one where nothing is emitted — it is the one that would have
+shipped:
+
+> A collector loses the ability to read `decoding` because an SDK renamed a field. It writes the same absence
+> it writes when the sender genuinely sent no decoding settings. The router falls back, the judge refuses, and
+> **every consumer behaves exactly as designed while the regression is invisible.**
+
+**A closed vocabulary constrains spelling, not truth.** The first design said the vocabulary made holes
+visible, and nothing checked whether a hole's reason was true.
+
+### What was built
+
+`ABSENCE_REASONS` in the leaf, with `ABSENCE_BLAMES` in `harness.py` as a **total** classification over it, so
+a reason added without deciding whose absence it is breaks a test:
+
+| reason | blames | what it means |
+|---|---|---|
+| `not_provided` | sender | the sender sent nothing |
+| `not_reachable` | **collector** | this collector, here, cannot see a thing that may well be there |
+| `extraction_failed` | **collector** | it was there and we failed |
+| `redacted` | sender | deliberately withheld — a fact about policy, not the run |
+| `not_observable` | nobody | structural. A tool's implementation behind an unchanged schema |
+
+`COLLECTION_STATUS` (`complete` / `aborted` / `collector_failed`), so **a collector that died cannot present
+its failure as the sender's silence**. Anything but `complete` stays fully usable as a log and is refused a
+verdict.
+
+`Manifest` — the collector's claim about which parts it can reach here. This is SCITT's own separation
+(who said this against is this true) **applied to the collector instead of only to the harness owner**, which
+the first design borrowed and then failed to use on itself. It makes `not_reachable` checkable: a manifest
+claiming a part the record does not carry is a **contradiction**, not a fact, and `Collection.why_not()` says
+so.
+
+`Collection` — permissive toward the sender, exact about itself. A record with one part is valid; a record
+with nothing identifying still exists and supports no claim. Refusals: a part held **and** absent at once (a
+record that answers "was this collected" two ways), two absences sharing a kind, a reachable part recorded as
+structurally invisible (**the direction that matters** — it makes our failure look like a fact about the
+world), an unobservable part blamed on somebody, a collector-blamed absence with no detail (a measurement
+failure nobody described is one nobody can fix), and a manifest claiming a part no mode reaches (it would
+raise a contradiction on every run and train a reader to ignore the signal).
+
+`unaccounted` is kept distinct from `absences` on purpose: **an absence is a statement, and unaccounted is the
+silence an absence was invented to replace.** A record with an empty `absences` and eight unaccounted parts
+looks like a bare harness and is a collector nobody finished.
+
+### Wired to a production caller
+
+`harness.py` had **no production caller** — only tests, which is coverage in appearance only. It now has one:
+`tierbook collect-harness`, which prints each held part, each absence with whose it is, what is ours to fix,
+what is unaccounted, and one sentence naming what stands between the record and a claim. Exit 2 when the
+record is well formed and cannot support a claim, matching `registered-criteria`: that is a finding about the
+record rather than an error in the input.
+
+Adding the door failed an existing guard immediately — `test_the_module_docstrings_verb_list_matches_help`
+compares the module docstring's verb list against argparse's own subcommand list. Working as designed.
+
+### Verified by breaking it
+
+Five mutations, all caught: removing the contradiction check, dropping `status` from admissibility, letting a
+collector-blamed absence omit its detail, permitting held-and-absent at once, and allowing an unobservable
+part to be blamed on somebody. Suite: **1,699 passing, 3 skipped.**
+
+### The audit the new rule demands, and its one hit
+
+Every new rule gets checked against existing code. `decide.GAP_REASONS` has four entries and **none of them
+is blamed**, and one is the identical ambiguity: `uncollected_variable` does not distinguish "the state did
+not carry it" from "we failed to collect it".
+
+**It is a reporting gap and not a correctness defect**, and the reason is worth writing down: `observe.py`
+documents that an absent variable becomes `uncollected_variable` and the decision declines to certify — so
+**both readings produce the same conservative outcome there.** Fourteen references, no wrong answer among
+them. Blaming that vocabulary is recorded as T18 rather than done here, because churning fourteen sites to
+improve a message that already fails safe is the over-engineering the v0.4.0 policy exists to stop.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

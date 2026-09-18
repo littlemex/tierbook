@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook collect-harness  what a harness record holds, what it does not, and whose absence each is
     tierbook registered-criteria  whether a conclusion is supported by every criterion registered
     tierbook floor-feasibility  whether a floor can be met at all, before a policy is written
     tierbook admissible-quantities  which declared quantities a pre-generation gate may condition on
@@ -53,6 +54,7 @@ from tierbook.evidence import EvidenceError
 from tierbook import bar as br
 from tierbook import criterion as cr
 from tierbook import evidence as ev_mod
+from tierbook import harness as hn
 from tierbook import judge as jd
 from tierbook import quantity as qt
 from tierbook import spend as sp_mod
@@ -724,6 +726,45 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -
 
 
 @_refuses
+def cmd_collect_harness(args) -> int:
+    """What a run's record of the harness holds, what it does not, and whether anything may publish a claim from it.
+
+    A door because the failure it prevents is silent and belongs to us rather than to the sender. A collector that loses
+    the ability to read a part writes the same absence it writes when the sender genuinely sent none; every consumer then
+    behaves exactly as designed and the regression is invisible. So this prints each absence with WHOSE it is, and
+    refuses a verdict when the collector's own manifest claims a part the record does not carry.
+
+    Exit 2 rather than 1 when the record is well formed and cannot support a claim: that is a finding about the record,
+    not an error in the input -- the same distinction `registered-criteria` draws.
+    """
+    manifest = hn.Manifest(collector=args.collector, version=args.collector_version,
+                           reaches=tuple(args.reaches))
+    parts = []
+    for spec in args.part:
+        kind, sourcing, label, payload = _fields(
+            spec, ("kind", "sourcing", "label", "payload"), option="--part")
+        parts.append(hn.Part(kind=kind, sourcing=sourcing, label=label,
+                             digest="" if payload == "-" else hn.digest_bytes(payload)))
+    absences = tuple(hn.Absence(kind=k, reason=r, detail="" if d == "-" else d)
+                     for k, r, d in (_fields(spec, ("kind", "reason", "detail"), option="--absent")
+                                     for spec in args.absent))
+    # A harness refuses to exist without an identifying part, and a collection that could not reach one is exactly the
+    # record this door has to be able to print. So the absence of a harness is a value here, not an error.
+    harness = hn.Harness(parts=tuple(parts)) if parts else None
+    coll = hn.Collection(manifest=manifest, status=args.status, harness=harness, absences=absences)
+    print(f"manifest: {manifest}")
+    for part_ in parts:
+        print(f"held: {part_}")
+    for absence in absences:
+        print(f"{absence}")
+    if coll.our_failures:
+        print(f"ours to fix: {list(coll.our_failures)}")
+    print(f"unaccounted: {list(coll.unaccounted) or 'none'}")
+    print(coll.why_not())
+    return 0 if coll.admissible_to_a_verdict() else 2
+
+
+@_refuses
 def cmd_registered_criteria(args) -> int:
     """Whether a conclusion is supported by every criterion it was registered against, and nothing free beat it.
 
@@ -1148,6 +1189,25 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    ch = sub.add_parser("collect-harness", parents=[common],
+                        help="what a run's harness record holds, what it does not, and whether it can support a claim")
+    ch.add_argument("--collector", required=True, help="which collector produced this record")
+    ch.add_argument("--collector-version", required=True,
+                    help="its version. Required because a part that stopped being readable between two versions is a "
+                         "change nobody can attribute without it")
+    ch.add_argument("--reaches", action="append", default=[], metavar="PART",
+                    help="repeatable. A part this collector CLAIMS it can read here. A claim that the record then "
+                         "contradicts is the one alarm this command exists to raise")
+    ch.add_argument("--status", default="complete", choices=list(ev_mod.COLLECTION_STATUS),
+                    help="whether the collector itself finished. Anything but complete stays in the log and is refused "
+                         "a verdict, so a collector that died cannot present its failure as the sender's silence")
+    ch.add_argument("--part", action="append", default=[], metavar="KIND:SOURCING:LABEL:PAYLOAD",
+                    help="repeatable. PAYLOAD is hashed here; pass '-' for a part with no bytes")
+    ch.add_argument("--absent", action="append", default=[], metavar="KIND:REASON:DETAIL",
+                    help=f"repeatable. REASON is one of {list(ev_mod.ABSENCE_REASONS)} and says WHOSE absence it is; "
+                         f"DETAIL is required when it is ours and '-' otherwise")
+    ch.set_defaults(fn=cmd_collect_harness, registry=None)
 
     rc = sub.add_parser("registered-criteria", parents=[common],
                         help="whether a conclusion is supported by every criterion it was registered against")

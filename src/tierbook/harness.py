@@ -40,7 +40,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from tierbook.evidence import HARNESS_SOURCING, IDENTIFYING_SOURCING, EvidenceError
+from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, HARNESS_SOURCING, IDENTIFYING_SOURCING,
+                              EvidenceError)
 
 #: The parts of a harness this package can name. Closed, because a part nobody named is a part that changes without the
 #: identity changing, and that is the whole defect.
@@ -228,6 +229,205 @@ def refuse_incomparable(a: Harness, b: Harness) -> None:
         f"are {differ}. Changing the instruction alone moved accuracy from 0.6243 to 0.7447 on the same box and the same "
         f"1,187 items, with one item in four flipping, so a difference between the arms cannot be separated from a "
         f"difference between what surrounded them")
+
+
+#: Who each absence is about, as a total classification. Total on purpose: an absence reason added without deciding
+#: whose it is breaks a test rather than defaulting to the harmless answer.
+#:
+#: The split that matters is `sender` against `collector`. An absence blamed on the sender is a fact about the run; one
+#: blamed on the collector is a **measurement failure**, and the two were the same string until a shim losing the ability
+#: to read a part was found to be indistinguishable from a sender that sent nothing.
+ABSENCE_BLAMES = {
+    "not_provided": "sender",
+    "not_reachable": "collector",
+    "extraction_failed": "collector",
+    "redacted": "sender",
+    "not_observable": "nobody",
+}
+
+
+@dataclass(frozen=True)
+class Absence:
+    """One part that is not in the record, and whose absence it is.
+
+    A part is present or absent and never both: the same kind appearing in a harness's parts and in its absences is a
+    record that answers "was this collected" two ways, and a consumer reading one of them is reading whichever it
+    happened to check first.
+    """
+
+    kind: str
+    reason: str
+    #: What the collector was doing when it failed, for a `collector` absence. Required there, because a measurement
+    #: failure nobody described is one nobody can fix, and refused elsewhere: the sender's silence has no detail we hold.
+    detail: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in HARNESS_PARTS:
+            raise Unidentified(
+                f"{self.kind!r} is not one of {HARNESS_PARTS}. An absence of something the vocabulary does not name is "
+                f"not a hole in the record; it is a hole in the vocabulary, and counting it as the first would report a "
+                f"record as complete about a part nobody can ask for")
+        if self.reason not in ABSENCE_REASONS:
+            raise Unidentified(f"{self.reason!r} is not one of {ABSENCE_REASONS}")
+        best = BEST_AVAILABLE_SOURCING[self.kind]
+        if self.reason == "not_observable" and best != "not_observable":
+            raise Unidentified(
+                f"{self.kind!r} is absent as {self.reason!r} and the best any mode can do for it is {best!r}, so "
+                f"something reachable is being recorded as structurally invisible. That is the direction that matters: "
+                f"it makes a collector's failure look like a fact about the world, and nothing downstream can tell them "
+                f"apart afterwards")
+        if self.reason != "not_observable" and best == "not_observable":
+            raise Unidentified(
+                f"{self.kind!r} is structurally unobservable and is absent as {self.reason!r}, which claims somebody "
+                f"could have had it. A tool's implementation behind an unchanged schema is invisible from the bytes we "
+                f"hold, and blaming that on a sender or on a collector invites work that cannot succeed")
+        if self.blames == "collector" and not self.detail:
+            raise Unidentified(
+                f"{self.kind!r} is absent because of us ({self.reason!r}) and carries no detail. This is the entry that "
+                f"exists to be actionable -- a measurement failure nobody described is one nobody can fix, and it will "
+                f"read as the sender's silence at every later glance")
+        if self.blames != "collector" and self.detail:
+            raise Unidentified(
+                f"{self.kind!r} is absent as {self.reason!r}, which is not our failure, and carries detail "
+                f"{self.detail!r}. Detail here describes what we were doing when we failed; there is no such moment")
+
+    @property
+    def blames(self) -> str:
+        return ABSENCE_BLAMES[self.reason]
+
+    def __str__(self) -> str:
+        head = f"{self.kind} absent ({self.reason}, blames {self.blames})"
+        return head + (f": {self.detail}" if self.detail else "")
+
+
+@dataclass(frozen=True)
+class Manifest:
+    """What the collector claims it can reach here, so that `not_reachable` becomes checkable rather than merely spelled.
+
+    This is the separation borrowed from SCITT -- who said this against is this true -- applied to the collector instead
+    of only to the harness owner, which the first version of this design borrowed and then failed to use on itself.
+
+    `reaches` is a claim, not an observation, and that is why it is worth having: a claim contradicts a record, and a
+    contradiction is louder than a hole.
+    """
+
+    collector: str
+    version: str
+    reaches: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.collector or not self.version:
+            raise Unidentified(
+                "a manifest without a collector and a version cannot be compared against another run's, so a part that "
+                "stopped being readable between two versions is a change nobody can attribute")
+        unknown = sorted(set(self.reaches) - set(HARNESS_PARTS))
+        if unknown:
+            raise Unidentified(f"the manifest claims to reach {unknown}, which are not parts in {HARNESS_PARTS}")
+        if len(set(self.reaches)) != len(self.reaches):
+            raise Unidentified(f"the manifest lists a part twice in {sorted(self.reaches)}")
+        impossible = sorted(k for k in self.reaches if BEST_AVAILABLE_SOURCING[k] == "not_observable")
+        if impossible:
+            raise Unidentified(
+                f"the manifest claims to reach {impossible}, which no mode reaches. A collector that claims an "
+                f"impossible part will report a contradiction on every run it ever produces, which trains a reader to "
+                f"ignore the one signal this structure exists to raise")
+
+    def __str__(self) -> str:
+        return f"{self.collector}/{self.version} reaches {list(self.reaches)}"
+
+
+@dataclass(frozen=True)
+class Collection:
+    """One run's record of what surrounded the model: the parts held, the parts not held, and how the collector itself did.
+
+    Two refusals live here and they are about different objects, which is the correction the first version of this design
+    needed. **Toward the sender this is maximally permissive**: any combination of parts may be absent and the record is
+    still valid, because a collector that refuses a partial record produces no record, and a run that emitted nothing is
+    indistinguishable from a run that emitted a perfect record of nothing. **About itself it is exact**: the status says
+    whether the collector finished, and a collector that failed cannot present its failure as the sender's silence.
+
+    `harness` is optional, and that is the permissive half made concrete: a run where nothing identifying was reachable
+    still produces a record. It is simply not admissible to anything that publishes a claim.
+    """
+
+    manifest: Manifest
+    status: str = "complete"
+    harness: Harness | None = None
+    absences: tuple[Absence, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.status not in COLLECTION_STATUS:
+            raise Unidentified(f"{self.status!r} is not one of {COLLECTION_STATUS}")
+        if self.harness is not None and not isinstance(self.harness, Harness):
+            raise Unidentified(f"harness={self.harness!r} is not a Harness")
+        kinds = [a.kind for a in self.absences]
+        if len(set(kinds)) != len(kinds):
+            raise Unidentified(f"two absences share a kind in {sorted(kinds)}, so nothing says why the part is missing")
+        held = {p.kind for p in self.harness.parts} if self.harness else set()
+        both = sorted(held & set(kinds))
+        if both:
+            raise Unidentified(
+                f"{both} are recorded as held and as absent at once, so this record answers 'was this collected' two "
+                f"ways and a consumer reads whichever it happened to check first")
+
+    @property
+    def unaccounted(self) -> tuple[str, ...]:
+        """Parts this record says nothing about at all -- neither held nor explained.
+
+        Distinct from an absence, and the distinction is the point: an absence is a statement, and this is the silence
+        an absence was invented to replace. A record with an empty `absences` and eight unaccounted parts looks like a
+        record of a bare harness and is a record of a collector nobody finished.
+        """
+        named = ({p.kind for p in self.harness.parts} if self.harness else set()) | {a.kind for a in self.absences}
+        return tuple(k for k in HARNESS_PARTS if k not in named)
+
+    @property
+    def contradictions(self) -> tuple[str, ...]:
+        """Parts the collector claims it can reach and did not deliver.
+
+        The one alarm this structure exists to raise. A hole that the manifest says should not be there is not a
+        property of the run -- it is the collector regressing, and it is invisible in every other reading because the
+        absence is spelled exactly the way a legitimate one is.
+        """
+        held = {p.kind for p in self.harness.parts} if self.harness else set()
+        return tuple(k for k in self.manifest.reaches if k not in held)
+
+    @property
+    def our_failures(self) -> tuple[str, ...]:
+        """Absences that are our fault rather than the sender's. Separated because only these are ours to fix."""
+        return tuple(a.kind for a in self.absences if a.blames == "collector")
+
+    def admissible_to_a_verdict(self) -> bool:
+        """Whether anything may publish a claim from this record.
+
+        Three conditions, and each is a different failure. An incomplete status means the record does not describe the
+        run it appears to. A contradiction means the collector is lying about its own reach, so no absence in the record
+        can be read at face value. And no identifying part means the identity would be constant across every possible
+        harness, so a comparison against it groups things that have nothing in common.
+        """
+        return self.status == "complete" and not self.contradictions and self.harness is not None
+
+    def why_not(self) -> str:
+        """One sentence naming everything standing between this record and a published claim."""
+        if self.admissible_to_a_verdict():
+            return (f"admissible: {self.status}, no contradiction, identity "
+                    f"{self.harness.identity}")
+        parts = []
+        if self.status != "complete":
+            parts.append(f"the collector reports {self.status!r}, so the record does not describe the run it looks like")
+        if self.contradictions:
+            parts.append(f"the manifest claims to reach {list(self.contradictions)} and did not deliver them, so no "
+                         f"absence here can be read at face value")
+        if self.harness is None:
+            parts.append("no part was identified by bytes we hold, so the identity would be the same for every "
+                         "possible harness")
+        return "not admissible to a verdict -- " + "; and ".join(parts)
+
+    def __str__(self) -> str:
+        who = self.harness.identity if self.harness else "no identity"
+        return (f"collection {who} ({self.status}); held "
+                f"{len(self.harness.parts) if self.harness else 0}; absent {len(self.absences)}; "
+                f"unaccounted {list(self.unaccounted) or 'none'}; contradictions {list(self.contradictions) or 'none'}")
 
 
 def digest_bytes(payload: str) -> str:
