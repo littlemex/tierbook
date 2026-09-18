@@ -48,7 +48,13 @@ from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, DIGEST_BOUNDA
 HARNESS_PARTS = (
     "instruction",          # the system prompt / the instruction text
     "tool_schemas",         # what tools were offered, and their declared shapes
-    "tool_behaviour",       # what those tools actually do
+    # What a tool actually does, split in two because one classification was covering two different objects. The
+    # FUNCTION is unobservable -- somebody can change what a tool does behind an unchanged schema and nothing in the
+    # request differs. Its RESTRICTION TO THE INPUTS ACTUALLY EXERCISED is not: those are bytes the run itself produced,
+    # which is the strongest mode in the vocabulary, held here and contemporaneous. Classifying the whole part as
+    # unobservable threw away evidence already in hand.
+    "tool_extension",       # the function. Still unobservable, still non-identifying
+    "tool_trace",           # the calls that actually happened. Collected, never identifying, and a veto only
     "loop",                 # the scaffold: how calls are sequenced, what ends the run
     "turn_budget",          # how many turns it may take
     "retry_policy",         # what it retries and how often
@@ -68,13 +74,17 @@ HARNESS_PARTS = (
 #: For each part, the BEST mode that can reach it, as a total classification. Total on purpose: adding a part without
 #: deciding how it is observed breaks a test rather than defaulting the new part to observable.
 #:
-#: `tool_behaviour` is the entry that forced this table to exist. Its schema is in the request and its behaviour is not,
+#: `tool_extension` is the entry that forced this table to exist. Its schema is in the request and its behaviour is not,
 #: so a change to what a tool does behind an unchanged schema is invisible from the request -- and a record that did not
 #: say so would group two different harnesses under one identity.
 BEST_AVAILABLE_SOURCING = {
     "instruction": "in_the_request",
     "tool_schemas": "in_the_request",
-    "tool_behaviour": "not_observable",
+    "tool_extension": "not_observable",
+    # In the request, and after the fact: the trace is bytes the run produced. It may never key an identity, and that is
+    # enforced below rather than here -- a per-run outcome is unique per run, so keying on it would make every pair of
+    # runs incomparable, which is the defect the identifier split was introduced to fix.
+    "tool_trace": "in_the_request",
     "loop": "pushed_by_owner",
     "turn_budget": "pushed_by_owner",
     "retry_policy": "pushed_by_owner",
@@ -131,7 +141,7 @@ class Part:
         if self.sourcing == "in_the_request" and best != "in_the_request":
             raise Unidentified(
                 f"{self.kind!r} is claimed as being in the request, and the best any mode can do for it is {best!r}. "
-                f"For `tool_behaviour` that is not a limitation of this implementation: a tool's schema is in the "
+                f"For `tool_extension` that is not a limitation of this implementation: a tool's schema is in the "
                 f"request and its behaviour is not, so a change behind an unchanged schema is invisible from the bytes "
                 f"we hold")
         if self.sourcing == "not_observable":
@@ -167,9 +177,17 @@ class Part:
             raise Unidentified(f"read_lag_seconds={self.read_lag_seconds!r} would mean it was read after the request it "
                                f"describes")
 
+    #: Parts that may never key an identity whatever their sourcing says. `tool_trace` is bytes we hold, so the sourcing
+    #: rule alone would admit it -- and it is a per-run OUTCOME, unique per run, so keying on it would make every pair of
+    #: runs incomparable. That is the same defect the identifier split was introduced to fix, arriving from the other
+    #: direction, so the exclusion is by name rather than by mode.
+    NEVER_IDENTIFYING = ("tool_trace",)
+
     @property
     def identifying(self) -> bool:
         """Whether this part may contribute to the harness's identity."""
+        if self.kind in Part.NEVER_IDENTIFYING:
+            return False
         return self.sourcing in IDENTIFYING_SOURCING
 
     def __str__(self) -> str:
@@ -457,6 +475,111 @@ class Collection:
         return (f"collection {who} ({self.status}); held "
                 f"{len(self.harness.parts) if self.harness else 0}; absent {len(self.absences)}; "
                 f"unaccounted {list(self.unaccounted) or 'none'}; contradictions {list(self.contradictions) or 'none'}")
+
+
+#: Whether a tool's contract promises the same answer for the same effective context. Closed, and the reason it is not a
+#: bool: the two useful cases are "promised deterministic" and "known to vary", and the third -- nobody said -- is the
+#: common one and must not collapse into either.
+TOOL_DETERMINISM = ("declared_deterministic", "known_to_vary", "unstated")
+
+#: What a divergence between two runs' traces licenses, given what the tool promised. TOTAL over TOOL_DETERMINISM, so a
+#: determinism value added without deciding what it licenses fails a test.
+#:
+#: The first version of this rule said an equal-argument, unequal-response pair PROVED two runs used different tools. It
+#: was refuted three ways and any one is disqualifying: it fires against a SINGLE run (write a key, then read it -- equal
+#: arguments, unequal responses, one tool); it fires on essentially every networked tool, because request ids and
+#: timestamps sit in response bodies and canonicalisation is refused, so an always-firing veto means no harness with a
+#: real tool can ever be compared; and the conclusion is false even where firing is right, because a clock or a moved
+#: index makes the environments differ without the tool changing.
+DIVERGENCE_LICENSES = {
+    "declared_deterministic": "refuse",     # the contract was broken, so the comparison cannot stand
+    "known_to_vary": "unknown",             # widen the verdict; neither authorise nor refuse
+    "unstated": "unknown",                  # nobody promised anything, so nothing is contradicted
+}
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One call in a run's trace, keyed on the context that actually determined its answer.
+
+    `prefix_digest` is over the calls BEFORE this one, and it is the field that stops the veto firing against a single
+    run: writing a key and then reading it has equal arguments and unequal responses, and it is one tool behaving
+    correctly. The first version of the rule compared arguments alone and never used the ordering it had collected.
+
+    `response_digest` is over the response **as rendered to the model**, for the same reason the canonicalisation rule
+    exists: those are the bytes that mattered. It is a stable projection rather than the raw body, because request ids
+    and timestamps in a body would make every pair of runs diverge.
+    """
+
+    tool: str
+    prefix_digest: str
+    arguments_digest: str
+    response_digest: str
+    credentials_class: str = "same"
+    attempt: int = 1
+
+    def __post_init__(self) -> None:
+        if not self.tool:
+            raise Unidentified("a call with no tool name cannot be matched against another run's, so a divergence "
+                               "could not say which tool diverged")
+        for name in ("prefix_digest", "arguments_digest", "response_digest"):
+            if not getattr(self, name):
+                raise Unidentified(
+                    f"{name} is empty on a call to {self.tool!r}. All three decide whether two calls are the same "
+                    f"occasion, and a missing one makes two different occasions compare equal -- which is the "
+                    f"direction that turns a real divergence into silence")
+        if self.attempt < 1:
+            raise Unidentified(f"attempt={self.attempt} is not an attempt; a retry is a different occasion and the "
+                               f"count is what separates it from the call it retried")
+
+    @property
+    def occasion(self) -> tuple[str, str, str, int]:
+        """What has to match before two calls are the same occasion. Everything except the response."""
+        return (self.tool, self.prefix_digest, self.arguments_digest, self.credentials_class, self.attempt)
+
+
+def divergences(a: tuple[ToolCall, ...], b: tuple[ToolCall, ...]) -> tuple[str, ...]:
+    """Which tools produced a different response on the same occasion in these two traces.
+
+    Matching on the occasion rather than on the arguments is the whole correction. Two calls are comparable only when
+    the trace before them, the arguments, the credentials class and the attempt number all agree; anything else is a
+    different occasion and says nothing about the tool.
+    """
+    by_occasion = {c.occasion: c for c in a}
+    out = []
+    for call in b:
+        other = by_occasion.get(call.occasion)
+        if other is not None and other.response_digest != call.response_digest:
+            out.append(call.tool)
+    return tuple(sorted(set(out)))
+
+
+def license_for(determinism: str) -> str:
+    """What a divergence licenses. Refused for an unknown determinism rather than defaulted to the harmless answer."""
+    if determinism not in TOOL_DETERMINISM:
+        raise Unidentified(f"{determinism!r} is not one of {TOOL_DETERMINISM}")
+    return DIVERGENCE_LICENSES[determinism]
+
+
+def veto(a: tuple[ToolCall, ...], b: tuple[ToolCall, ...], *, determinism: str) -> tuple[str, tuple[str, ...]]:
+    """Read two traces and say what the comparison is allowed to do. One-sided by construction.
+
+    Returns the outcome and the tools that diverged. Three outcomes, and the middle one is what the first version of
+    this rule lacked:
+
+    * `refuse` -- the tool promised determinism over the recorded occasion and did not deliver it.
+    * `unknown` -- something diverged and nobody promised it would not, so the verdict widens and is neither authorised
+      nor refused.
+    * `no_divergence` -- **not an authorisation.** Agreement on the occasions both runs exercised says nothing about
+      the occasions neither touched, which is why the whole mechanism can refuse and can never permit.
+
+    The one-sidedness is what makes the remaining hole safe: two serialisations of the same logical arguments compare
+    unequal, so a genuine difference is missed. A rule that could authorise would turn that miss into a false licence.
+    """
+    diverged = divergences(a, b)
+    if not diverged:
+        return "no_divergence", ()
+    return license_for(determinism), diverged
 
 
 def digest_bytes(payload: str) -> str:

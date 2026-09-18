@@ -6110,6 +6110,140 @@ with an assumption.
 Seven mutations, all caught, including deleting the ninth part's sourcing classification. Suite: **1,742 passing,
 3 skipped.**
 
+## F132 — Four decisions settled, and checking the record changed one of the answers
+
+### T10 — the withdrawal stands, and the REASON on the record was wrong
+
+F124 withdrew the 1.0% routing saving on the grounds that routing breaks a cache prefix, so the sign is
+undetermined, **and that the run's shape was never recorded**. Reading the record rather than the summary of it:
+
+**The shape is determinable and it is single-call.** The 1.0% comes from the thinking-budget comparison, over a
+multiple-choice corpus whose readout is `Answer with the option letter only. Do not explain.` There are no turns
+in it. **So the cache-prefix objection does not apply to this measurement** — there is no next turn whose input
+leg a routing decision could move.
+
+**What disqualifies it is stronger and was already in the same paragraph.** The figure is a saving over **90
+shared items**, arrived at after the original 410-item result was found to be a subset artefact. This project's
+own rule, added in that same entry, is that a comparison **withholds the verdict below 150 shared items**. 90 is
+below 150, so **the 1.0% fails a floor this repository wrote for itself.**
+
+**Resolution: withdrawn, permanently, and the ledger says why.** Not "the shape is unknown" — the shape is known.
+"Below our own minimum for a comparison to be reported at all." That is not a gap waiting to be filled; the items
+do not exist to fill it with.
+
+The correction matters beyond this number: **the summary of a finding drifted from the finding.** The cache
+argument is a real argument and it is attached to the wrong measurement, and it survived two review rounds and
+three of my own retellings because everybody was reading the withdrawal note rather than the paragraph it came
+from.
+
+### T5 — the estimate, which was the one thing blocking a decision
+
+Measuring the reliability ceiling of an uplift label needs `K=8` repeats of **both** arms on the same items, then
+split-half with `r_max = sqrt(rho)`. Priced from figures already measured here:
+
+| leg | figure on the record | for K=8 over 699 items |
+|---|---|---|
+| box, terse arm | 488 items in about 2 minutes on a node at $15.2174/hour | 23 minutes of node time, **$5.81** |
+| strong arm, API | **$0.00325 an item** (the gate-1 corpus) | **$18.17** |
+| | | **about $24, and under half an hour of GPU** |
+
+**That is 6.5% of one Hyper-tau-bench pass ($370).** The measurement that decides whether routing has any value
+costs a rounding error against the measurements that depend on it, which settles the ordering argument: this one
+first, and the expensive ones only if it clears 0.15.
+
+### T14 — the cohort identifier stays out of the record
+
+Reviewers split; taking the option that matches the failures this project actually had. **A name that stays fixed
+while the thing under it moves has been recorded twice here** (a model name, and a prompt condition called
+"terse"), and a pre-registered signed manifest is the same shape a third time — it can name a cohort that does
+not exist. Grouping is enumerated per analysis instead, where the analysis text is the record.
+
+**The rejected option's argument is real and is recorded with it**: pre-registration is the only mechanism that
+shows "this was changed afterwards", so **if an external audit is ever in scope, this decision is the one to
+revisit.**
+
+### T1 — Hyper-tau-bench gets no split, declared in advance
+
+53 tasks, and the interval on 53 items is already **[0.361, 0.621]**. Halving it leaves 26 items a side, which
+cannot support anything. So: **all 53 items as one set, no held-out split, written down before the first run.**
+
+The cost is stated rather than hidden: with no held-out fold, **a policy selected by searching this suite cannot
+be reported with a guarantee** — only as a point estimate with the selection named. This repository has already
+measured what that costs, at 6.7 points between a point estimate and a selection-valid bound.
+
+### T18 — not doing it, and the reason is the record
+
+`decide.GAP_REASONS` blames none of its four entries and `uncollected_variable` carries the ambiguity F126
+closed. **It stays.** `observe.py` documents that an absent variable declines to certify, so both readings land on
+the same conservative outcome; 14 references, no wrong answer among them. Rewriting 14 call sites to improve a
+message that already fails safe is the over-engineering the v0.4.0 policy exists to stop.
+
+## F133 — The tenth part: the trace is held evidence, and the veto that reads it can only refuse
+
+Closes the last item of the Surround design. `tool_behaviour` was one classification covering **two different
+objects**, and calling the whole thing unobservable threw away evidence already in hand.
+
+* `tool_extension` — the function. A tool's implementation can change behind an unchanged schema and nothing in
+  the request differs. Unobservable, non-identifying, unchanged.
+* `tool_trace` — the same tool **restricted to the inputs actually exercised**. Those are bytes the run itself
+  produced: `in_the_request`, the strongest mode in the vocabulary, held here and contemporaneous.
+
+**And the trace may never key an identity, enforced by name rather than by mode.** The sourcing rule alone would
+admit it, because we do hold the bytes — but a per-run outcome is unique per run, so keying on it makes every pair
+of runs incomparable. That is the same defect the identifier split was introduced to fix, arriving from the other
+direction, so `Part.NEVER_IDENTIFYING` excludes it explicitly.
+
+### The veto, restated after three refutations
+
+The draft rule said an equal-argument, unequal-response pair **proved** two runs used different tools. Any one of
+the three refutations is disqualifying:
+
+1. **It fires against a single run.** Write a key, then read it: equal arguments, unequal responses, one tool
+   behaving correctly. The rule compared arguments and **never used the ordering it had already collected.**
+2. **It fires on essentially every networked tool.** Request ids and timestamps sit in response bodies and
+   canonicalisation is refused, so any two runs touching such a tool veto each other — and an always-firing veto
+   means no harness with a real tool can ever be compared. **The pathway destroys itself.**
+3. **The conclusion is false even where firing is right.** A clock or a moved index makes the environments differ
+   without the tool changing.
+
+Two calls are now comparable only on the same **occasion** — the tool, the **trace prefix before the call**, the
+arguments, the credentials class, and the attempt number. The prefix is what kills refutation 1. The response
+digest is over the response **as rendered to the model**, a stable projection rather than the raw body, which is
+what kills refutation 2 and is the same rule that governs canonicalisation elsewhere.
+
+And the strength is graded, `DIVERGENCE_LICENSES` total over `TOOL_DETERMINISM`:
+
+| the tool's contract | a divergence licenses |
+|---|---|
+| `declared_deterministic` | **refuse** — a promise was broken |
+| `known_to_vary` | **unknown** — widen the verdict |
+| `unstated` | **unknown** — nobody promised anything, so nothing is contradicted |
+
+`known_to_vary` and `unstated` license the same thing and are **separate entries on purpose**: collapsing them
+would let a silence be reported as a declared property of the tool.
+
+### One-sidedness, and the test that had to be rewritten to say so
+
+`no_divergence` is **not an authorisation**. Agreement on the occasions both runs exercised says nothing about the
+occasions neither touched. The remaining hole is safe only because of this: two serialisations of the same logical
+arguments compare unequal, so a genuine difference is **missed** — and a rule that could authorise would turn that
+miss into a false licence.
+
+The first test written for this asserted that the outcome string did not contain the substrings `refuse` or
+`authorise`, which checks nothing. The claim it should have made is behavioural and now is: **for identical traces
+the outcome is the same under every determinism value**, so a stronger contract cannot upgrade agreement into a
+licence, and the set of reachable outcomes contains no authorisation.
+
+### Wired, and verified by breaking it
+
+Production caller `tierbook admit-traces`. Exit 2 on a refusal and **0 on `unknown`** — widening a verdict is not
+an error, and treating it as one would push a caller toward not recording traces at all.
+
+Renaming the part broke 10 tests immediately, all mechanical, and adding it broke the unrecorded-parts enumeration
+again. Six mutations, all caught: letting the trace key an identity, dropping the prefix from the occasion (twice,
+in two places), making an unstated promise refuse, allowing a missing digest, and defaulting an unknown
+determinism. Suite: **1,755 passing, 3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

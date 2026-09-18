@@ -32,7 +32,7 @@ def full(instruction=TERSE):
     return hn.Harness(parts=(
         part(digest=hn.digest_bytes(instruction)),
         part(kind="tool_schemas", label="", digest=hn.digest_bytes("{search,fetch}")),
-        part(kind="tool_behaviour", sourcing="not_observable", label="", digest=""),
+        part(kind="tool_extension", sourcing="not_observable", label="", digest=""),
         part(kind="loop", sourcing="pushed_by_owner", label="react v3", digest=hn.digest_bytes("react v3")),
     ))
 
@@ -49,10 +49,10 @@ def test_every_part_is_classified_so_forgetting_one_is_a_failure():
 def test_a_tools_behaviour_is_structurally_unobservable_and_that_is_the_finding():
     """Its schema is in the request and its behaviour is not, so a change behind an unchanged schema is invisible from
     the bytes we hold."""
-    assert hn.BEST_AVAILABLE_SOURCING["tool_behaviour"] == "not_observable"
+    assert hn.BEST_AVAILABLE_SOURCING["tool_extension"] == "not_observable"
     assert hn.BEST_AVAILABLE_SOURCING["tool_schemas"] == "in_the_request"
     with pytest.raises(hn.Unidentified, match="invisible from the bytes"):
-        part(kind="tool_behaviour", sourcing="in_the_request", label="", digest="a" * 64)
+        part(kind="tool_extension", sourcing="in_the_request", label="", digest="a" * 64)
 
 
 def test_only_bytes_we_hold_may_key_an_identity():
@@ -81,7 +81,7 @@ def test_the_digest_is_over_bytes_and_an_empty_payload_is_refused():
 def test_an_unobservable_part_may_not_carry_a_digest():
     """If bytes exist, name the mode that produced them."""
     with pytest.raises(hn.Unidentified, match="something was hashed"):
-        part(kind="tool_behaviour", sourcing="not_observable", label="", digest="a" * 64)
+        part(kind="tool_extension", sourcing="not_observable", label="", digest="a" * 64)
 
 
 # --- a pulled fact carries its lag ----------------------------------------------------------------------------------------
@@ -129,7 +129,7 @@ def test_a_harness_with_nothing_we_hold_bytes_for_is_refused():
     """Its identity would be constant across every possible harness."""
     with pytest.raises(hn.Unidentified, match="constant across every possible harness"):
         hn.Harness(parts=(part(kind="loop", sourcing="pushed_by_owner", label="x", digest="a" * 64),
-                          part(kind="tool_behaviour", sourcing="not_observable", label="", digest="")))
+                          part(kind="tool_extension", sourcing="not_observable", label="", digest="")))
 
 
 def test_two_parts_of_one_kind_leave_nothing_saying_which_applied():
@@ -146,12 +146,12 @@ def test_an_empty_harness_is_the_absence_of_a_record():
 
 def test_the_unobserved_parts_are_reported():
     """A record that hid them would look complete."""
-    assert set(full().unobserved) == {"tool_behaviour", "loop"}
+    assert set(full().unobserved) == {"tool_extension", "loop"}
 
 
 def test_the_parts_nothing_was_recorded_about_are_reported_too():
     assert set(full().missing) == {"turn_budget", "retry_policy", "readout", "decoding",
-                                   "context_partitioning"}
+                                   "context_partitioning", "tool_trace"}
 
 
 def test_the_printed_form_carries_both():
@@ -200,7 +200,7 @@ def test_a_reachable_part_cannot_be_recorded_as_structurally_invisible():
 
 def test_an_unobservable_part_cannot_be_blamed_on_anybody():
     with pytest.raises(hn.Unidentified, match="claims somebody"):
-        hn.Absence(kind="tool_behaviour", reason="not_provided")
+        hn.Absence(kind="tool_extension", reason="not_provided")
 
 
 def test_an_absence_of_something_the_vocabulary_does_not_name_is_refused():
@@ -219,7 +219,7 @@ def test_a_manifest_cannot_claim_a_part_no_mode_reaches():
     """A collector claiming an impossible part reports a contradiction on every run it ever produces, which trains a
     reader to ignore the one signal this structure raises."""
     with pytest.raises(hn.Unidentified, match="no mode reaches"):
-        manifest(reaches=("instruction", "tool_behaviour"))
+        manifest(reaches=("instruction", "tool_extension"))
 
 
 def test_a_manifest_cannot_claim_an_unknown_part():
@@ -339,3 +339,97 @@ def test_the_collision_is_unrepresentable_rather_than_hashed_around():
 def test_the_default_boundary_is_the_true_statement_about_existing_callers():
     """Every caller before this field hashed the text the model read, so the default is honest rather than convenient."""
     assert part().boundary == "model_visible"
+
+
+# --- the tenth part: the trace is collected, never identifies, and can only refuse ----------------------------------------
+
+def call(tool="search", prefix="s", args="q", response="r1", credentials_class="same", attempt=1):
+    return hn.ToolCall(tool=tool, prefix_digest=hn.digest_bytes(prefix),
+                       arguments_digest=hn.digest_bytes(args), response_digest=hn.digest_bytes(response),
+                       credentials_class=credentials_class, attempt=attempt)
+
+
+def test_the_function_and_the_exercised_inputs_are_different_objects():
+    """One classification was covering two. The function is unobservable; its restriction to the inputs actually
+    exercised is bytes the run itself produced."""
+    assert hn.BEST_AVAILABLE_SOURCING["tool_extension"] == "not_observable"
+    assert hn.BEST_AVAILABLE_SOURCING["tool_trace"] == "in_the_request"
+
+
+def test_the_trace_may_never_key_an_identity_even_though_we_hold_its_bytes():
+    """A per-run outcome is unique per run, so keying on it would make every pair of runs incomparable -- the defect the
+    identifier split was introduced to fix, arriving from the other direction."""
+    assert hn.Part.NEVER_IDENTIFYING == ("tool_trace",)
+    p = part(kind="tool_trace", sourcing="in_the_request", label="", digest="a" * 64)
+    assert p.identifying is False
+
+
+def test_a_harness_of_nothing_but_a_trace_has_no_identity_and_is_refused():
+    with pytest.raises(hn.Unidentified, match="identified by bytes we hold"):
+        hn.Harness(parts=(part(kind="tool_trace", sourcing="in_the_request", label="", digest="a" * 64),))
+
+
+def test_every_determinism_licenses_something_so_forgetting_one_is_a_failure():
+    assert set(hn.DIVERGENCE_LICENSES) == set(hn.TOOL_DETERMINISM)
+    assert set(hn.DIVERGENCE_LICENSES.values()) == {"refuse", "unknown"}
+
+
+def test_the_veto_no_longer_fires_against_a_single_run():
+    """Write a key, then read it: equal arguments, unequal responses, one run, one tool. The first version of the rule
+    compared arguments alone and never used the ordering it had collected."""
+    write = call(tool="kv", prefix="start", args="k", response="ok")
+    read = call(tool="kv", prefix="start|put", args="k", response="value")
+    trace = (write, read)
+    assert hn.divergences(trace, trace) == ()
+    assert hn.veto(trace, trace, determinism="declared_deterministic") == ("no_divergence", ())
+
+
+def test_a_divergence_on_the_same_occasion_refuses_only_where_determinism_was_promised():
+    a, b = (call(response="r1"),), (call(response="r2"),)
+    assert hn.veto(a, b, determinism="declared_deterministic") == ("refuse", ("search",))
+    assert hn.veto(a, b, determinism="known_to_vary") == ("unknown", ("search",))
+    assert hn.veto(a, b, determinism="unstated") == ("unknown", ("search",))
+
+
+def test_nobody_promising_anything_is_not_the_same_as_a_promise_of_variation():
+    """Both widen to unknown and they are separate entries, because collapsing them would let a silence be reported as a
+    declared property of the tool."""
+    assert hn.TOOL_DETERMINISM == ("declared_deterministic", "known_to_vary", "unstated")
+    assert hn.license_for("unstated") == hn.license_for("known_to_vary") == "unknown"
+
+
+def test_agreement_never_gets_stronger_because_a_tool_promised_more():
+    """The real content of "one-sided": agreement on the occasions both runs exercised says nothing about the occasions
+    neither touched, so a stronger contract cannot upgrade agreement into a licence. The outcome for identical traces is
+    the same for every determinism value, and the set of reachable outcomes contains no authorisation."""
+    for determinism in hn.TOOL_DETERMINISM:
+        assert hn.veto((call(),), (call(),), determinism=determinism) == ("no_divergence", ())
+    reachable = {"no_divergence"} | set(hn.DIVERGENCE_LICENSES.values())
+    assert reachable == {"no_divergence", "refuse", "unknown"}
+
+
+def test_a_different_prefix_is_a_different_occasion_and_says_nothing():
+    assert hn.divergences((call(prefix="one", response="r1"),), (call(prefix="two", response="r2"),)) == ()
+
+
+def test_a_different_credentials_class_is_a_different_occasion():
+    assert hn.divergences((call(credentials_class="tenant_a", response="r1"),),
+                          (call(credentials_class="tenant_b", response="r2"),)) == ()
+
+
+def test_a_retry_is_a_different_occasion_from_the_call_it_retried():
+    assert hn.divergences((call(attempt=1, response="fail"),), (call(attempt=2, response="ok"),)) == ()
+
+
+def test_a_call_missing_any_of_the_three_digests_is_refused():
+    """A missing one makes two different occasions compare equal, which turns a real divergence into silence."""
+    for missing in ("prefix_digest", "arguments_digest", "response_digest"):
+        kw = dict(tool="t", prefix_digest="a" * 64, arguments_digest="b" * 64, response_digest="c" * 64)
+        kw[missing] = ""
+        with pytest.raises(hn.Unidentified, match="into silence"):
+            hn.ToolCall(**kw)
+
+
+def test_an_unknown_determinism_is_refused_rather_than_defaulted_to_the_harmless_answer():
+    with pytest.raises(hn.Unidentified, match="not one of"):
+        hn.license_for("probably_fine")

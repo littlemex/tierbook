@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook admit-traces  what two runs' tool traces license: refuse, unknown, or neither
     tierbook conversation-cost  what a sequence of turns in one context cost, and whether two compare
     tierbook admit-comparison  whether two arms may be compared, given what each was missing
     tierbook collect-harness  what a harness record holds, what it does not, and whose absence each is
@@ -729,6 +730,46 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -
 
 
 @_refuses
+def cmd_admit_traces(args) -> int:
+    """What two runs' tool traces license: refuse the comparison, widen it to unknown, or neither.
+
+    A door because the thing it prevents is a comparison presented as clean when a tool behind it moved. The trace is
+    the only evidence about a tool's behaviour that is actually in hand, and it is one-sided by construction: it can
+    refuse a comparison and can never authorise one, because agreement on the calls both runs made says nothing about
+    the calls neither made.
+
+    Exit 2 when a divergence refuses the comparison, and 0 when the outcome is `unknown` -- widening a verdict is not
+    an error, and treating it as one would push a caller toward not recording traces at all.
+    """
+    def trace(specs: list[str]) -> tuple[hn.ToolCall, ...]:
+        out = []
+        for spec in specs:
+            tool, prefix, arguments, response, creds, attempt = _fields(
+                spec, ("tool", "prefix", "arguments", "response", "credentials_class", "attempt"),
+                option="--a-call")
+            out.append(hn.ToolCall(tool=tool, prefix_digest=hn.digest_bytes(prefix),
+                                  arguments_digest=hn.digest_bytes(arguments),
+                                  response_digest=hn.digest_bytes(response),
+                                  credentials_class=creds, attempt=int(attempt)))
+        return tuple(out)
+
+    outcome, diverged = hn.veto(trace(args.a_call), trace(args.b_call), determinism=args.determinism)
+    print(f"determinism: {args.determinism} (licenses {hn.license_for(args.determinism)} on a divergence)")
+    if outcome == "no_divergence":
+        print("no divergence on any occasion both traces exercised. NOT an authorisation: the occasions neither run "
+              "touched are unobserved either way")
+        return 0
+    print(f"diverged on the same occasion: {list(diverged)}")
+    if outcome == "refuse":
+        print("refused: these tools promised the same answer for the same effective context and did not deliver it, "
+              "so the comparison cannot stand", file=sys.stderr)
+        return 2
+    print("unknown: something diverged and nobody promised it would not, so the verdict widens rather than falling "
+          "either way")
+    return 0
+
+
+@_refuses
 def cmd_conversation_cost(args) -> int:
     """What a sequence of turns in one context cost, and whether two such sequences may be compared at all.
 
@@ -1259,6 +1300,19 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    at = sub.add_parser("admit-traces", parents=[common],
+                        help="what two runs' tool traces license: refuse, widen to unknown, or neither")
+    at.add_argument("--determinism", default="unstated", choices=list(hn.TOOL_DETERMINISM),
+                    help="what the tool's contract promised. Only a declared promise can be broken, so only that one "
+                         "can refuse a comparison")
+    at.add_argument("--a-call", action="append", default=[], required=True,
+                    metavar="TOOL:PREFIX:ARGS:RESPONSE:CREDS:ATTEMPT",
+                    help="repeatable, in order. PREFIX is what the trace held before this call -- it is what stops the "
+                         "rule firing against a single run that writes a key and then reads it")
+    at.add_argument("--b-call", action="append", default=[], required=True,
+                    metavar="TOOL:PREFIX:ARGS:RESPONSE:CREDS:ATTEMPT", help="repeatable, for the second run")
+    at.set_defaults(fn=cmd_admit_traces, registry=None)
 
     cc = sub.add_parser("conversation-cost", parents=[common],
                         help="what a sequence of turns in one context cost, and whether two may be compared")

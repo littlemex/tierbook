@@ -20,9 +20,13 @@ below 150 shared items. Another reported a saving of 7.9% that fell to **1.0%** 
 the numbers were properties of the sample, not of the readout. A sampling rule in a file is checkable before a run; a
 sampling rule in a script is discovered afterwards.
 
+**The split is now declared (F132): none.** All 53 `Hyper-tau-bench` tasks are one set. The interval on 53 items is
+already [0.361, 0.621] and halving it leaves 26 a side, which supports nothing. The cost is stated rather than hidden:
+with no held-out fold, a policy selected by searching this suite is a point estimate with the selection named, never a
+guarantee.
+
 **What it has to carry.** The suite and its manifest digest (`OutcomeTable` already keys on one). The split, declared
-before the first run -- `Hyper-tau-bench` has **no official split**, so for that suite the split is ours and has to be
-written down. The item count and the sampling rule, with a seed, so a second run draws the same items. And the
+before the first run. The item count and the sampling rule, with a seed, so a second run draws the same items. And the
 intersection rule for a comparison, which is currently enforced in the harness rather than declared.
 
 **Done when.** A run cannot start without one of these, two runs of the same file draw the same items, and a comparison
@@ -50,15 +54,12 @@ reproduced without `distributed-ai` says so in its own record rather than in som
 
 **Blocked on.** Nothing.
 
-### T10 -- Republish the routing saving as an interval, or leave it withdrawn
+### T10 -- CLOSED (F132). Withdrawn permanently, and the reason on the record was wrong
 
-The 1.0% figure is withdrawn (F124). Replacing it needs both arms re-accounted at conversation scope on the
-price card's four legs plus the observed cache hit rate. **If the run's shape was not recorded -- single calls
-against multi-turn sequences -- there may be no defensible replacement**, and leaving it withdrawn is then the
-correct end state rather than a gap.
-
-**Done when.** Either an interval is published with the accounting scope stated, or the ledger says plainly
-that the measurement cannot be reconstructed.
+The shape **is** determinable and it is single-call, so the cache-prefix argument does not apply to this
+measurement at all. What disqualifies it was in the same paragraph all along: it is a saving over **90 shared
+items** against this repository's own floor of **150** for reporting a comparison. Not a gap waiting to be
+filled -- the items do not exist to fill it with.
 
 ### T11 -- DONE (F129). The cost model expresses its own price card
 
@@ -83,15 +84,16 @@ between them. The shape is now recordable; the alternative is not computable.
 `refuse_undefined_counterfactual`. Counting contexts is not enough: `briefs_and_results` keeps both caches warm
 and `whole_history` re-bills the prefix as fresh input, and they differ in sign.
 
-**Still open:** the tenth part. `tool_behaviour` is to be split into `tool_extension` (unobservable, as now) and
-`tool_trace` (collected, never identifying, veto only), per
-[DESIGN-surround-protocol.md](DESIGN-surround-protocol.md). The veto's restated form is designed and unbuilt.
+**The tenth part is DONE (F133):** `tool_extension` and `tool_trace`, with the veto matching on the occasion
+(tool, trace prefix, arguments, credentials class, attempt) and graded by what the tool's contract promised.
+`tierbook admit-traces` is the caller.
 
-### T14 -- Settle the one question the reviewers split on
+### T14 -- SETTLED (F132). No cohort identifier in the record
 
-Pre-registered signed cohort manifest, or no cohort digest in the record with grouping enumerated per
-analysis. Both reviewers concede the full design only made tuning loud rather than impossible, so this is a
-choice about where the loudness lives.
+Grouping is enumerated per analysis. Chosen because a name that stays fixed while the thing under it moves is a
+failure recorded twice here already, and a pre-registered manifest can name a cohort that does not exist.
+**Revisit if an external audit is ever in scope** -- pre-registration is the only mechanism that shows something
+was changed afterwards, and that argument is why the other option had support.
 
 ### T15 -- DONE (F126). The collector now records whose absence each hole is
 
@@ -99,17 +101,11 @@ Closed by F126: `ABSENCE_REASONS` with a total `ABSENCE_BLAMES` classification, 
 `Manifest` whose claim the record can contradict, and `tierbook collect-harness` as the production caller
 `harness.py` did not previously have.
 
-### T18 -- Blame the four gap reasons the same way
+### T18 -- NOT DOING (F132)
 
-`decide.GAP_REASONS` has four entries and none says whose absence it is, and `uncollected_variable` carries
-the identical ambiguity F126 closed: "the state did not carry it" against "we failed to collect it".
-
-**Not urgent, and the reason is on the record.** `observe.py` documents that an absent variable becomes
-`uncollected_variable` and the decision declines to certify, so both readings produce the same conservative
-outcome. Fourteen references, no wrong answer among them.
-
-**Done when.** Either each gap reason is blamed, or this entry says plainly that a message which already
-fails safe is not worth fourteen edits.
+`decide.GAP_REASONS` stays unblamed. `observe.py` documents that an absent variable declines to certify, so both
+readings of `uncollected_variable` land on the same conservative outcome; 14 references, no wrong answer among
+them. **A message that already fails safe is not worth fourteen edits.**
 
 ### T16 -- DONE (F127). A comparison whose arms were missing different facts is refused
 
@@ -149,9 +145,12 @@ Routing turns on `P(strong correct) - P(box correct)`. The second term is measur
 predicts the first**, and a confidence the box returns is another estimator of the second. This is the one gap that
 would change what routing is worth.
 
-**Blocked on.** Not blocked, but the ledger's own next step is to measure the **reliability ceiling** of an uplift label
-first (`K=8` re-runs, split-half, `r_max = sqrt(rho)`): below 0.15 the conclusion is that nobody can predict uplift and
-the effort belongs on the difficulty side instead. Measuring the ceiling is cheaper than another predictor.
+**Blocked on.** Not blocked, and now **priced (F132)**: `K=8` repeats of both arms over 699 items costs about
+**$24 and 23 minutes of GPU** -- 6.5% of a single Hyper-tau-bench pass. Below a ceiling of 0.15 the conclusion is that
+nobody can predict uplift and the effort belongs on the difficulty side instead.
+
+**This is the next thing to run.** Every expensive item below (T9, T3) exists to refine conclusions that stop
+mattering if the ceiling is low, so the ordering is settled by the price.
 
 ## Known and unblocked
 
