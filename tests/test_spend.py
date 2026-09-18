@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from tierbook import spend as sp  # noqa: E402
-from tierbook.evidence import EvidenceError  # noqa: E402
+from tierbook.evidence import CONTEXT_CROSSINGS, EvidenceError  # noqa: E402
 
 GPU = "gpu_seconds"
 PREFILL, GENERATION = 0.109, 10.42
@@ -448,3 +448,63 @@ def test_two_sequences_of_the_same_length_are_comparable():
 
 def test_the_printed_form_says_when_a_cache_was_paid_for_and_never_read():
     assert "nobody read" in str(sp.Conversation(context="ctx", turns=(first_turn(),)))
+
+
+# --- the ninth part, priced: how many contexts, and what crossed ----------------------------------------------------------
+
+def fusion_shape():
+    return sp.Partitioning(contexts=2, crosses="briefs_and_results")
+
+
+def naive_shape():
+    return sp.Partitioning(contexts=2, crosses="whole_history")
+
+
+def seq(context, partitioning=None):
+    return sp.Conversation(context=context, turns=(first_turn(), warm_turn()), partitioning=partitioning)
+
+
+def test_counting_contexts_is_not_enough_because_the_crossings_have_opposite_economics():
+    """Two contexts exchanging briefs keep both caches warm. Two contexts copying the transcript re-bill the prefix as
+    fresh input in the second, so the split costs rather than saves -- and a count alone cannot tell them apart."""
+    assert CONTEXT_CROSSINGS == ("nothing", "briefs_and_results", "whole_history")
+    assert fusion_shape().duplicates_prefix is False
+    assert naive_shape().duplicates_prefix is True
+
+
+def test_one_context_with_something_crossing_it_has_nowhere_to_cross_to():
+    with pytest.raises(EvidenceError, match="nothing for it to cross TO"):
+        sp.Partitioning(contexts=1, crosses="briefs_and_results")
+
+
+def test_a_run_with_no_context_did_not_happen():
+    with pytest.raises(EvidenceError, match="did not happen"):
+        sp.Partitioning(contexts=0, crosses="nothing")
+
+
+def test_an_open_ended_crossing_is_refused():
+    with pytest.raises(EvidenceError, match="not one of"):
+        sp.Partitioning(contexts=2, crosses="some_summary_probably")
+
+
+def test_a_bare_context_count_is_refused_where_a_partitioning_is_wanted():
+    with pytest.raises(EvidenceError, match="would not say what crossed"):
+        sp.Conversation(context="ctx", turns=(first_turn(),), partitioning=2)
+
+
+def test_an_unrecorded_partitioning_makes_the_counterfactual_undefined_not_uncertain():
+    """The distinction has different remedies: an unmeasured quantity can be measured later from the same record, and an
+    undefined one cannot, because the record does not contain the question."""
+    with pytest.raises(EvidenceError, match="undefined rather than uncertain"):
+        sp.refuse_undefined_counterfactual(seq("a", fusion_shape()), seq("b"))
+    with pytest.raises(EvidenceError, match="undefined rather than uncertain"):
+        sp.refuse_undefined_counterfactual(seq("a"), seq("b", fusion_shape()))
+
+
+def test_an_alternative_that_copies_a_transcript_is_refused_as_a_cost_of_the_partitioning():
+    with pytest.raises(EvidenceError, match=r"cost of the\s+PARTITIONING"):
+        sp.refuse_undefined_counterfactual(seq("actual", fusion_shape()), seq("alt", naive_shape()))
+
+
+def test_two_recorded_partitionings_of_the_same_kind_define_a_counterfactual():
+    sp.refuse_undefined_counterfactual(seq("actual", fusion_shape()), seq("alt", fusion_shape()))

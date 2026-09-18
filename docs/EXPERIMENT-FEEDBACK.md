@@ -6062,6 +6062,54 @@ Six mutations, all caught: letting the first turn claim a cache read, totalling 
 units, allowing an empty conversation, comparing different lengths, and dropping the write from
 `paid_for_nothing`. Suite: **1,734 passing, 3 skipped.**
 
+## F131 — The ninth harness part, priced: counting contexts is not enough
+
+Closes T13. `context_partitioning` is now the ninth part in `HARNESS_PARTS`, classified `pushed_by_owner` for the
+same reason `loop` is: how many contexts a caller keeps and what it copies between them is a property of their
+scaffold, and we see one request at a time and cannot tell a second context from a second conversation in the
+first.
+
+Adding it broke a test immediately — the enumeration of unrecorded parts. **That is the total classification
+working**: a part cannot be added without every place that enumerates parts being made to agree.
+
+### Counting contexts is not enough, and that is the whole point of the second field
+
+`Partitioning(contexts, crosses)` with `CONTEXT_CROSSINGS = ("nothing", "briefs_and_results", "whole_history")`,
+because **the three have opposite economics**:
+
+| crossing | what it costs |
+|---|---|
+| `nothing` | two independent runs |
+| `briefs_and_results` | both caches stay warm, because neither context ever switches model. **This is the arrangement the published 39.2% rests on** |
+| `whole_history` | the transcript is copied, so the **entire prefix is billed as fresh input in the second context** — the split costs more than not splitting |
+
+**A record that counts contexts without saying what crossed cannot tell the third from the second**, and they
+differ in sign. `duplicates_prefix` names it.
+
+One context with something crossing it is refused: there is nothing for it to cross to, so either a second
+context went unrecorded — and then the fresh input it was billed is attributed to the first — or the crossing
+describes something that did not happen.
+
+### The counterfactual is now definable, and refused when it is not
+
+`refuse_undefined_counterfactual` refuses to state what an alternative would have cost when either side's
+partitioning is unrecorded. The wording is deliberate: **undefined rather than uncertain**, because the two have
+different remedies. An unmeasured quantity can be measured later from the same record; an undefined one cannot,
+because **the record does not contain the question**.
+
+It also refuses an alternative that copies a transcript where the actual run did not — that alternative pays the
+whole prefix as fresh input in its second context, and the difference would be reported as a cost of whatever the
+arms were supposed to differ in.
+
+**This is the refusal T10 asked for.** If a published run's shape was never recorded there may be no defensible
+replacement figure, and leaving the 1.0% withdrawn is then the correct end state rather than a gap to be filled
+with an assumption.
+
+### Verified by breaking it
+
+Seven mutations, all caught, including deleting the ninth part's sourcing classification. Suite: **1,742 passing,
+3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

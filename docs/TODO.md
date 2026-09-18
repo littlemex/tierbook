@@ -77,13 +77,15 @@ Production caller `tierbook conversation-cost`.
 **Still open and moved to T13:** the counterfactual needs to know how many contexts exist and what crosses
 between them. The shape is now recordable; the alternative is not computable.
 
-### T13 -- `context_partitioning`, and the tenth part beside it
+### T13 -- DONE (F131). `context_partitioning` is the ninth part, and it is priced
 
-How many contexts exist and what crosses between them. Local Fusion's entire reported saving ($7.47 to $4.54,
-39.2%) lives in this part, and the current eight cannot express it. Named `context_partitioning` in
-[DESIGN-surround-protocol.md](DESIGN-surround-protocol.md), which also splits `tool_behaviour` into
-`tool_extension` (unobservable, as now) and `tool_trace` (collected, never identifying, veto only) -- so the
-inventory is **ten**, not nine.
+`HARNESS_PARTS` now has nine, with `Partitioning(contexts, crosses)` in `spend.py` and
+`refuse_undefined_counterfactual`. Counting contexts is not enough: `briefs_and_results` keeps both caches warm
+and `whole_history` re-bills the prefix as fresh input, and they differ in sign.
+
+**Still open:** the tenth part. `tool_behaviour` is to be split into `tool_extension` (unobservable, as now) and
+`tool_trace` (collected, never identifying, veto only), per
+[DESIGN-surround-protocol.md](DESIGN-surround-protocol.md). The veto's restated form is designed and unbuilt.
 
 ### T14 -- Settle the one question the reviewers split on
 

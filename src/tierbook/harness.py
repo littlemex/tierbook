@@ -54,6 +54,15 @@ HARNESS_PARTS = (
     "retry_policy",         # what it retries and how often
     "readout",              # how the final answer is taken out of the reply
     "decoding",             # temperature, top-p, and whether output is grammar-constrained
+    # The ninth, and the part a whole published saving lives inside. Local Fusion reports $7.47 to $4.54 (39.2%) and
+    # the entire mechanism is that a frontier model and a cheap one run in SEPARATE persistent contexts exchanging only
+    # briefs and results, because switching models inside one context breaks prompt caching. The other eight cannot
+    # express that at all: every one of them describes a single context.
+    #
+    # It is also what makes the counterfactual definable. "What would this have cost unrouted" is a question about how
+    # many contexts there would have been and what would have crossed between them, and with the partitioning
+    # unrecorded the alternative is not computable rather than merely unmeasured.
+    "context_partitioning",
 )
 
 #: For each part, the BEST mode that can reach it, as a total classification. Total on purpose: adding a part without
@@ -71,6 +80,10 @@ BEST_AVAILABLE_SOURCING = {
     "retry_policy": "pushed_by_owner",
     "readout": "in_the_request",
     "decoding": "in_the_request",
+    # Pushed, and the reason is the same one that puts `loop` there: how many contexts a caller keeps and what it copies
+    # between them is a property of their scaffold, not of any request we hold. We see one request at a time and cannot
+    # tell a second context from a second conversation in the first.
+    "context_partitioning": "pushed_by_owner",
 }
 
 

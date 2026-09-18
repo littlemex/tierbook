@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tierbook.evidence import EvidenceError
+from tierbook.evidence import CONTEXT_CROSSINGS, EvidenceError
 
 #: What a cost is measured in. Closed, because the three are not interchangeable and no conversion between them is
 #: available here.
@@ -291,6 +291,49 @@ class SignalPrice:
 
 
 @dataclass(frozen=True)
+class Partitioning:
+    """How many contexts a run kept, and what crossed between them. The ninth harness part, priced.
+
+    This is what makes a counterfactual definable. "What would this have cost unrouted" is a question about how many
+    contexts there would have been and what would have crossed between them -- so with the partitioning unrecorded the
+    alternative is **not computable** rather than merely unmeasured, which is a different kind of missing and needs
+    saying differently.
+
+    **Counting contexts is not enough, and that is the whole reason `crosses` exists.** Two contexts exchanging only
+    briefs and results keep both caches warm, because neither context ever switches model; two contexts where the
+    transcript is copied across bill the entire prefix as fresh input in the second one. The first arrangement is where a
+    published 39.2% saving comes from and the second costs more than not splitting at all -- and a record that counts
+    contexts without saying what crossed cannot tell them apart.
+    """
+
+    contexts: int
+    crosses: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.contexts, int) or isinstance(self.contexts, bool):
+            raise EvidenceError(f"contexts={self.contexts!r} is not an integer")
+        if self.contexts < 1:
+            raise EvidenceError("a run with no context did not happen; there is always at least the one the request "
+                               "arrived in")
+        if self.crosses not in CONTEXT_CROSSINGS:
+            raise EvidenceError(f"{self.crosses!r} is not one of {CONTEXT_CROSSINGS}")
+        if self.contexts == 1 and self.crosses != "nothing":
+            raise EvidenceError(
+                f"one context and {self.crosses!r} crossing it: there is nothing for it to cross TO. Either a second "
+                f"context went unrecorded -- and then the fresh input it was billed is attributed to the first -- or the "
+                f"crossing is a description of something that did not happen")
+
+    @property
+    def duplicates_prefix(self) -> bool:
+        """Whether the split re-bills a prefix as fresh input somewhere else, which makes it cost rather than save."""
+        return self.crosses == "whole_history"
+
+    def __str__(self) -> str:
+        tail = " (re-bills the prefix as fresh input)" if self.duplicates_prefix else ""
+        return f"{self.contexts} context(s), {self.crosses} crossing{tail}"
+
+
+@dataclass(frozen=True)
 class Conversation:
     """The turns that shared one context, and the cost of the whole of it rather than of any one request.
 
@@ -310,8 +353,15 @@ class Conversation:
 
     context: str
     turns: tuple[Spend, ...]
+    #: How the run this sequence belongs to was partitioned. `None` means nobody recorded it, which is the state of
+    #: every cost written before the ninth harness part existed -- left representable for the same reason the cache legs
+    #: are, and refused only where it is load-bearing: a counterfactual.
+    partitioning: Partitioning | None = None
 
     def __post_init__(self) -> None:
+        if self.partitioning is not None and not isinstance(self.partitioning, Partitioning):
+            raise EvidenceError(f"partitioning={self.partitioning!r} is not a Partitioning; a bare context count would "
+                                f"not say what crossed, and that is what decides whether splitting was cheap")
         if not self.context:
             raise EvidenceError(
                 "a conversation with no context identifier cannot say which turns shared a cache prefix, which is the "
@@ -363,6 +413,33 @@ class Conversation:
     def __str__(self) -> str:
         tail = " (paid for a cache nobody read)" if self.paid_for_nothing else ""
         return f"{self.context}: {self.turn_count} turn(s), {self.total}{tail}"
+
+
+def refuse_undefined_counterfactual(actual: Conversation, alternative: Conversation) -> None:
+    """Refuse to state what an alternative would have cost when the partitioning of either side is unrecorded.
+
+    **Not computable rather than unmeasured**, and the distinction matters because the two have different remedies. An
+    unmeasured quantity can be measured later from the same record; an undefined one cannot, because the record does not
+    contain the question. Whether a turn's input is billed fresh or cached depends on how many contexts there were and
+    what was copied between them, so without that the alternative's input cost has no value at all -- not an uncertain
+    one.
+
+    This is the refusal the ledger's own note on the withdrawn saving asks for: if a published run's shape was never
+    recorded there may be no defensible replacement figure, and leaving it withdrawn is the correct end state rather
+    than a gap to be filled with an assumption.
+    """
+    for side, name in ((actual, "the run as it happened"), (alternative, "the alternative")):
+        if side.partitioning is None:
+            raise EvidenceError(
+                f"cannot state what {name} would have cost: {side.context!r} does not record how the run was "
+                f"partitioned. Whether a turn's input is billed fresh or cached depends on how many contexts there were "
+                f"and what crossed between them, so the alternative's input cost is undefined rather than uncertain -- "
+                f"and an undefined quantity cannot be recovered from this record by measuring harder")
+    if alternative.partitioning.duplicates_prefix and not actual.partitioning.duplicates_prefix:
+        raise EvidenceError(
+            f"the alternative copies a whole transcript between contexts and the run as it happened did not, so the "
+            f"alternative pays the entire prefix as fresh input in the second context. That is a cost of the "
+            f"PARTITIONING and it would be reported as a cost of whatever the two arms were supposed to differ in")
 
 
 def refuse_incomparable_shapes(a: Conversation, b: Conversation) -> None:

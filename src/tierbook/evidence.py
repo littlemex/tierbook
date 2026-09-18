@@ -517,3 +517,13 @@ DIGEST_BOUNDARIES = ("transport", "parsed", "model_visible")
 #: Which boundary may key an identity. Only the one the model actually read, for the reason above.
 IDENTIFYING_BOUNDARIES = ("model_visible",)
 
+#: What crosses between two contexts, which is what decides whether splitting them is cheap. Closed, because the three
+#: entries have opposite economics and an open-ended name would hide which one applied.
+#:
+#: `nothing` is two independent runs. `briefs_and_results` is the arrangement a published 39.2% saving rests on -- a
+#: frontier model and a cheap one in separate persistent contexts exchanging only instructions and outcomes, so both
+#: caches stay warm because neither context ever switches model. `whole_history` is the trap: copying the transcript into
+#: the second context bills the entire prefix as fresh input there, so the split COSTS rather than saves, and it looks
+#: identical to the cheap arrangement in any record that only counts contexts.
+CONTEXT_CROSSINGS = ("nothing", "briefs_and_results", "whole_history")
+

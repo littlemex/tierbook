@@ -150,7 +150,8 @@ def test_the_unobserved_parts_are_reported():
 
 
 def test_the_parts_nothing_was_recorded_about_are_reported_too():
-    assert set(full().missing) == {"turn_budget", "retry_policy", "readout", "decoding"}
+    assert set(full().missing) == {"turn_budget", "retry_policy", "readout", "decoding",
+                                   "context_partitioning"}
 
 
 def test_the_printed_form_carries_both():
