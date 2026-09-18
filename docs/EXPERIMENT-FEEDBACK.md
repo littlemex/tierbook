@@ -6372,6 +6372,70 @@ on the first refusal instead of skipping it lost nothing and passed.
 section: the first real test of it is a second implementation disagreeing about what a sentence means. Also absent:
 riding on a tracer's auto-instrumentation, which currently needs one explicit `wrap` at the client boundary.
 
+## F136 — A second implementation of the protocol, and the five sentences that read two ways
+
+`perigraph` now has a TypeScript sender beside the Python one, written **from `SPEC.md` rather than from the Python
+source** -- which is the only way the exercise is worth anything. The result is the strongest evidence so far that
+writing a spec and writing an implementation are different acts.
+
+### The measurement
+
+Same request body, both implementations, 24 wire attributes:
+
+| | |
+|---|---|
+| attributes that agreed | **22** |
+| attributes that disagreed | **2**, both `parsed` digests |
+| **the identity** | agreed -- **by luck, not by specification** |
+
+The identity agreed only because the second implementer had read the first implementation. **From the spec alone it
+could not have**, and that is the fatal finding.
+
+### The one that would have killed interoperability
+
+`SPEC.md` said the identity is "a digest over its identifying parts, sorted by part name". It never said how the
+parts are **joined**, that the result is **truncated to 24 characters**, or what bytes a **string** has. Two
+implementations disagreeing on an identity **cannot group anything**, which is the only thing an identity is for --
+so two conformant senders would have described one run as two harnesses.
+
+### The one that would have been silently wrong
+
+Nothing said `utf-8`. **An implementation choosing UTF-16 would produce a different identity for every non-ASCII
+instruction while passing every test it wrote for itself**, because a suite written in English never exercises the
+difference. `spec/fixtures/identity.json` now contains an instruction in Japanese, and it is the only case in the set
+that can fail for this reason.
+
+### The one that cannot be fixed, only stated
+
+The two disagreeing digests are both `parsed`. Python's `repr` renders `0.0` as `0.0`; `JSON.stringify` renders it as
+`0`. There is no neutral serialisation to legislate that would not amount to picking one language's conventions, so
+the spec now says the true thing: **a `parsed` digest is comparable only within one collector and version.** Nothing
+was lost -- a `parsed` digest can never key an identity -- and what was at risk before saying it is somebody
+comparing two and **concluding the harnesses differed**, which is precisely the false positive this protocol exists
+to prevent.
+
+### What it cost this repository, and the third category the conformance test needed
+
+The spec grew a ninth receiver obligation from that fix, and **the conformance test failed immediately** -- correctly.
+This package **cannot** implement it: a `Part` here carries no collector, because its parts come from an operator's
+door rather than from a shim.
+
+"Not applicable" would be a loophole if it were merely asserted, so the test now has a **third category with a
+proof**: the only comparison this package performs reads identifying parts, an identifying part is `model_visible` by
+construction, so the comparison **cannot reach** a `parsed` digest. Unreachable is stronger than refused.
+
+### What this says about the method rather than the protocol
+
+**Four of the five were invisible from inside one implementation.** Every Python test passed before and after these
+fixes, and that is not a gap in those tests -- **a test written against an implementation cannot find a sentence that
+implementation happened to interpret one way.**
+
+The generalisation worth keeping: **for an artefact whose value is that somebody else can rely on it, a second
+independent construction finds a class of defect no amount of testing the first one reaches.** It cost less than a
+feature would have and it is the only thing that found any of these.
+
+Python 37 tests, TypeScript 29, five golden identities reproduced by both. Suite here: **1,782 passing, 3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

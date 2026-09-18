@@ -2,7 +2,6 @@
   "spec_version": 1,
   "namespace": "perigraph",
   "note": "Normative. Both a sender's shim and a receiver read this file, and each has a conformance test against it, so a vocabulary that drifts on one side is a test failure rather than a discovery. Every list is CLOSED: a value outside it is refused, not accepted with a warning.",
-
   "parts": {
     "note": "What surrounds the model. A part nobody named is a part that can change without the identity changing, which is the defect this vocabulary exists to close.",
     "values": [
@@ -18,11 +17,17 @@
       "context_partitioning"
     ]
   },
-
   "sourcing": {
     "note": "How a fact reached the receiver. These are not interchangeable: they differ in what the fact can support.",
-    "values": ["in_the_request", "pulled_by_us", "pushed_by_owner", "not_observable"],
-    "may_key_identity": ["in_the_request"],
+    "values": [
+      "in_the_request",
+      "pulled_by_us",
+      "pushed_by_owner",
+      "not_observable"
+    ],
+    "may_key_identity": [
+      "in_the_request"
+    ],
     "rationale": {
       "in_the_request": "The bytes are held. It IS what was sent: verifiable and contemporaneous.",
       "pulled_by_us": "Fetched, so verifiable and NOT contemporaneous. Carries its lag; a lag nobody bounded cannot support a per-request claim.",
@@ -30,29 +35,40 @@
       "not_observable": "No mode reaches it. A tool's implementation behind an unchanged schema is the case that forced this entry."
     }
   },
-
   "boundaries": {
     "note": "What a digest is a digest OF. Three things were being called 'the bytes', and the two mistakes they cause run in opposite directions, so neither is fixed by being careful.",
-    "values": ["transport", "parsed", "model_visible"],
-    "may_key_identity": ["model_visible"],
+    "values": [
+      "transport",
+      "parsed",
+      "model_visible"
+    ],
+    "may_key_identity": [
+      "model_visible"
+    ],
     "rationale": {
       "transport": "What a client put on the wire. Two client versions serialise differently and decode to the same text, so keying on this SPLITS runs that were identical.",
       "parsed": "The protocol value after decoding. Two strings that canonicalise to one value can behave differently embedded verbatim in a prompt, so keying on this MERGES runs that were not.",
       "model_visible": "The exact text the model read. The only boundary that can support a claim that two runs had the same input."
     }
   },
-
   "never_identifying": {
     "note": "Parts that may never key an identity whatever their sourcing and boundary say. Enforced by name because the general rules would admit them.",
-    "values": ["tool_trace"],
+    "values": [
+      "tool_trace"
+    ],
     "rationale": {
       "tool_trace": "Bytes we hold, so the sourcing rule admits it -- and it is a per-run OUTCOME, unique per run, so keying on it makes every pair of runs incomparable."
     }
   },
-
   "absence_reasons": {
     "note": "Why a part is not in the record, and WHOSE absence it is. A single undifferentiated hole cannot serve, because a collector that loses the ability to read a part writes the same absence a sender's silence writes -- and then every consumer behaves exactly as designed while the regression is invisible. A closed vocabulary constrains spelling, not truth.",
-    "values": ["not_provided", "not_reachable", "extraction_failed", "redacted", "not_observable"],
+    "values": [
+      "not_provided",
+      "not_reachable",
+      "extraction_failed",
+      "redacted",
+      "not_observable"
+    ],
     "blames": {
       "not_provided": "sender",
       "not_reachable": "collector",
@@ -62,26 +78,37 @@
     },
     "detail_required_when_blames": "collector"
   },
-
   "status": {
     "note": "Whether a record is complete about ITSELF. Separate from anything about the sender, because the two refusals are about different objects: toward the sender a collector is maximally permissive, and about itself it must be exact.",
-    "values": ["complete", "aborted", "collector_failed"],
-    "admissible_to_a_verdict": ["complete"]
+    "values": [
+      "complete",
+      "aborted",
+      "collector_failed"
+    ],
+    "admissible_to_a_verdict": [
+      "complete"
+    ]
   },
-
   "context_crossings": {
     "note": "What crosses between two contexts, which is what decides whether splitting them is cheap. Counting contexts is not enough: the three have opposite economics.",
-    "values": ["nothing", "briefs_and_results", "whole_history"],
+    "values": [
+      "nothing",
+      "briefs_and_results",
+      "whole_history"
+    ],
     "rationale": {
       "nothing": "Two independent runs.",
       "briefs_and_results": "Both caches stay warm, because neither context ever switches model. This is the arrangement a published 39.2% saving rests on.",
       "whole_history": "The transcript is copied, so the entire prefix is billed as fresh input in the second context. The split COSTS rather than saves, and it is indistinguishable from the row above in any record that only counts contexts."
     }
   },
-
   "tool_determinism": {
     "note": "What a tool's contract promises for the same effective invocation context. Not a boolean: the third value, nobody said, is the common one and must not collapse into either of the others.",
-    "values": ["declared_deterministic", "known_to_vary", "unstated"],
+    "values": [
+      "declared_deterministic",
+      "known_to_vary",
+      "unstated"
+    ],
     "divergence_licenses": {
       "declared_deterministic": "refuse",
       "known_to_vary": "unknown",
@@ -89,18 +116,29 @@
     },
     "rationale": "A divergence between two traces on the same occasion is evidence of divergent recorded execution and never proof of a different tool implementation. Firing on argument equality alone was refuted three ways: it fires against a single run that writes a key and then reads it, it fires on essentially every networked tool because request ids sit in response bodies, and its conclusion is false even where firing is right."
   },
-
   "occasion": {
     "note": "What must match before two tool calls are the same occasion. Anything else is a different occasion and says nothing about the tool. The prefix is what stops the rule firing against a single run.",
-    "fields": ["tool", "prefix_digest", "arguments_digest", "credentials_class", "attempt"]
+    "fields": [
+      "tool",
+      "prefix_digest",
+      "arguments_digest",
+      "credentials_class",
+      "attempt"
+    ]
   },
-
   "billed_legs": {
     "note": "The legs a price card actually bills, which is four and not two. The cache discount attaches to the SHAPE of a request rather than to its text: identical content measured a 0% cache rate as one long message and 99.9% as a growing conversation.",
-    "values": ["fresh_in", "cached_in", "cache_write", "generation"],
-    "all_or_nothing": ["cached_in", "cache_write"]
+    "values": [
+      "fresh_in",
+      "cached_in",
+      "cache_write",
+      "generation"
+    ],
+    "all_or_nothing": [
+      "cached_in",
+      "cache_write"
+    ]
   },
-
   "attributes": {
     "note": "The wire form. Flat, scalar-valued, and prefixed, so it rides on a span any tracer already emits. Indexed keys use the part name rather than an integer, because an integer index reorders and a part name does not.",
     "record": {
@@ -121,7 +159,6 @@
       "perigraph.absent.<name>.detail": "string. Required when the reason blames the collector, refused otherwise."
     }
   },
-
   "receiver_obligations": {
     "note": "What a receiver must do to claim conformance. Stated as refusals, because every one of them exists because a published number needed withdrawing.",
     "must_refuse": [
@@ -132,11 +169,22 @@
       "A comparison of two arms whose decisions were missing different facts, or where one recorded its missingness and the other did not.",
       "A comparison of two conversations of different turn counts.",
       "A statement of what an alternative would have cost when either side's context_partitioning is unrecorded.",
-      "A comparison where two traces diverge on the same occasion and the tool declared determinism."
+      "A comparison where two traces diverge on the same occasion and the tool declared determinism.",
+      "A comparison of two `parsed` digests produced by different collectors or different collector versions."
     ],
     "must_not_refuse": [
       "A record missing any number of parts. Toward the sender the collector is maximally permissive, and a collector that refuses a partial record produces no record at all.",
       "A record whose status is not complete, as a LOG. It stays fully usable there."
     ]
+  },
+  "digest": {
+    "note": "Added in response to the second implementation, which could not interoperate without it. Section 5 said 'lowercase hex sha256 of the part's bytes' and never said what bytes a STRING has, nor how the identity combines its parts, nor that the result is truncated. A UTF-16 implementation would have produced a different identity for every non-ASCII instruction while passing every test it wrote for itself.",
+    "algorithm": "sha256",
+    "encoding": "utf-8",
+    "identity_length": 24,
+    "identity_serialisation": "For each identifying part, sorted by part name ascending, append the bytes of '<part_name>=<content_digest>;' in utf-8. Digest the concatenation and take the first identity_length characters of the lowercase hex.",
+    "model_visible_payload": "Hashed RAW. No canonicalisation, no trimming, no case folding. A model reads the string and not its meaning.",
+    "parsed_digests_are_collector_local": "A `parsed` digest is comparable ONLY against another digest from the same collector and the same collector version. The two reference implementations serialise protocol values differently -- Python's repr renders 0.0 as '0.0' and JSON.stringify renders it as '0' -- so the same request yields different `parsed` digests in each. This is stated rather than fixed because a `parsed` digest can never key an identity, so nothing that matters was lost; what was at risk before saying it is somebody comparing two and concluding the harnesses differed.",
+    "instruction_join": "Where several system messages are present, join their contents with a single U+000A in the order they appear. This is NORMATIVE rather than collector-local, because the instruction digest keys the identity and two collectors choosing differently would give two identities for one request."
   }
 }
