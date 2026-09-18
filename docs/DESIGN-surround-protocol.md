@@ -1,5 +1,11 @@
 # Surround: a protocol for what is around the model
 
+> **Superseded, and kept as the record of how the design was reached.** The protocol shipped as **perigraph**
+> (περί around + γραφή record) at `github.com/littlemex/perigraph`, and its `spec/vocabularies.json` is normative
+> rather than anything here. The name `Surround` was dropped for the reason the reviewers gave for rejecting
+> `harness.*`: it is a generic English word with an established meaning elsewhere. What this document is still good
+> for is **why** each rule exists, and what was tried and refuted first.
+
 **Status.** Design, revised once after review by two models. Nothing here is implemented. The name is provisional and
 exists so the two sides of the boundary can be talked about without saying "the harness thing" -- not as a claim to a
 standard.

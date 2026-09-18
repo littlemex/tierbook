@@ -6313,6 +6313,65 @@ statement of why canonicalising is forbidden for the instruction and allowed for
 
 Production caller `tierbook read-harness`. Suite: **1,766 passing, 3 skipped.**
 
+## F135 — The protocol moved out into its own repository, and a drift between the two sides is now a test
+
+`perigraph` — περί (around) + γραφή (record) — is at `github.com/littlemex/perigraph`, Apache-2.0, with the
+normative vocabularies in `spec/vocabularies.json`, the prose in `SPEC.md`, and a Python sender: a collector, a
+wire form, and an injection.
+
+**Why a separate repository rather than a module here.** The shim runs in a *sender's* process. It must not drag an
+evidence package in with it, and this package's `dependencies = []` must not acquire a tracer. Both constraints
+point the same way, and neither is negotiable: a component that decides where money goes should not be able to
+break because something it did not need moved.
+
+### The interesting part is how the two sides are kept from drifting
+
+**The vocabularies are not retyped.** `spec/vocabularies.json` is normative, the sender reads it at import, and
+this repository has `tests/test_perigraph_conformance.py` reading a **vendored copy** at
+`tests/spec/perigraph-vocabularies.json`.
+
+That gives the two possible drifts different shapes on purpose:
+
+| drift | shape |
+|---|---|
+| this package's constants against the vendored copy | **a test failure** |
+| the vendored copy against upstream | **a deliberate re-vendor** -- a visible edit to a file in a diff |
+
+Vendoring rather than importing is the point, and the copy must **not** be regenerated at test time: a copy
+derived from the thing it checks matches by construction and checks nothing. The copy's digest is asserted too,
+which is not a security measure -- anybody editing the copy can edit the constant -- but **a note in the diff**, so
+changing a vocabulary and changing that line happen together and a reviewer sees the protocol move rather than a
+list.
+
+Drift is real rather than hypothetical: this repository renamed `tool_behaviour` to `tool_extension` two commits
+ago and split a new part out of it. Had the sender existed then, nothing would have caught the two sides
+disagreeing.
+
+**Seven mutations, all caught**: renaming a boundary, dropping an absence reason, flipping a blame, flipping a
+determinism licence, dropping a field from `ToolCall.occasion`, renaming a billed leg, and editing the vendored
+spec without updating its digest. The occasion test reads the tuple **off a real call** rather than comparing two
+lists, so a field renamed in the code without the spec moving still fails.
+
+And the receiver obligations are checked by name against the callable that implements each, so **deleting a
+refusal breaks this test** rather than quietly reducing what conformance means.
+
+### What the sender does that this repository's collector does not
+
+The injection **never breaks the call it describes** — a body it cannot find, a collector that crashed, a sink that
+raises, a tracer that rejects one attribute, all degrade the record and let the call through. A shim that can break
+a request is one nobody leaves installed, and then there is no record at all; the degradation is recorded as
+`collector_failed` so it cannot pass as the sender's silence.
+
+Two of its own mutations survived the first pass and both were real gaps: nothing pinned that the manifest is
+**static per version**, and the attribute-rejection test rejected a **late** key, so an implementation that stopped
+on the first refusal instead of skipping it lost nothing and passed.
+
+### What is honestly not done
+
+**There is one implementation, so the spec has not been tested as a spec.** `SPEC.md` says so in its conformance
+section: the first real test of it is a second implementation disagreeing about what a sentence means. Also absent:
+riding on a tracer's auto-instrumentation, which currently needs one explicit `wrap` at the client boundary.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
