@@ -114,13 +114,12 @@ field the design listed, and missingness already travelled through the existing 
 missing was the refusal**, now `counterfactual.refuse_differential_missingness`, called from `compare()` and
 exposed as `tierbook admit-comparison`.
 
-### T17 -- A digest has to say which boundary it is over
+### T17 -- DONE (F128). A digest says which of three things it is over
 
-Every digest here is implicitly over "the bytes", and three different things wear that name: `transport`,
-`parsed`, `model_visible` (F125). Only `model_visible` can support a claim that two runs had the same input.
-
-**Done when.** A digest carries its boundary, an identity claim built on a non-`model_visible` digest is
-refused, and a canonical digest can narrow a candidate set while being unable to authorise a comparison.
+`DIGEST_BOUNDARIES` with `Part.boundary`, defaulting to `model_visible` because that is the true statement
+about every existing caller. The remaining half -- a canonical digest that may narrow a candidate set while
+being unable to authorise a comparison -- is **not built**, because no experiment has needed to group by one
+yet. It is the index half of F125's design and stays out until something asks for it.
 
 ## Blocked on something outside this repository
 

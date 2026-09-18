@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from tierbook import harness as hn  # noqa: E402
-from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, HARNESS_SOURCING,  # noqa: E402
-                              IDENTIFYING_SOURCING)
+from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, DIGEST_BOUNDARIES,  # noqa: E402
+                              HARNESS_SOURCING, IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING)
 
 TERSE = "Answer with the option letter only. Do not explain."
 EXPLAIN = "Think step by step, then answer with the option letter."
@@ -296,3 +296,45 @@ def test_a_bad_status_is_refused():
     with pytest.raises(hn.Unidentified, match="is not one of"):
         hn.Collection(manifest=manifest(), status="probably_fine",
                       harness=hn.Harness(parts=(part(),)))
+
+
+# --- a digest says which of three things it is a digest of ----------------------------------------------------------------
+
+def test_only_the_text_the_model_read_may_key_an_identity():
+    """The two mistakes run in opposite directions, so neither is fixed by being careful."""
+    assert DIGEST_BOUNDARIES == ("transport", "parsed", "model_visible")
+    assert IDENTIFYING_BOUNDARIES == ("model_visible",)
+    with pytest.raises(hn.Unidentified, match="opposite directions"):
+        part(boundary="transport")
+
+
+def test_a_non_identifying_part_may_carry_any_boundary():
+    """A pushed loop description is recorded and does not key the identity, so what its digest is over cannot corrupt
+    a grouping."""
+    p = part(kind="loop", sourcing="pushed_by_owner", label="react v3",
+             digest=hn.digest_bytes("react v3"), boundary="parsed")
+    assert p.identifying is False
+
+
+def test_an_unknown_boundary_is_refused():
+    with pytest.raises(hn.Unidentified, match="not one of"):
+        part(boundary="whatever_the_sdk_sent")
+
+
+def test_the_collision_is_unrepresentable_rather_than_hashed_around():
+    """The first attempt at this hashed the boundary into the identity so two digests of different things could not
+    collide. That is variation which cannot occur: every part that enters an identity has already been refused unless
+    its boundary is `model_visible`, so the extra term was dead. The refusal is the mechanism; the hash was decoration.
+
+    What this pins is the reachability claim -- there is no way to construct an identifying part on another boundary."""
+    for boundary in DIGEST_BOUNDARIES:
+        if boundary in IDENTIFYING_BOUNDARIES:
+            assert part(boundary=boundary).identifying is True
+        else:
+            with pytest.raises(hn.Unidentified):
+                part(boundary=boundary)
+
+
+def test_the_default_boundary_is_the_true_statement_about_existing_callers():
+    """Every caller before this field hashed the text the model read, so the default is honest rather than convenient."""
+    assert part().boundary == "model_visible"

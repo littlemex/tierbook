@@ -5916,6 +5916,50 @@ apply there**, and the reason is worth stating rather than leaving as a silence:
 against its own repeat, so differential missingness between the two is a finding about reproducibility rather
 than a confound in an assignment. Nothing else in the package forms a model-against-model claim.
 
+## F128 — A digest says which of three things it is a digest of
+
+Closes T17. Three different objects were all being called "the bytes", and the two mistakes they cause run in
+**opposite directions**, so neither is fixed by being careful:
+
+| boundary | what it is | keying an identity on it |
+|---|---|---|
+| `transport` | what a client put on the wire | **splits runs that were identical** -- two client versions serialise differently and decode to the same text |
+| `parsed` | the protocol value after decoding | **merges runs that were not** -- two strings that canonicalise to one value can behave differently embedded verbatim in a prompt |
+| `model_visible` | the exact text the model read | the only one that can support "these two runs had the same input" |
+
+`DIGEST_BOUNDARIES` and `IDENTIFYING_BOUNDARIES` in the leaf; `Part.boundary` carrying it, defaulting to
+`model_visible` because that is **the true statement about every existing caller** (the instruction text, the
+tool schemas as sent) rather than a plausible-looking default. A digest over anything else is recorded and
+refused an identity.
+
+### One piece of machinery was built and then deleted
+
+The first version also hashed the boundary into `Harness.identity`, so that two digests of different things
+could not collide under one name. **That is variation which cannot occur**: every part entering an identity has
+already been refused unless its boundary is `model_visible`, so the extra term was dead. The refusal is the
+mechanism and the hash was decoration; it was reverted.
+
+It surfaced because the test written for it asserted a string the test had built itself, which checks nothing.
+Rewriting that test to pin the real claim -- **there is no way to construct an identifying part on another
+boundary** -- is what showed the code under it was unreachable.
+
+### The audit: this is the second instance of one shape
+
+`judge.DIGEST_SUBJECTS` is the same idea under another name. It is `("published_weights",)` with
+`loaded_tensors` in `REFUSED_KEYS`, for the same reason: an engine fuses projections and changes dtypes and
+shardings, so a digest of what was loaded is a digest of a different object than what was published.
+
+**So the rule was already here once, and nobody noticed it generalised.** Merging the two vocabularies is not
+done: they name boundaries in different domains (a served model's weights against a request's text), and
+collapsing them would produce one list whose entries are only alike in shape. Recorded so the third instance is
+recognised as a class rather than fixed again as an instance.
+
+### Verified by breaking it
+
+Three mutations, all caught: allowing an identifying part on any boundary, allowing an unknown boundary, and
+changing the default to the wire format -- the last failing 17 tests, which is the default being load-bearing
+rather than cosmetic. Suite: **1,710 passing, 3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

@@ -40,8 +40,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, HARNESS_SOURCING, IDENTIFYING_SOURCING,
-                              EvidenceError)
+from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, DIGEST_BOUNDARIES, HARNESS_SOURCING,
+                              IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING, EvidenceError)
 
 #: The parts of a harness this package can name. Closed, because a part nobody named is a part that changes without the
 #: identity changing, and that is the whole defect.
@@ -97,6 +97,12 @@ class Part:
     sourcing: str
     label: str = ""
     digest: str = ""
+    #: Which of the three things this digest is over. Defaults to `model_visible` because that is what every existing
+    #: caller hashed -- the instruction text, the tool schemas as sent -- so the default is the true statement about
+    #: them rather than a plausible-looking one. What the default does NOT do is let a digest over a client's wire
+    #: format pass as one over the text the model read: a caller hashing that has to say so, and the identity then
+    #: refuses to be keyed on it.
+    boundary: str = "model_visible"
     #: How long before the request this fact was read, for a pulled fact. Required there and refused elsewhere: a fetched
     #: copy describes a different moment than the request, and a lag nobody wrote down is a lag nobody can bound.
     read_lag_seconds: float | None = None
@@ -134,6 +140,16 @@ class Part:
                 f"{self.kind!r} is {self.sourcing!r} and carries a read lag, which only a pulled fact has: bytes in the "
                 f"request have no lag by definition, and a pushed claim's timing is the owner's word rather than a "
                 f"measurement")
+        if self.boundary not in DIGEST_BOUNDARIES:
+            raise Unidentified(f"{self.boundary!r} is not one of {DIGEST_BOUNDARIES}")
+        if self.digest and self.identifying and self.boundary not in IDENTIFYING_BOUNDARIES:
+            raise Unidentified(
+                f"{self.kind!r} is identified by a digest over {self.boundary!r}, and only "
+                f"{list(IDENTIFYING_BOUNDARIES)} can support a claim that two runs had the same input. The two "
+                f"mistakes run in opposite directions: two client versions serialising differently decode to the same "
+                f"text the model read, so keying on the wire format splits runs that were identical; and two strings "
+                f"that canonicalise to one value can behave differently embedded verbatim, so keying on the parsed "
+                f"value merges runs that were not")
         if self.read_lag_seconds is not None and self.read_lag_seconds < 0:
             raise Unidentified(f"read_lag_seconds={self.read_lag_seconds!r} would mean it was read after the request it "
                                f"describes")

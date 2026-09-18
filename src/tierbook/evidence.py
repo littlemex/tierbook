@@ -504,3 +504,16 @@ ABSENCE_REASONS = ("not_provided", "not_reachable", "extraction_failed", "redact
 #: a collector that died halfway cannot present its own failure as the sender's silence.
 COLLECTION_STATUS = ("complete", "aborted", "collector_failed")
 
+#: What a digest is a digest OF. Three different things were being called "the bytes", and the two mistakes they cause
+#: run in opposite directions, so neither is fixed by being careful.
+#:
+#: `transport` is what a client put on the wire. `parsed` is the protocol value after decoding. `model_visible` is the
+#: exact text the model read. **Only `model_visible` can support a claim that two runs had the same input**: two client
+#: versions can serialise differently and decode to an identical model-visible string, which splits two runs that were
+#: the same, and two strings that canonicalise to one value can behave differently when embedded verbatim in a prompt,
+#: which merges two runs that were not.
+DIGEST_BOUNDARIES = ("transport", "parsed", "model_visible")
+
+#: Which boundary may key an identity. Only the one the model actually read, for the reason above.
+IDENTIFYING_BOUNDARIES = ("model_visible",)
+
