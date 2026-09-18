@@ -196,3 +196,40 @@ def test_two_arms_that_both_never_recorded_are_left_comparable():
     on the data that exists."""
     got = cf.compare(arm("a", None), arm("b", None), operating_point=cf.OperatingPoint(kind="not_applicable"))
     assert got.items == 2
+
+
+# --- the cache legs reach the published comparison ------------------------------------------------------------------------
+
+def priced_arm(label, *, cached, solved=(True, False)):
+    """One arm whose per-item costs either were or were not served from cache."""
+    from tierbook.spend import Spend
+    legs = [Spend(prefill=0.010, generation=0.90,
+                  cached_in=0.008 if cached else 0.0, cache_write=0.001 if cached else 0.0)
+            for _ in solved]
+    return cf.Run(label=label, items=("i1", "i2"), solved=solved, usd=(0.91, 0.91),
+                  calls=(("cheap",), ("cheap",)), spend=tuple(legs), assignment_gaps=())
+
+
+def test_a_cached_arm_cannot_be_compared_against_a_fresh_one_through_compare():
+    """End to end: the refusal lives in `spend.avoided` and has to ARRIVE at the verdict, because `compare` is what
+    publishes a number. A guard that only fires when a test calls it directly is a guard nothing depends on."""
+    with pytest.raises(EvidenceError, match="discount attaches to the request's shape"):
+        cf.compare(priced_arm("routed", cached=True), priced_arm("unrouted", cached=False),
+                   operating_point=cf.OperatingPoint(kind="not_applicable"))
+
+
+def test_two_arms_billed_the_same_way_still_compare():
+    got = cf.compare(priced_arm("a", cached=True), priced_arm("b", cached=True),
+                     operating_point=cf.OperatingPoint(kind="not_applicable"))
+    assert got.items == 2
+
+
+def test_a_mean_over_a_mixture_of_split_and_unsplit_cells_drops_the_legs():
+    """Averaging them would put the unsplit cells' whole input cost into the fresh leg, and that mean is what
+    `compare` subtracts."""
+    from tierbook.spend import Spend
+    mixed = cf.Run(label="mixed", items=("i1", "i2"), solved=(True, True), usd=(0.91, 0.91),
+                   calls=(("cheap",), ("cheap",)),
+                   spend=(Spend(prefill=0.010, generation=0.90, cached_in=0.008, cache_write=0.001),
+                          Spend(prefill=0.010, generation=0.90)))
+    assert mixed.spend_per_item.cache_split is False

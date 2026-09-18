@@ -5960,6 +5960,59 @@ Three mutations, all caught: allowing an identifying part on any boundary, allow
 changing the default to the wire format -- the last failing 17 tests, which is the default being load-bearing
 rather than cosmetic. Suite: **1,710 passing, 3 skipped.**
 
+## F129 — The cost model can now express the price card it is priced against
+
+Closes T11. `spend.LEGS` was `("prefill", "generation")` and the schema's `price_card` bills four:
+`fresh_in`, `cached_in`, `cache_write`, `output`. **The cost model could not represent its own price card**, and
+every cache-related conclusion sits on that.
+
+**Why the split is not cosmetic.** The cache discount attaches to the **shape** of a request, not to its text:
+identical content sent as one long message measured a **0%** cache rate where the same content as a growing
+conversation measured **99.9%**. So two runs can send the same words, be billed on different legs, and differ by
+most of the input side — and a cost model that cannot say which leg was charged reports that as a difference
+between the arms.
+
+### What was built
+
+`BILLED_LEGS`, and `Spend.cached_in` / `Spend.cache_write` as `float | None`, **all-or-nothing**: one recorded
+without the other leaves a fresh remainder wrong by exactly the leg omitted. They are **parts of** the input
+cost rather than additions to it, so a caller adding them on top is refused for double-charging the tokens the
+cache served. `fresh_in` is derived, so it cannot disagree.
+
+`None` on both means the legs were never split — the state of every cost recorded before this, left
+representable because refusing it would make the module unusable on the data that exists. **An unrecorded split
+is not a zero cache rate**, and the printed form distinguishes the two.
+
+`refuse_mixed_cache`, called from `avoided`, with three outcomes: a cached arm against a fresh one is refused; a
+recorded split against an unrecorded one is refused; both unrecorded still subtract.
+
+### The refusal had to arrive at the verdict, not just exist
+
+`avoided` is reached from `counterfactual.compare` through `_leg_deltas`, and what it subtracts is
+`Run.spend_per_item` — **a mean over items**. That mean was dropping the cache legs entirely, so the guard would
+never have fired on a real comparison. It now carries them **only when every cell recorded them**: a mean over a
+mixture would put the unsplit cells' whole input cost into the fresh leg, which is the direction that makes a
+cache effect look like a saving.
+
+The end-to-end test compares two priced arms through `compare` rather than calling the guard directly, because
+**a guard that only fires when a test calls it is a guard nothing depends on**.
+
+### This is the second half of what withdrew the 1.0%
+
+F124 withdrew the routing saving because routing breaks a cache prefix, so one decision changes which leg the
+*next* request is billed on — and with no record of the shape the sign is undetermined rather than imprecise.
+F127 gave the refusal for arms missing different facts; this gives the one for arms billed on different legs.
+**Neither existed when the number was published.**
+
+What is still missing is T12: cost is attached per request, and cache eligibility depends on the previous call
+in the same context. The legs now exist; the scope does not.
+
+### Verified by breaking it
+
+Six mutations, all caught: removing the call from `avoided`, dropping either half of the refusal, unpairing the
+two legs, letting them exceed the input side, and letting a mixed mean claim a split. Suite: **1,724 passing,
+3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

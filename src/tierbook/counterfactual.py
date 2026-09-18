@@ -130,9 +130,15 @@ class Run:
         if not self.spend:
             return None
         n = len(self.spend)
+        # The cache legs travel only when EVERY cell recorded them. A mean over a mixture would put the unsplit cells'
+        # whole input cost into the fresh leg, which is the direction that makes a cache effect look like a saving --
+        # and this mean is what `compare` subtracts, so the error would arrive at a published number.
+        split = all(s.cache_split for s in self.spend)
         return Spend(prefill=sum(s.prefill for s in self.spend) / n,
                      generation=sum(s.generation for s in self.spend) / n,
-                     unit=self.spend[0].unit)
+                     unit=self.spend[0].unit,
+                     cached_in=(sum(s.cached_in for s in self.spend) / n) if split else None,
+                     cache_write=(sum(s.cache_write for s in self.spend) / n) if split else None)
 
     @property
     def cost_per_item(self) -> float:

@@ -49,6 +49,15 @@ _UNIT_FORMAT = {"usd": ("$", "{:.5f}"), "tokens": ("", "{:.1f} tokens"), "gpu_se
 #: between: reading the prompt happens whatever it decides, and writing the answer is what it decides about.
 LEGS = ("prefill", "generation")
 
+#: The legs the price card actually bills, which is four and not two. `prefill` above is the input side seen whole;
+#: these are the three prices it can be made of, plus generation.
+#:
+#: The reason the split is not cosmetic: **the cache discount attaches to the SHAPE of a request, not to its text.**
+#: Identical content sent as one long message hit a 0% cache rate where the same content as a growing conversation hit
+#: 99.9%. So two runs can send the same words, be billed on different legs, and differ in cost by most of the input
+#: side -- and a cost model that cannot say which leg was charged reports that as a difference between the arms.
+BILLED_LEGS = ("fresh_in", "cached_in", "cache_write", "generation")
+
 
 def format_cost(value: float, unit: str) -> str:
     """Render a cost with its unit, so a token count never appears behind a currency symbol.
@@ -73,6 +82,14 @@ class Spend:
     prefill: float
     generation: float
     unit: str = "usd"
+    #: How much of `prefill` was billed as a read from cache, and as populating one. `None` on both means the legs were
+    #: never split, which is the state of every cost recorded before these fields existed -- left representable because
+    #: refusing it would make the module unusable on the data that exists.
+    #:
+    #: All-or-nothing, like `Run.legs`: a cost that records one and not the other reports a fresh remainder that is
+    #: wrong by exactly the leg it left out, and gives a reader a discrepancy with nothing to attribute it to.
+    cached_in: float | None = None
+    cache_write: float | None = None
 
     def __post_init__(self) -> None:
         if self.unit not in COST_UNITS:
@@ -84,10 +101,40 @@ class Spend:
             if getattr(self, leg) < 0:
                 raise EvidenceError(f"{leg}={getattr(self, leg)!r} is negative; a leg that gives cost back is not a "
                                     f"cost, and summing it would make a total smaller than one of its parts")
+        if (self.cached_in is None) != (self.cache_write is None):
+            raise EvidenceError(
+                f"cached_in={self.cached_in!r} and cache_write={self.cache_write!r}: one is recorded and the other is "
+                f"not. The fresh remainder is then wrong by exactly the leg that was left out, and a reader gets a "
+                f"discrepancy with nothing to attribute it to -- so the input side is split on all three legs or on "
+                f"none of them")
+        if self.cached_in is not None:
+            for name in ("cached_in", "cache_write"):
+                if getattr(self, name) < 0:
+                    raise EvidenceError(f"{name}={getattr(self, name)!r} is negative")
+            if self.cached_in + self.cache_write > self.prefill + 1e-12:
+                raise EvidenceError(
+                    f"cached_in {self.cached_in} plus cache_write {self.cache_write} exceeds the input side "
+                    f"{self.prefill}, so the fresh remainder would be negative. These are PARTS of the input cost, "
+                    f"not additions to it: a caller adding them on top is double-charging the tokens the cache served")
 
     @property
     def total(self) -> float:
         return self.prefill + self.generation
+
+    @property
+    def cache_split(self) -> bool:
+        """Whether this cost says which input leg it was billed on."""
+        return self.cached_in is not None
+
+    @property
+    def fresh_in(self) -> float | None:
+        """The input cost that was NOT served from cache and did not populate one. Derived, so it cannot disagree."""
+        return None if not self.cache_split else self.prefill - self.cached_in - self.cache_write
+
+    @property
+    def served_from_cache(self) -> bool | None:
+        """Whether any of this request's input was billed as a cache read. `None` when nobody recorded the split."""
+        return None if not self.cache_split else self.cached_in > 0
 
     @property
     def generation_share(self) -> float:
@@ -101,13 +148,56 @@ class Spend:
             raise EvidenceError(
                 f"cannot add a cost in {self.unit!r} to one in {other.unit!r}: the sum would be a number in no unit at "
                 f"all, and it would look exactly like a cost")
+        # A sum of a split cost and an unsplit one is unsplit: the parts of the second are unknown, so claiming a
+        # split for the total would attribute the whole of the second's input to the fresh leg.
+        both = self.cache_split and other.cache_split
         return Spend(prefill=self.prefill + other.prefill, generation=self.generation + other.generation,
-                     unit=self.unit)
+                     unit=self.unit,
+                     cached_in=(self.cached_in + other.cached_in) if both else None,
+                     cache_write=(self.cache_write + other.cache_write) if both else None)
 
     def __str__(self) -> str:
+        if not self.cache_split:
+            return (f"{format_cost(self.total, self.unit)} "
+                    f"({format_cost(self.prefill, self.unit)} prefill + "
+                    f"{format_cost(self.generation, self.unit)} generation)")
         return (f"{format_cost(self.total, self.unit)} "
-                f"({format_cost(self.prefill, self.unit)} prefill + "
+                f"({format_cost(self.fresh_in, self.unit)} fresh + "
+                f"{format_cost(self.cached_in, self.unit)} cached + "
+                f"{format_cost(self.cache_write, self.unit)} cache write + "
                 f"{format_cost(self.generation, self.unit)} generation)")
+
+
+def refuse_mixed_cache(before: Spend, after: Spend) -> None:
+    """Refuse to subtract two costs whose input was billed on different legs.
+
+    A cached read and a fresh read of the same tokens are different prices for the same words, and the discount attaches
+    to the request's SHAPE: identical content hit 0% as one long message and 99.9% as a growing conversation. So a
+    difference between an arm served from cache and an arm that was not is mostly a cache effect wearing the name of
+    whatever the arms were supposed to differ in.
+
+    This is the refusal that would have stopped the withdrawn routing saving: routing breaks a cache prefix, so a
+    decision that changes destination changes which leg the NEXT request is billed on -- and with no record of the shape,
+    the sign of the saving is undetermined rather than merely imprecise.
+
+    An unrecorded split is not a zero cache rate. Both unrecorded is allowed through, because refusing it would refuse
+    every cost written before the legs existed.
+    """
+    if not before.cache_split and not after.cache_split:
+        return
+    if before.cache_split != after.cache_split:
+        raise EvidenceError(
+            f"cannot subtract these costs: one records which input leg it was billed on and the other does not. An "
+            f"unrecorded split is not a zero cache rate, and reading it as one attributes the whole input side to the "
+            f"fresh leg -- which is the direction that makes a cache effect look like a saving")
+    if before.served_from_cache != after.served_from_cache:
+        served, fresh = ((before, after) if before.served_from_cache else (after, before))
+        raise EvidenceError(
+            f"cannot subtract a cost whose input was served from cache ({served.cached_in} of {served.prefill}) from "
+            f"one that was billed fresh ({fresh.prefill}): these are different prices for the same words, and the "
+            f"discount attaches to the request's shape rather than to its text -- identical content measured 0% as one "
+            f"long message and 99.9% as a growing conversation. The difference is mostly the cache, under whatever name "
+            f"the arms were supposed to differ in")
 
 
 def avoided(before: Spend, after: Spend) -> Spend:
@@ -119,8 +209,12 @@ def avoided(before: Spend, after: Spend) -> Spend:
     """
     if before.unit != after.unit:
         raise EvidenceError(f"cannot subtract a cost in {after.unit!r} from one in {before.unit!r}")
+    refuse_mixed_cache(before, after)
+    both = before.cache_split and after.cache_split
     return Spend(prefill=max(0.0, before.prefill - after.prefill),
-                 generation=max(0.0, before.generation - after.generation), unit=before.unit)
+                 generation=max(0.0, before.generation - after.generation), unit=before.unit,
+                 cached_in=max(0.0, before.cached_in - after.cached_in) if both else None,
+                 cache_write=max(0.0, before.cache_write - after.cache_write) if both else None)
 
 
 @dataclass(frozen=True)

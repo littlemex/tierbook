@@ -60,14 +60,12 @@ correct end state rather than a gap.
 **Done when.** Either an interval is published with the accounting scope stated, or the ledger says plainly
 that the measurement cannot be reconstructed.
 
-### T11 -- `Spend` has two legs; the price card has four
+### T11 -- DONE (F129). The cost model expresses its own price card
 
-`spend.LEGS` is `("prefill", "generation")`. The schema's `price_card` carries `fresh_in`, `cached_in`,
-`cache_write`, `output`, `cache_hit_rate_observed` and `reusable_cache_tokens`. The cost model cannot express
-the price card it is priced against, and every cache-related conclusion depends on closing that.
-
-**Done when.** A `Spend` can represent a cached read and a cache write separately from a fresh read, and a
-comparison that mixes cached and uncached prefills is refused rather than averaged.
+`BILLED_LEGS` with `Spend.cached_in` / `Spend.cache_write` as an all-or-nothing pair, `fresh_in` derived, and
+`refuse_mixed_cache` reaching `compare` through `Run.spend_per_item`. Not built: `cache_hit_rate_observed` and
+`reusable_cache_tokens` as fields on a `Spend` -- they are properties of a tier's price card rather than of one
+request's cost, and no experiment has needed them on the cost object.
 
 ### T12 -- Attach cost at conversation scope, not per request
 

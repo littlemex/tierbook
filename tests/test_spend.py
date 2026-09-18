@@ -305,3 +305,73 @@ def test_the_loader_takes_a_split_through_the_same_parameter_as_a_total():
     # rather than a migration.
     assert table.cells["i2"]["cheap"].spend is None
     assert table.cells["i2"]["cheap"].usd == 0.5
+
+
+# --- the four legs the price card actually bills ---------------------------------------------------------------------------
+
+def cached(prefill=0.010, cached_in=0.008, cache_write=0.001, generation=0.90):
+    return sp.Spend(prefill=prefill, generation=generation, cached_in=cached_in, cache_write=cache_write)
+
+
+def test_the_price_card_bills_four_legs_and_the_vocabulary_says_so():
+    assert sp.BILLED_LEGS == ("fresh_in", "cached_in", "cache_write", "generation")
+
+
+def test_the_fresh_remainder_is_derived_so_it_cannot_disagree():
+    s = cached()
+    assert abs(s.fresh_in - 0.001) < 1e-12
+    assert s.cache_split is True and s.served_from_cache is True
+
+
+def test_an_unsplit_cost_says_it_does_not_know_rather_than_reporting_zero():
+    """An unrecorded split is not a zero cache rate, and every cost written before these fields is unsplit."""
+    s = sp.Spend(prefill=0.010, generation=0.90)
+    assert s.cache_split is False
+    assert s.fresh_in is None and s.served_from_cache is None
+
+
+def test_the_input_side_is_split_on_all_legs_or_none():
+    with pytest.raises(EvidenceError, match=r"all three legs or on\s+none"):
+        sp.Spend(prefill=0.010, generation=0.90, cached_in=0.008)
+
+
+def test_the_cache_legs_are_parts_of_the_input_cost_not_additions_to_it():
+    """A caller adding them on top is double-charging the tokens the cache served."""
+    with pytest.raises(EvidenceError, match="double-charging"):
+        sp.Spend(prefill=0.010, generation=0.90, cached_in=0.009, cache_write=0.005)
+
+
+def test_subtracting_a_cached_arm_from_a_fresh_one_is_refused_rather_than_averaged():
+    """The discount attaches to the request's shape: identical content measured 0% as one long message and 99.9% as a
+    growing conversation, so the difference is mostly the cache under whatever name the arms differed in."""
+    with pytest.raises(EvidenceError, match="discount attaches to the request's shape"):
+        sp.avoided(cached(), sp.Spend(prefill=0.010, generation=0.90, cached_in=0.0, cache_write=0.0))
+
+
+def test_a_recorded_split_cannot_be_subtracted_from_an_unrecorded_one():
+    with pytest.raises(EvidenceError, match="not a zero cache rate"):
+        sp.avoided(cached(), sp.Spend(prefill=0.010, generation=0.90))
+
+
+def test_two_unrecorded_costs_are_still_subtractable():
+    """Refusing them would refuse every cost written before the legs existed."""
+    got = sp.avoided(sp.Spend(prefill=0.010, generation=0.90), sp.Spend(prefill=0.004, generation=0.10))
+    assert got.cache_split is False
+
+
+def test_two_cached_arms_subtract_leg_by_leg():
+    got = sp.avoided(cached(), cached(prefill=0.004, cached_in=0.003, cache_write=0.0005, generation=0.10))
+    assert abs(got.cached_in - 0.005) < 1e-12
+    assert abs(got.cache_write - 0.0005) < 1e-12
+
+
+def test_adding_a_split_cost_to_an_unsplit_one_gives_an_unsplit_total():
+    """Claiming a split for the total would attribute the whole of the unsplit input to the fresh leg."""
+    got = cached() + sp.Spend(prefill=0.004, generation=0.10)
+    assert got.cache_split is False
+    assert abs(got.prefill - 0.014) < 1e-12
+
+
+def test_the_printed_form_distinguishes_a_split_cost_from_an_unsplit_one():
+    assert "cached" in str(cached()) and "cache write" in str(cached())
+    assert "prefill" in str(sp.Spend(prefill=0.010, generation=0.90))
