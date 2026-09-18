@@ -5506,6 +5506,62 @@ and nothing consumes a model-returned probability, because until now there was n
 
 **Suite green at 1,964 passed, 3 skipped.** Four mechanisms mutated and each fails tests.
 
+## F123 — What surrounds the model, identified; and where each fact about it can come from
+
+**The hypothesis this answers, and this repository's own numbers support it.** Building the harness well may lower cost
+more than routing does. From F1, same box, same 1,187 items, only the instruction changed:
+
+| condition | accuracy |
+|---|---|
+| terse (`Answer with the option letter only. Do not explain.`) | **0.6243** |
+| explaining | **0.7447** |
+| per-item agreement | **0.7346** — one item in four flips |
+
+**+12.04 points from one sentence.** Against that, the best routing saving measured here was 7.9%, and it fell to
+**1.0%** once the comparison was restricted to the same items. So the thing around the model moved accuracy by twelve
+points while the choice of model moved cost by one percent — **and only one of the two had a name in the record.**
+
+**Three of the harness's parts were already identified** (`Elicitation` the instruction, `Extraction` the readout,
+`WeightDigest` the model) and **the agent-shaped parts were not**: no `system_prompt`, no scaffold, no turn budget, no
+tool set, in any module. `harness.py` names eight parts and composes them into one identity.
+
+**The part that needed the care asked for: where a fact comes from decides what it can support.**
+
+| mode | verifiable here | contemporaneous | may key an identity |
+|---|---|---|---|
+| **in the request** | yes — we hold the bytes | yes, exactly | **only this one** |
+| **pulled by us** | yes | **no** — read at one moment, ran at another | no; carries its lag |
+| **pushed by the owner** | **no** — their word | claimed | no |
+| **not observable** | — | — | — |
+
+**The fourth entry is the finding rather than an option.** A tool's *schema* is in the request; its *behaviour* is not.
+Somebody can change what a tool does, leave the schema alone, and **nothing in the request differs.** So
+`BEST_AVAILABLE_SOURCING` is a total classification over the eight parts, `tool_behaviour` maps to `not_observable`, and
+**claiming it as request-sourced is refused by name** — because the alternative is a record that looks complete and
+groups two different harnesses under one identity.
+
+**A pulled fact carries its lag**, required there and refused elsewhere: bytes in the request have no lag by definition,
+and a pushed claim's timing is the owner's word rather than a measurement. **A pushed label may not be the key**, which
+is the third time this package has had to say it — a model name and a prompt condition both stayed the same while the
+thing underneath moved.
+
+**Only the parts we hold bytes for enter the identity, and that is deliberate.** A name that moved when the owner edited
+a sentence about their own loop would not group anything. The owner's description is recorded and reported as
+**unobserved**, alongside the parts nothing was recorded about at all.
+
+**`refuse_incomparable` generalises the refusal already in place for a prompt condition**, one level up: the instruction
+is one part of a harness, and the 12-point swing came from changing it.
+
+**Fifth vocabulary of this shape, and it went in the leaf.** `PRICE_SOURCES`, `CALIBRATION_EVIDENCE`, `FIXED_ON` and
+`EXTRACTION_RULES` all ask "what may this fact support"; `HARNESS_SOURCING` is in `evidence` rather than beside the
+structure that needed it first, because more than one place asks.
+
+**Suite green at 1,982 passed, 3 skipped.** Five mechanisms mutated and each fails tests.
+
+**Also added `docs/TODO.md`**, with the two tasks registered by request — benchmark and sampling from a configuration
+file, and the `distributed-ai` dependency and its responsibility line — plus seven this side already knew, each with
+what would tell us it is finished, and a table of what is deliberately not being done.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

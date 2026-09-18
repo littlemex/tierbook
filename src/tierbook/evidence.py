@@ -466,3 +466,22 @@ ESCALATION_SUBJECTS = ("own_competence", "item_difficulty")
 #: that way is still worth recording -- it says what the best case looked like -- and it cannot support a verdict.
 FIXED_ON = ("declared_in_advance", "calibration", "scored_items")
 
+#: How a fact about the harness reached us. Closed, and it is the axis that decides what the fact can support -- not how
+#: interesting the fact is.
+#:
+#: `in_the_request` means we hold the bytes: it IS what was sent, verifiable and contemporaneous, and it is the only
+#: mode that can key an identity. `pulled_by_us` means we fetched it, so it is verifiable and **not contemporaneous** --
+#: we read at one moment and the request ran at another, and anything that changed in between is invisible. `pushed_by_owner`
+#: means the harness owner told us, which is a declaration: it cannot be checked here, and a label they control is a label
+#: that can stay the same while the thing underneath it changes. `not_observable` is the honest entry for a part that no
+#: mode reaches -- a tool's implementation behind an unchanged schema is the case that forced it.
+#:
+#: This is the fifth vocabulary in this package with the same shape (`PRICE_SOURCES`, `CALIBRATION_EVIDENCE`, `FIXED_ON`,
+#: `EXTRACTION_RULES`), and it is here in the leaf rather than beside the structure that needed it first, because the
+#: question "what may this fact support" is asked in more than one place.
+HARNESS_SOURCING = ("in_the_request", "pulled_by_us", "pushed_by_owner", "not_observable")
+
+#: Which sourcing modes may key an identity. Only the bytes we hold: a label the owner controls can stay fixed while the
+#: thing it names changes, and a fetched copy describes a different moment than the request.
+IDENTIFYING_SOURCING = ("in_the_request",)
+
