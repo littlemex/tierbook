@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook admit-comparison  whether two arms may be compared, given what each was missing
     tierbook collect-harness  what a harness record holds, what it does not, and whose absence each is
     tierbook registered-criteria  whether a conclusion is supported by every criterion registered
     tierbook floor-feasibility  whether a floor can be met at all, before a policy is written
@@ -54,6 +55,7 @@ from tierbook.evidence import EvidenceError
 from tierbook import bar as br
 from tierbook import criterion as cr
 from tierbook import evidence as ev_mod
+from tierbook import counterfactual as cf
 from tierbook import harness as hn
 from tierbook import judge as jd
 from tierbook import quantity as qt
@@ -726,6 +728,32 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -
 
 
 @_refuses
+def cmd_admit_comparison(args) -> int:
+    """Whether two arms may be compared at all, given what each one's decisions were missing.
+
+    A door because the failure it prevents is a PUBLISHED number. Two arms identical on everything a verdict keys on,
+    where one collector reached a fact and the other did not: the router falls back for the second, sends it somewhere
+    else, and the delta that gets published is an artefact of missingness correlated with whichever arm was collected
+    worse. Recording the fallback does not close it -- recording puts it in the log, and the log is not where a verdict
+    reads admission from.
+
+    Exit 2 when both arms are well formed and cannot be compared: a finding about the pair, not an error in the input.
+    """
+    a = cf.gap_keys(args.a_gap)
+    b = cf.gap_keys(args.b_gap)
+    print(f"{args.a}: missing {list(a) or 'nothing recorded as missing'}")
+    print(f"{args.b}: missing {list(b) or 'nothing recorded as missing'}")
+    try:
+        cf.refuse_differential_missingness(args.a, a if args.a_recorded else None,
+                                           args.b, b if args.b_recorded else None)
+    except cf.Unsupported as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    print("admissible: both arms were missing the same facts, so the difference between them was not caused by a gap")
+    return 0
+
+
+@_refuses
 def cmd_collect_harness(args) -> int:
     """What a run's record of the harness holds, what it does not, and whether anything may publish a claim from it.
 
@@ -1189,6 +1217,21 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    ac = sub.add_parser("admit-comparison", parents=[common],
+                        help="whether two arms may be compared, given what each one's decisions were missing")
+    ac.add_argument("--a", required=True, help="the first arm's label")
+    ac.add_argument("--b", required=True, help="the second arm's label")
+    ac.add_argument("--a-gap", action="append", default=[], metavar="REASON:SUBJECT",
+                    help="repeatable. A fact the first arm's decisions wanted and did not get")
+    ac.add_argument("--b-gap", action="append", default=[], metavar="REASON:SUBJECT",
+                    help="repeatable, for the second arm")
+    ac.add_argument("--a-recorded", action="store_true",
+                    help="the first arm recorded its missingness. Without this an empty list means NOBODY LOOKED, "
+                         "which is not the same as no gaps -- and the arm collected worse is the one most likely to "
+                         "have recorded nothing")
+    ac.add_argument("--b-recorded", action="store_true", help="the second arm recorded its missingness")
+    ac.set_defaults(fn=cmd_admit_comparison, registry=None)
 
     ch = sub.add_parser("collect-harness", parents=[common],
                         help="what a run's harness record holds, what it does not, and whether it can support a claim")

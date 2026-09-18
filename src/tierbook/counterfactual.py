@@ -90,6 +90,15 @@ class Run:
     #: instruction and under one asking for reasoning are different numbers, and every economic threshold in this
     #: project is conditioned on "the box accuracy" while naming no condition.
     elicitation: Elicitation | None = None
+    #: Which facts the decisions in this run wanted and did not get, normalised by `gap_keys`. `None` means nobody
+    #: recorded them, which is the state of every run written before this field existed, and it is left representable
+    #: for the same reason `elicitation` is: refusing it would make the mechanism unusable on the data that exists.
+    #:
+    #: What is NOT left representable is comparing two arms whose missingness DIFFERS. Missingness is not a nuisance
+    #: term there -- it changed which model was tried, so the destination difference is partly caused by the gap rather
+    #: than chosen by the policy, and the published delta is an artefact correlated with whichever arm was collected
+    #: worse.
+    assignment_gaps: tuple[str, ...] | None = None
     #: The same per-item costs with the legs kept apart, when every cell this run touched recorded them. `None` means
     #: at least one did not, and it is all-or-nothing on purpose: a partly-split run reports a leg total smaller than
     #: the scalar beside it and gives a reader a discrepancy with nothing to attribute it to.
@@ -503,6 +512,54 @@ def _leg_deltas(a: Run, b: Run) -> tuple[Spend | None, Spend | None]:
     return (avoided(sb, sa), avoided(sa, sb))
 
 
+def gap_keys(gaps: Sequence[str]) -> tuple[str, ...]:
+    """Normalise a decision's `gaps` strings into comparable keys: the reason and what it was about, without the value.
+
+    The value has to go. `uncollected_variable: queue_depth -- 41` and `uncollected_variable: queue_depth -- 12` are the
+    same gap seen twice, and comparing the raw strings would call two arms incomparable because a number moved. The
+    reason and its subject are what decide whether the same fact was missing on both sides.
+
+    Sorted and de-duplicated, so the comparison is over a set rather than over the order two callers happened to build.
+    """
+    return tuple(sorted({g.split(" -- ")[0].strip() for g in gaps if g.strip()}))
+
+
+def refuse_differential_missingness(a_label: str, a_gaps: tuple[str, ...] | None,
+                                    b_label: str, b_gaps: tuple[str, ...] | None) -> None:
+    """Refuse a model-against-model claim whose arms did not have the same facts available.
+
+    The failure this closes, in the shape it was found: two runs identical on every part their identity is keyed on,
+    where one collector reached a fact and the other did not. The router falls back for the second arm and sends it
+    somewhere else. Nothing the verdict keys on differs, so the verdict is published -- and the delta it reports is an
+    artefact of missingness, **systematically correlated with whichever arm was collected worse**.
+
+    Recording the fallback does not close it, which is the part worth stating: recording puts the fact in the log, and
+    the log is not what a verdict reads admission from. Only a refusal here reaches the claim.
+
+    `None` on either side means nobody recorded the missingness, and that is not silently treated as "no gaps": a run
+    that never recorded them cannot be shown to have had the same facts as one that did. Two unrecorded arms are
+    allowed through, because refusing them would refuse every run written before the field existed.
+    """
+    if a_gaps is None and b_gaps is None:
+        return
+    if a_gaps is None or b_gaps is None:
+        raise Unsupported(
+            f"cannot compare {a_label!r} against {b_label!r}: one arm recorded which facts its decisions were missing "
+            f"and the other did not. An unrecorded arm is not an arm with no gaps -- treating it as one is how the "
+            f"comparison that this refusal exists to stop gets published, since the arm collected worse is the one "
+            f"most likely to have recorded nothing")
+    if set(a_gaps) != set(b_gaps):
+        only_a = sorted(set(a_gaps) - set(b_gaps))
+        only_b = sorted(set(b_gaps) - set(a_gaps))
+        raise Unsupported(
+            f"cannot compare {a_label!r} against {b_label!r}: their decisions were missing different facts "
+            f"({a_label} only: {only_a}; {b_label} only: {only_b}). Missingness is not a nuisance term here -- it "
+            f"changed which candidate was tried, so part of the difference between these arms was caused by the gap "
+            f"rather than chosen by the policy. The delta would be an artefact correlated with whichever arm was "
+            f"collected worse, and adaptive escalation makes it worse still by loading the harder items into the "
+            f"later tiers")
+
+
 def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
     """Pair two runs item by item. Refuses runs over different item lists, and requires the setting be named.
 
@@ -526,6 +583,7 @@ def compare(a: Run, b: Run, *, operating_point: OperatingPoint) -> Comparison:
             f"Subtracting them produces a number in no unit at all, and it looks exactly like a cost advantage; "
             f"converting needs a price card or a throughput measured under load, which is a measurement rather than "
             f"a coefficient")
+    refuse_differential_missingness(a.label, a.assignment_gaps, b.label, b.assignment_gaps)
     a_only = sum(1 for x, y in zip(a.solved, b.solved) if x and not y)
     b_only = sum(1 for x, y in zip(a.solved, b.solved) if y and not x)
     return Comparison(a.label, b.label, len(a.items), a_only, b_only,

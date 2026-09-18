@@ -5845,6 +5845,77 @@ documents that an absent variable becomes `uncollected_variable` and the decisio
 them. Blaming that vocabulary is recorded as T18 rather than done here, because churning fourteen sites to
 improve a message that already fails safe is the over-engineering the v0.4.0 policy exists to stop.
 
+## F127 — A comparison whose arms were missing different facts is refused, not performed
+
+Closes T16, and closes it **much smaller than the design asked for**, which is the finding.
+
+The design (F125) listed what assignment provenance had to carry: policy digest, the facts consulted and
+their missingness, the fallback applied, the destination, the attempt number and parent, the termination
+reason, the selection probability when randomised. **Checking the record first, almost all of it was already
+there.** `record.Decision` carries `policy_digest`, `policy_version`, `chosen`, `selection_probability`,
+`exploration`, `state_ref` and `gaps`; `escalate.Escalation` carries `parent_request_id`, `decision_id` and
+`hop_count`. Missingness is already reported through the existing `gaps` channel, whose vocabulary
+(`decide.GAP_REASONS`) already has `uncollected_variable` for exactly this.
+
+**What was missing was not a field. It was the refusal.** Nothing stopped a model-against-model claim from
+being published over two arms that did not have the same facts available.
+
+### The failure, in the shape review found it
+
+Two runs identical on every part their identity is keyed on. One collector reached a fact, the other did not.
+The router falls back for the second arm and sends it somewhere else. **Nothing the verdict keys on differs**,
+so the verdict is published — and the delta it reports is an artefact of missingness, systematically
+correlated with whichever arm was collected worse. Adaptive escalation makes it worse: the harder items load
+into the later tiers, so judging only the final attempt hides the cheap candidate's failures while keeping
+part of their cost.
+
+**Recording the fallback does not close it**, and that is the sentence worth keeping: recording puts the fact
+in the log, and the log is not where a verdict reads admission from.
+
+### What was built
+
+`Run.assignment_gaps`, in the same shape as `elicitation` — `None` means nobody recorded it, left
+representable because refusing it would make the mechanism unusable on the data that already exists.
+
+`gap_keys` normalises a decision's gap strings by dropping the value: `uncollected_variable: queue_depth -- 41`
+and `-- 12` are one gap seen twice, and comparing raw strings would call two arms incomparable because a number
+moved.
+
+`refuse_differential_missingness`, called from `compare()` beside the refusals already there for mismatched
+item lists, substituted elicitations and incommensurable cost units. Three outcomes:
+
+| arms | outcome |
+|---|---|
+| the same facts missing on both | compared |
+| **different facts missing** | refused — part of the difference was caused by the gap rather than chosen by the policy |
+| **one recorded, one did not** | refused — an unrecorded arm is not an arm with no gaps, and the arm collected worse is the one most likely to have recorded nothing |
+| neither recorded | compared, because refusing would refuse every run written before the field existed |
+
+Production caller: `tierbook admit-comparison`, exit 2 when both arms are well formed and cannot be compared.
+
+### This would have caught the withdrawn number
+
+F124 withdrew the 1.0% routing saving because the run's shape was not recorded and the sign is therefore
+undetermined. **The same record gap is what this refusal keys on.** Had it existed, the comparison would have
+been refused rather than published and later withdrawn — which is the difference between a mechanism that
+catches a defect and a ledger that records one.
+
+### Verified by breaking it
+
+Four mutations, all caught: removing the call from `compare()`, allowing differing gap sets, reading an
+unrecorded arm as empty, and letting `gap_keys` keep the value. Suite: **1,705 passing, 3 skipped.**
+
+Two guesses were made writing the tests and both failed immediately rather than silently — `OperatingPoint`
+was not in the test module's namespace, and `Comparison` has `items` rather than `n`. Recorded because the
+standing rule is to verify a name before using it, and the rule was not followed here.
+
+### The audit, and its miss
+
+One other `compare` exists — `reproduce.compare`, over two collections of the same matrix. **The rule does not
+apply there**, and the reason is worth stating rather than leaving as a silence: that function checks a run
+against its own repeat, so differential missingness between the two is a finding about reproducibility rather
+than a confound in an assignment. Nothing else in the package forms a model-against-model claim.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

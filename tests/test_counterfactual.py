@@ -147,3 +147,52 @@ def test_a_perfect_gate_cannot_beat_the_oracle():
     b = bracket_gated_escalation(t, items, first="cheap", escalate_to="dear")
     assert b.optimistic.accuracy <= o.accuracy + 1e-12
     assert b.optimistic.usd_per_item >= o.usd_per_item - 1e-12
+
+
+# --- differential missingness: the arms must have had the same facts available -------------------------------------------
+
+def arm(label, gaps=None, *, solved=(True, False)):
+    return cf.Run(label=label, items=("i1", "i2"), solved=solved, usd=(0.004, 0.004),
+                  calls=(("cheap",), ("cheap",)), assignment_gaps=gaps)
+
+
+def test_gap_keys_drops_the_value_so_a_moved_number_does_not_split_two_arms():
+    """`uncollected_variable: queue_depth -- 41` and `-- 12` are one gap seen twice."""
+    assert cf.gap_keys(["uncollected_variable: queue_depth -- 41"]) == ("uncollected_variable: queue_depth",)
+    assert (cf.gap_keys(["uncollected_variable: queue_depth -- 41", "uncollected_variable: queue_depth -- 12"])
+            == ("uncollected_variable: queue_depth",))
+
+
+def test_gap_keys_is_a_set_so_the_order_two_callers_built_it_in_does_not_matter():
+    assert cf.gap_keys(["b: y", "a: x"]) == cf.gap_keys(["a: x", "b: y"])
+
+
+def test_two_arms_missing_the_same_facts_are_comparable():
+    same = ("uncollected_variable: queue_depth",)
+    got = cf.compare(arm("routed", same), arm("unrouted", same),
+                     operating_point=cf.OperatingPoint(kind="not_applicable"))
+    assert got.a == "routed"
+
+
+def test_two_arms_missing_DIFFERENT_facts_are_refused_rather_than_compared():
+    """The failure in the shape it was found: one collector reached a fact and the other did not, the router fell back
+    for the second arm and sent it elsewhere, and nothing the verdict keys on differed."""
+    with pytest.raises(cf.Unsupported, match="missing different facts"):
+        cf.compare(arm("routed", ("uncollected_variable: context_partitioning",)),
+                   arm("unrouted", ()),
+                   operating_point=cf.OperatingPoint(kind="not_applicable"))
+
+
+def test_an_unrecorded_arm_is_not_an_arm_with_no_gaps():
+    """The arm collected worse is the one most likely to have recorded nothing, so silently reading `None` as empty is
+    how the comparison this refusal exists to stop gets published."""
+    with pytest.raises(cf.Unsupported, match="one arm recorded"):
+        cf.compare(arm("routed", ()), arm("unrouted", None),
+                   operating_point=cf.OperatingPoint(kind="not_applicable"))
+
+
+def test_two_arms_that_both_never_recorded_are_left_comparable():
+    """Refusing them would refuse every run written before the field existed, which would make the mechanism unusable
+    on the data that exists."""
+    got = cf.compare(arm("a", None), arm("b", None), operating_point=cf.OperatingPoint(kind="not_applicable"))
+    assert got.items == 2

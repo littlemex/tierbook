@@ -107,16 +107,12 @@ outcome. Fourteen references, no wrong answer among them.
 **Done when.** Either each gap reason is blamed, or this entry says plainly that a message which already
 fails safe is not worth fourteen edits.
 
-### T16 -- Assignment provenance, which the judge needs and the router must not be slowed by
+### T16 -- DONE (F127). A comparison whose arms were missing different facts is refused
 
-The router may proceed on a partial record; that is the design (F125). What is missing is the record of what it
-decided and on what, so a verdict can tell a real delta from an artefact of missingness. **This is not a
-harness part** -- keying a destination into harness identity would make two runs of one harness count as two
-harnesses.
-
-**Done when.** Every attempt records the policy digest, the facts consulted and their missingness, the fallback
-applied, the destination, the attempt number and parent, and the termination reason -- and a model-against-model
-claim is refused when the assignment depended on state nobody recorded.
+Closed much smaller than designed: `record.Decision` and `escalate.Escalation` already carried almost every
+field the design listed, and missingness already travelled through the existing `gaps` channel. **What was
+missing was the refusal**, now `counterfactual.refuse_differential_missingness`, called from `compare()` and
+exposed as `tierbook admit-comparison`.
 
 ### T17 -- A digest has to say which boundary it is over
 
