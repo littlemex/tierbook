@@ -197,3 +197,94 @@ def test_a_negative_rate_is_not_a_rate():
 def test_a_deadline_of_zero_is_not_a_deadline():
     with pytest.raises(tp.Unmeasured, match="is not a deadline"):
         rate(deadline_seconds=0.0)
+
+
+# --- deliverability, and the asymmetry between what was declared and what was measured ------------------------------------
+
+def ceiling(**over):
+    base = dict(per_hour=50000.0, declared_by="vendor contract")
+    base.update(over)
+    return tp.Ceiling(**base)
+
+
+def lower_bound_rate():
+    """A measurement that understates the box: 8 offered against 256 seats."""
+    return rate(per_hour=100000.0, goodput_per_hour=100000.0, offered=offered(concurrency=8, seats=256))
+
+
+def test_a_measured_goodput_that_covers_the_requirement_makes_it_deliverable():
+    outcome, why = tp.deliverable(50000.0, measured=rate())
+    assert outcome == "deliverable" and "covers the requirement" in why
+
+
+def test_a_lower_bound_can_prove_sufficiency_because_the_box_did_at_least_that_much():
+    """The asymmetry, first direction. This is the case a naive 'lower bounds are unusable' rule would get wrong."""
+    outcome, why = tp.deliverable(50000.0, measured=lower_bound_rate())
+    assert outcome == "deliverable"
+    assert "the margin is at least this large" in why
+
+
+def test_a_lower_bound_cannot_refuse_because_the_shortfall_may_be_our_own_generator():
+    """The asymmetry, other direction, and the case that keeps the two honest: without `unknown`, a shortfall against a
+    lower bound would read as a refusal and this project would decline assignments on the strength of its load client."""
+    outcome, why = tp.deliverable(150000.0, measured=lower_bound_rate())
+    assert outcome == "unknown"
+    assert "may be the load generator" in why
+
+
+def test_a_full_measurement_that_falls_short_does_refuse():
+    outcome, why = tp.deliverable(300000.0, measured=rate())
+    assert outcome == "refused" and "not a lower bound" in why
+
+
+def test_a_declared_ceiling_refuses_whatever_the_hardware_would_have_managed():
+    outcome, why = tp.deliverable(150000.0, ceiling=ceiling())
+    assert outcome == "refused" and "declared limit refuses" in why
+
+
+def test_a_declared_ceiling_refuses_even_when_a_measurement_says_the_box_could_do_it():
+    """A contractual limit is a limit. The ceiling is checked before the measurement for exactly this case."""
+    outcome, _ = tp.deliverable(150000.0, measured=rate(), ceiling=ceiling())
+    assert outcome == "refused"
+
+
+def test_a_declared_ceiling_alone_can_never_show_a_requirement_is_met():
+    outcome, why = tp.deliverable(10000.0, ceiling=ceiling())
+    assert outcome == "unknown"
+    assert "can never show one is met" in why
+
+
+def test_no_evidence_at_all_is_unknown_rather_than_either_default():
+    assert tp.deliverable(50000.0)[0] == "unknown"
+
+
+def test_a_measurement_that_cannot_support_a_service_level_cannot_answer_deliverability():
+    outcome, why = tp.deliverable(50000.0, measured=rate(arrivals="closed_loop"))
+    assert outcome == "unknown" and "service-level question" in why
+
+
+def test_the_outcomes_and_the_two_kinds_of_evidence_are_closed():
+    assert tp.DELIVERABILITY == ("deliverable", "refused", "unknown")
+    assert tp.RATE_KINDS == ("declared_ceiling", "measured_goodput")
+
+
+def test_a_ceiling_needs_somebody_attached_to_it():
+    with pytest.raises(tp.Unmeasured, match="cannot be renegotiated"):
+        ceiling(declared_by="  ")
+
+
+def test_a_ceiling_of_zero_is_a_closed_endpoint_rather_than_a_rate():
+    with pytest.raises(tp.Unmeasured, match="closed endpoint"):
+        ceiling(per_hour=0.0)
+
+
+def test_a_requirement_of_nothing_is_not_a_requirement():
+    with pytest.raises(tp.Unmeasured, match="not a requirement"):
+        tp.deliverable(0.0, measured=rate())
+
+
+def test_reading_a_ceiling_as_a_measurement_is_refused_by_name():
+    """The substitution is tempting and silent: a configured max_requests_per_second is the only rate many records carry.
+    A configured value is a hypothesis."""
+    with pytest.raises(tp.Unmeasured, match="a configured value is a hypothesis"):
+        tp.refuse_a_ceiling_read_as_a_measurement(ceiling())
