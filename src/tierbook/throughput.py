@@ -246,3 +246,101 @@ def refuse_coresidency_claim_without_a_zero_arm(arms: dict[str, Throughput]) -> 
                 f"arm {label!r} cannot support a service-level claim ({rate.why_not_a_service_level()}), and a "
                 f"co-residency decision is a service-level question: the mean is conserved when box-time moves between "
                 f"families, so it cannot see the trade the decision is about")
+
+
+#: What a rate figure is, as opposed to what it says. Closed, and the two are one-sided in **opposite** directions, which
+#: is the whole reason they cannot be one field.
+#:
+#: A `declared_ceiling` is a vendor's or an operator's limit. It can **refuse** an assignment -- exceeding a contractual
+#: rate is a refusal to honour whatever the box would actually do -- and it can never **prove** deliverability, because
+#: nobody measured the box against it. A configured value is a hypothesis.
+#:
+#: A `measured_goodput` is the opposite. When it is a lower bound it can **prove** that a required rate is deliverable
+#: (the box did at least this much) and it can never refuse one, because the shortfall may be our own load generator.
+RATE_KINDS = ("declared_ceiling", "measured_goodput")
+
+#: What a capacity question can come back as. `unknown` is the entry that makes the other two honest: without it, a
+#: shortfall against a lower bound reads as a refusal, and this project would be declining assignments on the strength of
+#: its own load generator.
+DELIVERABILITY = ("deliverable", "refused", "unknown")
+
+
+@dataclass(frozen=True)
+class Ceiling:
+    """A rate limit somebody declared, kept apart from a rate somebody measured.
+
+    Separate from `Throughput` rather than a flag on it, because the two are **one-sided in opposite directions** and a
+    single field would let either be read as the other. `policy` already admits an endpoint by comparing a required rate
+    against a declared `max_requests_per_second`; that check is correct as a refusal and has never been evidence that the
+    box delivers anything.
+    """
+
+    per_hour: float
+    declared_by: str
+
+    def __post_init__(self) -> None:
+        if self.per_hour <= 0:
+            raise Unmeasured(f"per_hour={self.per_hour!r} is not a ceiling; a limit of zero is a closed endpoint and "
+                             f"belongs in admission rather than in a rate")
+        if not self.declared_by.strip():
+            raise Unmeasured(
+                "a ceiling with nobody attached is a number that cannot be renegotiated or checked. Who declared it is "
+                "what separates a contractual limit from a guess somebody typed")
+
+    def __str__(self) -> str:
+        return f"{self.per_hour:.0f}/hour declared by {self.declared_by}"
+
+
+def deliverable(required_per_hour: float, *, measured: Throughput | None = None,
+                ceiling: Ceiling | None = None) -> tuple[str, str]:
+    """Whether a policy needing `required_per_hour` may be assigned, given what is known about the box.
+
+    Returns the outcome and one sentence of why. Three outcomes, and the asymmetry between the two kinds of evidence is
+    the point rather than a caveat:
+
+    * A **declared ceiling** that is exceeded **refuses**. A contractual limit is a limit whatever the hardware would do.
+    * A **measured goodput** that covers the requirement makes it **deliverable**, and this holds even when the
+      measurement is a lower bound -- the box did at least that much.
+    * A measured goodput that falls short is **`refused` only when the measurement is not a lower bound.** Against a lower
+      bound it is **`unknown`**: the shortfall may be our own load generator, and this project has twice published a
+      client's limit as a box's capacity.
+
+    A requirement with no evidence at all is `unknown` and says so, rather than defaulting to either.
+    """
+    if required_per_hour <= 0:
+        raise Unmeasured(f"required_per_hour={required_per_hour!r} is not a requirement")
+    if ceiling is not None and required_per_hour > ceiling.per_hour:
+        return "refused", (f"the requirement of {required_per_hour:.0f}/hour exceeds a ceiling of {ceiling}. A declared "
+                           f"limit refuses whatever the hardware would have managed")
+    if measured is None:
+        return "unknown", ("nothing measured says whether the box delivers this. A declared ceiling can refuse a "
+                           "requirement and can never show one is met, because nobody ran the box against it")
+    if not measured.supports_a_service_level_claim():
+        return "unknown", (f"the measurement cannot support a service level ({measured.why_not_a_service_level()}), and "
+                           f"whether a rate is deliverable is a service-level question")
+    if required_per_hour <= measured.goodput_per_hour:
+        return "deliverable", (f"{measured.goodput_per_hour:.0f}/hour landed inside "
+                               f"{measured.deadline_seconds:g}s, which covers the requirement"
+                               + (" -- and that figure is a lower bound, so the margin is at least this large"
+                                  if measured.is_lower_bound else ""))
+    if measured.is_lower_bound:
+        return "unknown", (f"the requirement exceeds a measured {measured.goodput_per_hour:.0f}/hour, and that figure is "
+                           f"a LOWER BOUND ({measured.understated_because or 'offered below the seat count'}). The "
+                           f"shortfall may be the load generator rather than the box, and a client's limit has been "
+                           f"published here as a box's capacity twice")
+    return "refused", (f"the requirement of {required_per_hour:.0f}/hour exceeds a measured {measured.goodput_per_hour:.0f}"
+                       f"/hour inside {measured.deadline_seconds:g}s, and that measurement is not a lower bound")
+
+
+def refuse_a_ceiling_read_as_a_measurement(ceiling: Ceiling) -> None:
+    """Refuse to let a declared limit stand in for a measured goodput.
+
+    It exists as its own function because the substitution is tempting and silent: a configured `max_requests_per_second`
+    is the only rate many records carry, and using it to answer "does the box deliver this" produces a confident number
+    from a value somebody typed. The ledger's rule from the engine work applies unchanged -- **a configured value is a
+    hypothesis and not a measurement.**
+    """
+    raise Unmeasured(
+        f"{ceiling} is a declared ceiling and cannot answer whether the box delivers a rate. It can refuse a requirement "
+        f"that exceeds it; showing a requirement is MET needs a measured goodput under open-loop arrivals, because a "
+        f"configured value is a hypothesis")

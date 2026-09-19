@@ -6541,6 +6541,49 @@ unlimited, and dropping the zero arm. Suite: **1,822 passing, 3 skipped.**
 **What this does not do.** It records a throughput; it does not measure one. The measurement needs concurrent traffic
 against a real engine (T3), which is step 3 of the standing order, and this type is what that step will have to fill in.
 
+## F139 — Deliverability, and the two kinds of rate evidence that are one-sided in opposite directions
+
+The connecting piece item 1 was missing. The three currencies existed as types and **the optimiser could not see
+capacity at all**: `policy` admits an endpoint by comparing a required rate against a **declared**
+`max_requests_per_second`, and `optimise` has no notion of a rate. So a policy cheaper per request could be chosen while
+being undeliverable, and nothing in the mechanism would notice.
+
+### The asymmetry is the finding
+
+| evidence | can refuse | can prove it is met |
+|---|---|---|
+| **declared ceiling** | **yes** -- a contractual limit is a limit whatever the hardware would have managed | **no** -- nobody ran the box against it |
+| **measured goodput** | only when it is **not** a lower bound | **yes**, and **a lower bound suffices** -- the box did at least that much |
+
+So `deliverable()` has three outcomes, and `unknown` is what keeps the other two honest. A requirement exceeding a
+**lower bound** is `unknown`, not `refused`: **the shortfall may be our own load generator**, and a client's limit has
+been published here as a box's capacity twice. Without that outcome the mechanism would decline assignments on the
+strength of a Python process that could not keep up.
+
+The reverse direction is the one a naive "lower bounds are unusable" rule gets wrong: **a lower bound proves
+sufficiency.** If the box delivered at least 100,000 inside the deadline, a requirement of 50,000 is met, and the margin
+is at least as large as it looks.
+
+`Ceiling` is a separate type rather than a flag, because one field would let either be read as the other, and
+`refuse_a_ceiling_read_as_a_measurement` exists by name because the substitution is silent -- a configured
+`max_requests_per_second` is the only rate many records carry. The engine work's rule applies unchanged: **a configured
+value is a hypothesis and not a measurement.**
+
+`tierbook admit-throughput --required` is the caller. **`unknown` exits 0 rather than 2**: widening a verdict is not an
+error, and exiting non-zero for it would push a caller toward not recording the seat count -- which is the field that
+makes the distinction possible at all.
+
+### Verified by breaking it
+
+Six mutations, all caught, including both directions of the asymmetry and checking the ceiling after the measurement
+instead of before. Suite: **1,836 passing, 3 skipped.**
+
+**Two of my own verification commands were wrong in the same way this session**: `git diff --stat && echo OK` and
+`cmd | tail -1; echo $?` both report success unconditionally, because the exit code belongs to the last element of the
+pipeline. Both were fixed by checking the exit code of the thing being tested. The general form is the same defect this
+ledger records elsewhere -- **a check that cannot fail is not a check** -- and it is worth noting that it appeared in the
+verification rather than in the code twice.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
