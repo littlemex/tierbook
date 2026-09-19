@@ -1,5 +1,11 @@
 # tierbook
 
+> **This is a META mechanism. Logic is injected; it is never built in.** No closed vocabulary may encode which
+> signals are worth using, no threshold may come from one corpus, and no refusal may derive from a finding rather
+> than from the record in front of it. A study that measured something not to help records that measurement; it does
+> not become a list the mechanism refuses against. The test for anything in `src/`: **could a different study with a
+> different conclusion express its answer through this?** See [`SCOPE.md`](SCOPE.md).
+>
 > **Standing order, before anything else: [`SCOPE.md`](SCOPE.md) opens with it.** Finish the framework, drive it
 > from an agent as a working example, then verify on machines built from scratch. `main` is closed; work on an
 > epic branch with feat branches into it.

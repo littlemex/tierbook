@@ -528,28 +528,25 @@ def _small_signal_table():
     return _table(rows), signal
 
 
-def test_a_signal_policy_cannot_be_built_from_a_topic_signal():
-    """DEFECT this closes: `evaluate_signal` took a bare dict of numbers with nothing saying what they were about, so a
-    topic classifier and a confidence readout arrived identically and produced policies described identically. The
+def test_a_signal_has_to_say_what_it_is_about():
+    """DEFECT this still closes: `evaluate_signal` took a bare dict of numbers with nothing saying what they were about,
+    so a topic classifier and a confidence readout arrived identically and produced policies described identically. The
     measurement is brutal -- at one layer the same readout named the item's field at 0.7593 against a chance of 0.1429
-    and predicted its own error at 0.4227, below the 0.5 a coin gets -- so a policy built on the first would escalate by
-    subject while being reported as escalating by confidence."""
+    and predicted its own error at 0.4227, below the 0.5 a coin gets.
+
+    What it no longer does is **decide which of them is worth escalating on.** It refused everything except competence
+    and difficulty, from a list in the mechanism, so a study measuring topic to predict competence could not say so. The
+    requirement that survives is only that the signal name what it is about."""
     from tierbook.quorum import evaluate_signal
     t, signal = _small_signal_table()
-    with pytest.raises(EvidenceError, match="escalate by subject while being reported"):
-        evaluate_signal(t, "a", "dear", signal=signal, about="topic", threshold=0.5)
+    with pytest.raises(EvidenceError, match="has to say what it is about"):
+        evaluate_signal(t, "a", "dear", signal=signal, about="vibes", threshold=0.5)
 
 
-def test_a_resource_state_signal_is_refused_for_the_same_reason():
-    """It says nothing about the item, so it cannot decide whether that item should be escalated."""
-    from tierbook.quorum import evaluate_signal
-    t, signal = _small_signal_table()
-    with pytest.raises(EvidenceError, match="is not one of"):
-        evaluate_signal(t, "a", "dear", signal=signal, about="resource_state", threshold=0.5)
-
-
-@pytest.mark.parametrize("about", ["own_competence", "item_difficulty"])
-def test_both_escalation_subjects_are_admitted(about):
+@pytest.mark.parametrize("about", ["own_competence", "item_difficulty", "topic", "resource_state"])
+def test_every_named_subject_is_admitted_and_the_policy_records_which(about):
+    """All four, deliberately. Whether a topic signal earns a gate is decided by what somebody measures about it, and the
+    policy carries the answer to 'about what' so a reader can check the claim rather than trust the name."""
     from tierbook.quorum import evaluate_signal
     t, signal = _small_signal_table()
     assert evaluate_signal(t, "a", "dear", signal=signal, about=about, threshold=0.5) is not None
