@@ -1,5 +1,40 @@
 # Scope: what this project is, what it may not become, and what would prove it broken
 
+---
+
+## STANDING ORDER — read this before choosing what to work on
+
+**This order was given, then lost. It is at the top of the governing document so that losing it again requires
+deleting it.** What happened: the instruction was to finish the framework and then drive it from a coding agent, and
+instead the work drifted into a protocol repository, its second implementation, its CI, and a spec. All of that is
+real and none of it was asked for **at that moment**. Drift of that shape does not announce itself — every step was
+defensible on its own, and the sum was a different project.
+
+### The order, in sequence. Nothing later starts before everything earlier is done.
+
+1. **Finish the measuring framework.** Cost, accuracy **and performance**. Performance is the thin one: latency has a
+   field and **throughput has never been measured**, which is the same gap that blocks cost in GPU-seconds.
+2. **Drive it from the agent side as a worked example** — a coding agent calling through, its harness recorded, and
+   **cost optimisation actually running as an Ops loop**, not as a diagram. Tests written through to that loop.
+3. **Verify on real machines, with nothing inherited.** Build the gateway side **and** the EKS infrastructure **from
+   scratch**, and confirm the system runs **on our own charts alone**. The reason is stated rather than assumed:
+   **there is certainly some part that currently works only because of ad-hoc manual setup**, and a from-scratch build
+   is the only thing that finds it.
+
+### How the work is done
+
+- **`main` is closed.** No pushes to `main`. An **epic branch off `main`**, **feat branches pushed into the epic**,
+  and the epic merged at the end. One feature per branch, clean.
+- **Do not stop to ask.** Loop. Report after, not before.
+- **Nothing outside this list.** Not the protocol repository, not its implementations, not documentation of things
+  already done. If something outside looks necessary, it is either part of step 1, 2 or 3 or it waits.
+
+**A note for whoever reads this next, including me.** The test of whether this order is being followed is not "is the
+current task worthwhile". It is **"is the current task item 1, 2 or 3"**. Everything that went wrong last time passed
+the first test and failed the second.
+
+---
+
 **This is the governing document. Every other document in this repository is subordinate to it.** It is
 normative: a requirement here is one a reviewer can hold an implementation to, and a sentence that cannot
 be held to has no business being here.
