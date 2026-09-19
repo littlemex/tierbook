@@ -761,6 +761,16 @@ def cmd_admit_throughput(args) -> int:
     if first.is_lower_bound:
         print("this rate understates the box, so it bounds the capacity from below and does not measure it")
     print(first.why_not_a_service_level())
+    if args.required:
+        outcome, why = tp.deliverable(
+            float(args.required), measured=first,
+            ceiling=None if not args.ceiling else tp.Ceiling(
+                *(lambda per_hour, by: (float(per_hour), by))(
+                    *_fields(args.ceiling, ("per_hour", "declared_by"), option="--ceiling"))))
+        print(f"deliverable: {outcome} -- {why}")
+        # `unknown` exits 0, not 2. Widening a verdict is not an error, and exiting non-zero for it would push a caller
+        # toward not recording the seat count -- which is the field that makes the distinction possible at all.
+        return 2 if outcome == "refused" else 0
     if not args.against:
         return 0 if first.supports_a_service_level_claim() else 2
     second = build(args.against, "--against")
@@ -1435,6 +1445,13 @@ def main(argv: list[str] | None = None) -> int:
                      help=f"ARRIVALS is one of {list(tp.ARRIVALS)}; SEATS is the engine's admission limit or '-' when "
                           f"nobody read it; DEADLINE and GOODPUT travel together or are both '-'; UNDERSTATED is one of "
                           f"{list(tp.UNDERSTATED_BECAUSE)} or '-'")
+    at2.add_argument("--required", default="", metavar="PER_HOUR",
+                     help="the rate a policy needs. A measured goodput covering it proves deliverability even when the "
+                          "measurement is a lower bound; a shortfall against a lower bound is UNKNOWN rather than a "
+                          "refusal, because it may be the load generator")
+    at2.add_argument("--ceiling", default="", metavar="PER_HOUR:DECLARED_BY",
+                     help="a declared limit. It can refuse a requirement and can never show one is met: a configured "
+                          "value is a hypothesis")
     at2.add_argument("--against", default="",
                      metavar="PER_HOUR:ARRIVALS:CONCURRENCY:SEATS:DEADLINE:GOODPUT:UNDERSTATED:GENERATOR",
                      help="a second rate. Refused unless the arrivals, the seat count and the deadline all match")
