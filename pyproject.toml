@@ -43,4 +43,7 @@ packages = ["src/tierbook"]
 # candidate file is deployed away from a ledger, which is everywhere. A test asserts it is present.
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "harness/tests"]
+# The example's tests are collected with the rest. An example whose tests nobody runs is documentation that has
+# stopped being true, and this one exists to prove the mechanism carries logic it has never heard of -- which is a claim
+# that has to be checked on every commit rather than the day it was written.
+testpaths = ["tests", "harness/tests", "examples/opencode_ops/tests"]

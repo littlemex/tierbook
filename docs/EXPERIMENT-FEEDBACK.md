@@ -6676,6 +6676,83 @@ for now and named here so the next reader does not have to rediscover it.
 
 Five mutations, all caught, **including re-adding the module-level gate**. Suite: **1,845 passing, 3 skipped.**
 
+## F142 — The loop that drives the mechanism, and the four defects it found by being the first real caller
+
+The standing order's second item: an Ops loop, driven from the agent side, **running** rather than drawn. It lives in
+`examples/opencode_ops/` and its README states the split in one line -- *this directory is the logic, `src/tierbook` is
+the mechanism* -- because the point of writing it was to find out whether that claim survives contact with a caller.
+
+It did not, in four places. Each is recorded here because each is the same species: a mechanism looks finished until
+something outside its own tests uses it.
+
+### 1. A reader written against an object that cannot exist
+
+`Policy.undeclared_vars` read `r.var` over `self.rules`. `rules` holds `Rule`s and a `Rule` has `guards`, so this raised
+`AttributeError` on every real policy and passed its own test only because that test built a `Policy` out of bare
+`Guard`s. Every other reader on the class -- `overlaps`, `can_ever_fire`, `gaps`, `guarded_candidates`, `in_domain` --
+walks `rule.guards` correctly, so the malformed tuple was wrong for all of them and one reader had been written to match
+it.
+
+Fixing the reader would leave the trap set for the next one, so **the malformed object stopped being constructible**:
+`Policy.__post_init__` refuses a `rules` entry that is not a `Rule`, and the three tests that built one now build real
+rules. This is the classification-over-registry move -- omission becomes a failure rather than an absence.
+
+### 2. The loop deadlocked at cold start, which is the example's defect and not the mechanism's
+
+Every threshold in the example is derived from what the loop recorded. The price threshold needs history on the dear
+candidate; escalation needs the price threshold; so nothing ever escalated, no dear history accrued, and the loop ran
+happily forever on one arm deriving `{'quota_floor': 0.016}` and nothing else. **`preferred()` correctly returned
+`None`** the whole time, which is the mechanism behaving properly and the example having no idea.
+
+The fix is the example's own: it explores, through `explore.draw`, at a rate **it** chooses -- 0.5 while either arm is
+unmeasured, 0.05 afterwards, never 0, because a loop that stops exploring cannot notice a price change. The propensity
+comes back from the mechanism and is recorded per turn, so traffic that arrived by exploration is not later averaged in
+as a decision the policy made.
+
+### 3. The example reported the silence instead of the statement
+
+`Turn.unobserved` was set from `Collection.unaccounted`, which is **always empty** for this collector -- it explains
+every part it cannot reach with an `Absence`. So the loop reported a complete harness on every turn while seven of the
+ten parts were absent with reasons attached. The two fields are not interchangeable and that is exactly why both exist:
+an absence is a statement, and `unaccounted` is the silence an absence was invented to replace. The turn now carries
+both, and a non-empty `unaccounted` reads as the collector regressing rather than as a property of the request.
+
+### 4. The fake's arithmetic was the thing under test
+
+`ScriptedAgent` accepted on call `n` when `(seen + 1) <= round((seen + 1) * rate)`, which gives **one acceptance in four
+at rate 0.5**. Every assertion about what the loop did would have been an assertion about the fake. The deterministic
+form is `floor((n) * rate) > floor((n - 1) * rate)`, and it is now pinned by a parametrised test over five rate/count
+pairs -- guarding the instrument, in the same way the load-generator lesson says to.
+
+### The third currency, wired in rather than described
+
+The example needs a rate (`required_per_hour`, its own number) and asks `throughput.deliverable` about each candidate
+with whatever evidence exists. The example's rule, stated in its own docstring: **`refused` is a veto and `unknown` is
+not.** A refusal comes from a declared ceiling or from a measurement that is not a lower bound; `unknown` means nobody
+measured well enough to say, and vetoing on it would let a weak load generator quietly shrink the pool -- which is this
+project's own twice-made mistake. What `unknown` costs is the *claim*: `shown_to_carry_the_traffic` is `deliverable` and
+nothing else, so routing there and reporting that it holds stay separate.
+
+A declared ceiling of 50/hour against a requirement of 100 takes the dear arm out of the eligible set entirely, and
+`explore.draw` then reports `no_eligible_arm` rather than paying for an answer already in hand.
+
+### The test that would fail if the loop did nothing
+
+`test_the_loop_spends_less_per_accepted_answer_than_always_escalating` runs the same 40 tasks through the loop and
+through a fixed always-escalate policy and compares spend per **accepted** answer. And the one that guards against the
+opposite failure -- a preference compiled in rather than derived --
+`test_the_preference_follows_the_measurement_and_flips_when_the_measurement_does` changes only the acceptance rates
+(0.5, then 0.2) and demands the answer flip from `box` to `api`. Same prices, same seed, same code.
+
+**14 mutations, 14 caught, no survivors**, including removing exploration, ignoring a refusal, treating `unknown` as a
+veto, reverting the harness field, and restoring the fake's `round`. The example's tests are in `testpaths`, because an
+example whose tests nobody runs is documentation that has stopped being true.
+
+Suite: **2,175 passing, 3 skipped** over all three test roots. That is not a jump of 330 from F141's figure -- F141
+counted `tests/` alone at 1,845. The same split now reads `tests/` 1,846 (the new construction refusal), `harness/tests`
+302, and the example 27. Recorded because a count whose denominator moved silently is the defect this ledger keeps
+catching in other people's numbers.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
