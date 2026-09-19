@@ -6496,6 +6496,51 @@ which module refused. Four call sites named the judge class and all still work.
 
 Suite: **1,795 passing, 3 skipped.**
 
+## F138 — The third currency: what a served box delivers, and the four things a rate has to carry
+
+Item 1 of the standing order, the thin part. `spend` prices a request and `outcomes` scores it; **neither could say
+whether the box carries the traffic at all**, and throughput had never been measured here.
+
+`throughput.Throughput` carries the arrivals, the offered load beside the engine's own seat limit, the deadline and the
+goodput. Every refusal in it is a number this project produced and had to take back.
+
+| what was believed | what it was |
+|---|---|
+| 425,879 requests an hour | the **load generator's** limit. Two clients read 584,739 |
+| a surface peaking at 300-600 input tokens | an artefact of the generator. Once it was off the critical path the surface was monotone -- **shorter is better** -- and the admission rule changed |
+| 384 concurrent requests offered | **27 seats**. Raising to 256 moved value per box-hour **+33%** at 60 output tokens, +18% at 300, +5% at 600 |
+| "mixing is economically neutral" | measured between two **mixtures**. The arm with no long request read **225,730** an hour against 102,022 |
+| a closed-loop verdict | **reversed** when opened: -$8.63 against +$18.88 per box-hour |
+
+### The four things, and why each is a refusal rather than a field
+
+**A rate is a lower bound until somebody shows the generator was not the limit.** `is_lower_bound` is true by default
+whenever the offered load is below the seat count or the generator was never checked -- treating silence as a
+measurement is how a client's limit gets published as a box's capacity.
+
+**A closed loop cannot support a service level at any sample size.** It offers less when the server slows, so no queue
+forms and a deadline has nothing to be missed against. A capacity number from one is fine; `supports_a_service_level_claim`
+returns False and says which of the two conditions failed.
+
+**An unread seat count is not an unlimited one.** `comparable_load` refuses a comparison where either side never read
+`max_num_seqs`, because the gain being largest on the **short** side is the signature of a seat limit rather than a
+compute limit, and that signature is unreadable without the number.
+
+**A mean cannot answer the question co-residency asks.** Mean throughput and mean cost per box-second are both conserved
+when box-time moves between request families. So a goodput and a deadline travel together or neither does, and
+`refuse_coresidency_claim_without_a_zero_arm` refuses the claim outright unless the arm with **none** of the other family
+was measured -- which is the arm nobody had run when the wrong conclusion was drawn.
+
+Production caller `tierbook admit-throughput`, exit 2 when a rate cannot support what is asked of it.
+
+### Verified by breaking it
+
+Fifteen mutations, all caught -- including computing starvation the wrong way round, letting an unread seat count pass as
+unlimited, and dropping the zero arm. Suite: **1,822 passing, 3 skipped.**
+
+**What this does not do.** It records a throughput; it does not measure one. The measurement needs concurrent traffic
+against a real engine (T3), which is step 3 of the standing order, and this type is what that step will have to fill in.
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
