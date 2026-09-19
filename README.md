@@ -1,6 +1,10 @@
 # tierbook
 
-> **Scope, before anything else: [`SCOPE.md`](SCOPE.md).** This is a routing mechanism that collects its
+> **Standing order, before anything else: [`SCOPE.md`](SCOPE.md) opens with it.** Finish the framework, drive it
+> from an agent as a working example, then verify on machines built from scratch. `main` is closed; work on an
+> epic branch with feat branches into it.
+>
+> **Scope: [`SCOPE.md`](SCOPE.md).** This is a routing mechanism that collects its
 > own data and decides while its environment moves. The decision is a **function from observed state to an
 > assignment** — volume, prices, availability, capacity, request shape, floors and SLOs are all inputs, and
 > every threshold in it is **derived, never configured**. *"At this concurrency the next request belongs on
