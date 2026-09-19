@@ -20,6 +20,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+from tierbook import evidence as ev
 from tierbook import explore as ex
 from tierbook import harness as hn
 from tierbook import spend as sp
@@ -185,6 +186,11 @@ class Ops:
             # Recorded per turn rather than derived later, because the evidence behind it changes while the loop runs and
             # a capacity answer recomputed at report time would be attributed to turns it was not true of.
             "capacity": capacity[candidate],
+            # The mechanism's own three states rather than a boolean. `unobserved` is the one a boolean cannot carry, and
+            # a real run needed it: a candidate that never answered is not a candidate that answered badly.
+            "state": (ev.UNOBSERVED if reply.unobserved_because is not None
+                      else ev.SOLVED if reply.accepted else ev.INCORRECT),
+            "unobserved_because": reply.unobserved_because,
         })
         return Turn(candidate=candidate, accepted=reply.accepted, cost=cost,
                     harness_identity=self.history[-1]["harness"],
@@ -210,8 +216,28 @@ class Ops:
         return sum(r["spend"] for r in rows) / len(taken)
 
     def acceptance(self, candidate: str) -> float | None:
-        rows = [r for r in self.history if r["candidate"] == candidate]
+        """Accepted answers over answers **attempted**, not over requests sent.
+
+        The denominator excludes turns where the candidate never produced an answer. Counting a refusal as a failed
+        attempt is how a candidate that was never asked the question ends up with a rate that says it cannot answer it.
+        """
+        rows = [r for r in self.history if r["candidate"] == candidate and r["state"] != ev.UNOBSERVED]
         return None if not rows else sum(1 for r in rows if r["accepted"]) / len(rows)
+
+    def never_served(self, candidate: str) -> bool:
+        """Whether every turn sent to this candidate came back with no answer at all.
+
+        Separate from an acceptance rate of zero, and the separation is the point: this says nothing about the
+        candidate's quality, only that it could not take the request in the shape it was sent. It is the state a real run
+        was in for fourteen turns while looking like a quality result.
+        """
+        rows = [r for r in self.history if r["candidate"] == candidate]
+        return bool(rows) and all(r["state"] == ev.UNOBSERVED for r in rows)
+
+    def unserved_reasons(self, candidate: str) -> tuple[str, ...]:
+        """The distinct reasons this candidate produced no answer, in the mechanism's vocabulary."""
+        return tuple(sorted({r["unobserved_because"] for r in self.history
+                             if r["candidate"] == candidate and r["unobserved_because"]}))
 
     def preferred(self) -> str | None:
         """Which candidate the recorded history says is cheaper per accepted answer.
@@ -221,5 +247,11 @@ class Ops:
         """
         scores = {c: self.spend_per_accepted(c) for c in (P.CHEAP, P.DEAR)}
         if any(v is None for v in scores.values()):
+            return None
+        # A candidate that never served the request has not lost a comparison, it was never in one. Without this the
+        # arithmetic still runs -- spend over zero accepted is None, so it happens to be caught here -- but a candidate
+        # that served once out of fifty would be compared on that one, and this says so explicitly rather than relying on
+        # a denominator reaching zero.
+        if any(self.never_served(c) for c in scores):
             return None
         return min(scores, key=lambda c: scores[c])

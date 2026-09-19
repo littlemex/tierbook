@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
+from tierbook import evidence as ev
+
 
 @dataclass(frozen=True)
 class Reply:
@@ -28,6 +30,25 @@ class Reply:
     accepted: bool
     input_mtok: float
     output_mtok: float
+    #: Why no answer was produced at all, from the mechanism's own `evidence.UNOBSERVED_REASONS`, or `None` when the
+    #: candidate answered. **This is not the same fact as `accepted=False` and collapsing the two is what a real run
+    #: caught.** A served box refused every request carrying tool schemas -- the engine needed two flags it had not been
+    #: started with -- and fourteen turns of `accepted=False` read exactly like a model that is bad at the task. The two
+    #: call for opposite actions: retrain or reroute against set a flag, and averaged together the second looks like the
+    #: first forever.
+    #:
+    #: The vocabulary is imported rather than invented so this example cannot mint a reason the mechanism will not
+    #: recognise later.
+    unobserved_because: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.unobserved_because is not None and self.unobserved_because not in ev.UNOBSERVED_REASONS:
+            raise ValueError(
+                f"{self.unobserved_because!r} is not one of {sorted(ev.UNOBSERVED_REASONS)}. A reason of this example's "
+                f"own invention would not survive being recorded: the mechanism classifies unobserved outcomes and a "
+                f"value outside that classification has nowhere to land")
+        if self.unobserved_because is not None and self.accepted:
+            raise ValueError("an answer cannot be accepted and never have been produced")
 
 
 class Agent(Protocol):

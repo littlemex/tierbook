@@ -315,3 +315,61 @@ def test_the_fake_accepts_exactly_the_stated_fraction(rate, calls, expected):
     agent = ScriptedAgent(accepts={P.CHEAP: rate})
     got = sum(1 for _ in range(calls) if agent(request_body("t"), candidate=P.CHEAP).accepted)
     assert got == expected
+
+
+# --- a candidate that never answered is not a candidate that answered badly -----------------------------------------
+
+class RefusesTheHarness:
+    """A fake endpoint that rejects any request carrying tool schemas, the way a real one did.
+
+    Not invented for the test. A served vLLM returned 400 -- `"auto" tool choice requires --enable-auto-tool-choice and
+    --tool-call-parser to be set` -- for every request the example sends, because the example sends the tools a coding
+    agent sends. Fourteen turns came back unaccepted and the loop reported a quality result.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, body: dict, *, candidate: str) -> object:
+        from examples.opencode_ops.adapter import Reply
+        self.calls += 1
+        if candidate == P.CHEAP and body.get("tools"):
+            return Reply(text="", accepted=False, input_mtok=0.0, output_mtok=0.0,
+                         unobserved_because="unsupported")
+        return Reply(text=f"answer from {candidate}", accepted=True, input_mtok=0.01, output_mtok=0.002)
+
+
+def test_a_candidate_that_refused_the_request_is_not_reported_as_bad_at_it():
+    ops = Ops(world=a_world(), agent=RefusesTheHarness(), rng=random.Random(0))
+    run(ops, 20)
+
+    assert ops.never_served(P.CHEAP) is True
+    assert ops.unserved_reasons(P.CHEAP) == ("unsupported",)
+    # The distinction a boolean cannot carry: no attempt was made, so there is no rate. An acceptance of 0.0 here would
+    # be a claim about the model.
+    assert ops.acceptance(P.CHEAP) is None
+    assert ops.spend_per_accepted(P.CHEAP) is None
+    # And the arm that did answer is not crowned on the strength of the other one being unable to take the request.
+    assert ops.acceptance(P.DEAR) == 1.0
+    assert ops.preferred() is None
+
+
+def test_the_three_states_are_the_mechanisms_own_and_not_a_boolean():
+    from tierbook import evidence as ev
+    ops = Ops(world=a_world(), agent=RefusesTheHarness(), rng=random.Random(0))
+    run(ops, 20)
+    seen = {r["state"] for r in ops.history}
+    assert seen <= ev.KNOWN_STATES
+    assert ev.UNOBSERVED in seen and ev.SOLVED in seen
+
+
+def test_a_reason_outside_the_mechanisms_classification_is_refused():
+    from examples.opencode_ops.adapter import Reply
+    with pytest.raises(ValueError, match="is not one of"):
+        Reply(text="", accepted=False, input_mtok=0.0, output_mtok=0.0, unobserved_because="the box was grumpy")
+
+
+def test_an_answer_cannot_be_accepted_and_never_have_been_produced():
+    from examples.opencode_ops.adapter import Reply
+    with pytest.raises(ValueError, match="cannot be accepted and never"):
+        Reply(text="x", accepted=True, input_mtok=0.0, output_mtok=0.0, unobserved_because="unsupported")
