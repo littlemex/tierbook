@@ -44,6 +44,14 @@ answer unrepresentable.
    **there is certainly some part that currently works only because of ad-hoc manual setup**, and a from-scratch build
    is the only thing that finds it.
 
+### Where the order stands, and what proves it rather than what claims it
+
+| item | state | what shows it |
+|---|---|---|
+| 1. cost, accuracy, performance | **done** | `spend` (four billed legs, conversation, partitioning), `outcomes`/`counterfactual`, and `throughput` -- a rate that carries its arrivals, its offered load and the seat count, plus `deliverable()` over the two kinds of rate evidence. Every one has a CLI door; `admit-throughput` is the newest |
+| 2. driven from the agent side | **done** | `examples/opencode_ops/`, 27 tests in `testpaths`. One fails if the loop does not spend less per accepted answer than a fixed always-escalate policy; another changes only the acceptance rates and demands the preference flip. 14 mutations, no survivors. Four defects in the mechanism came out of being its first outside caller (F142) |
+| 3. real machines, nothing inherited | **done, and the premise held** | both sides built beside the running ones on fresh names: nine stacks, then `153 added, 0 changed, 0 destroyed` with no module edit. The loop ran on billed traffic at $0.00003549 per accepted answer against $0.00077, and the performance currency got its first measured number -- 718,410/hour inside an 8s deadline, recorded as a lower bound because nothing queued. **The ad-hoc part was the first administrator**: the documented procedure cannot work and the alternative is labelled stale, so the running deployment has an admin that no repository explains. Full record in `docs/verify/v0.4.0-from-scratch.md`, findings in F143 |
+
 ### How the work is done
 
 - **`main` is closed.** No pushes to `main`. An **epic branch off `main`**, **feat branches pushed into the epic**,

@@ -6753,6 +6753,94 @@ counted `tests/` alone at 1,845. The same split now reads `tests/` 1,846 (the ne
 302, and the example 27. Recorded because a count whose denominator moved silently is the defect this ledger keeps
 catching in other people's numbers.
 
+## F143 — Real machines with nothing inherited, and the five things only a from-scratch build could find
+
+The standing order's third item, and its premise stated as a claim rather than a worry: *there is certainly some part
+that currently works only because of ad-hoc manual setup.* The premise was right, and the part it named turned out to be
+the one every deployment needs first.
+
+Both sides were built beside the running ones rather than over them -- a resource prefix never used before for the
+gateway, a new cluster name and its own terraform state key for the cluster. That choice is what makes the result mean
+anything: re-running a deploy over a working environment proves idempotence, and an object created once by hand goes on
+existing while the second run inherits it in silence.
+
+### What stood up cleanly, recorded as passes rather than assumed
+
+Nine CloudFormation stacks from a fresh shallow clone with one environment variable changed. `153 to add, 0 to change,
+0 to destroy` for the cluster, then `153 added, 0 changed, 0 destroyed`, with **no edit to the module** -- three nodes
+Ready, no system pod outside Running, and Karpenter launching exactly one GPU node for the pending pod rather than the
+eleven the chart's own comment warns about. A real call on `/v1/chat/completions` returned 200 with **all four billed
+legs** in `usage`, which is the first confirmation that `spend.Spend`'s four legs are the four legs that get billed.
+
+### The finding the item existed to find
+
+**The documented way to create the first administrator cannot work.** `docs/DEPLOYMENT.md` says to export
+`STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL` and redeploy the ECS stack; the stack pre-creates a secret for the password and
+grants the task `PutSecretValue` on exactly that ARN; the backend reads the variable at startup and writes there. And
+the variable appears **nowhere in `iac/lib`** -- 66 environment variables on the live task definition, no ECS secrets,
+and not that one. The procedure runs, reports success, and creates nothing: zero users in the pool afterwards.
+
+Registering one task definition revision whose only difference is that variable produced one CONFIRMED user and the
+password in the secret. One variable is the whole difference, which is what makes it a cause and not a symptom.
+
+The other documented path, the one-line installer, calls a script that `deploy-all.sh`'s own output labels stale, and
+which works by POSTing to a route the backend's own comment calls the biggest operational footgun in its threat model.
+So there are two documented paths and no working one -- while the existing deployment has an administrator that nothing
+in either repository explains.
+
+### Two corrections to this repository's own instruments
+
+**The probe's first output could not be constructed at all.** It reported offered concurrency as rate times mean latency
+-- 0.73 -- and `Offered` refuses anything below 1. The refusal was right: the field means the load that was offered, and
+a product of two averages is not something anybody offered. The probe now reports peak requests actually in flight.
+
+**`UNDERSTATED_BECAUSE` was missing the state the first real run was in**, and this is the more interesting one. The
+generator kept up (worst dispatch lateness 14 ms), the offer exceeded the seat count (444 concurrent against
+`max_num_seqs=256`), and the rate is still a lower bound -- because every one of 12,099 requests came back inside the 8
+second deadline. Nothing queued, so the ceiling was never reached. `generator_saturated` is wrong (the generator was
+fine), `offered_below_seats` is wrong (it was above), `generator_not_checked` is wrong (it was checked). The fourth
+entry, `load_fully_absorbed`, is a state of the world and not a judgement about a signal, which is why it belongs in a
+closed vocabulary at all. With it, a requirement of 100/hour is `deliverable` against this run and 1,000,000/hour is
+`unknown` rather than `refused`.
+
+**The performance currency's first real numbers**, from an in-cluster open-loop probe with Poisson arrivals at four
+rates: 27,736 / 112,670 / 339,552 / **718,410 per hour** at 8, 32, 96 and 200 arrivals a second, every request inside
+the deadline at every rung, p95 1.627 s at the top. The box was never saturated, which is why the top figure is a lower
+bound rather than a capacity.
+
+And the number the cost side has been missing since the throughput gap was named: at **$2.699/hour** for the instance
+(price list API, Tokyo, shared tenancy) and **17.78 Mtok/hour** measured, the box costs **$0.1518 per output Mtok** --
+an *upper* bound on price, because the rate it divides is a lower bound on throughput. Compare $5.00 per output Mtok
+list for the metered arm.
+
+### The loop, on billed traffic
+
+14 live turns through `examples/opencode_ops`, box against metered API: **$0.00003549** per accepted answer against
+**$0.00077000**, a factor of 21.7, both arms accepting everything, four legs on every turn with the cache legs present
+as zero rather than omitted, one stable harness identity across turns, and `preferred()` answering `box` **from the
+measurement**. Capacity read `deliverable` for the box (a real probe) and `unknown` for the API (no measurement exists),
+which is the third currency doing work inside a decision rather than sitting in a schema.
+
+### Two more findings, in opposite directions
+
+**The serving chart cannot pass an engine flag.** Every request the example sends carries tool schemas, because that is
+what a coding agent sends, and the box returned 400 to all of them: `"auto" tool choice requires
+--enable-auto-tool-choice and --tool-call-parser to be set`. The chart renders a closed list of five engine arguments
+with no escape hatch, so the flags cannot be set through it. The real finding is not the flag: it is that the two
+candidates a router chooses between **differ at the harness level and not only on price**, and a chart that cannot
+express an engine flag cannot serve an agent harness at all.
+
+**And the example was lying where the mechanism was not.** Those fourteen 400s came back as `accepted=False` and the
+loop reported acceptance 0.00 on the box -- a model that looks bad at the task and was never asked. The mechanism
+already had the distinction (`evidence.UNOBSERVED` with reason `unsupported`, and `Cell.attempted` excludes it), so the
+example was fixed against the mechanism's own vocabulary rather than the other way round: `Reply.unobserved_because` is
+validated against `UNOBSERVED_REASONS`, the loop records one of three states, `acceptance` divides by attempts, and
+`preferred()` refuses to rank a candidate that never served the request. Worth stating plainly because it is the
+opposite of the other findings: here the framework was right and its first real caller was wrong, which is what the
+example is for.
+
+Everything built was destroyed afterwards. Suite: **2,181 passing, 3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
