@@ -49,6 +49,7 @@ UNDERSTATED_BECAUSE = (
     "generator_saturated",        # the load generator, not the box, was the limit
     "offered_below_seats",        # fewer requests were offered than the engine would have admitted
     "generator_not_checked",      # nobody demonstrated the generator was not the limit
+    "load_fully_absorbed",        # every request offered came back inside the deadline, so no queue ever formed
 )
 
 
@@ -160,6 +161,13 @@ class Throughput:
 
         **The default is that it does.** A run whose generator was never shown to be off the critical path is a lower
         bound, and treating silence as a measurement is how a client's limit gets published as a box's capacity.
+
+        Note the two independent ways in: the seat comparison catches a run that never asked the engine for its capacity,
+        and `understated_because` carries the cases the seat count cannot see. `load_fully_absorbed` is the one the first
+        real measurement needed and the vocabulary did not have -- a run can offer 444 concurrent against 256 seats, with
+        the generator demonstrably keeping up, and still be a lower bound, because every request came back inside the
+        deadline. Nothing queued, so the ceiling is somewhere above and this run did not find it. Neither of the other
+        entries fits: the generator was not the limit and the offer was not below the seats.
         """
         return bool(self.understated_because) or self.offered.starves_the_engine
 

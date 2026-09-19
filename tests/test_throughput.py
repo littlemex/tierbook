@@ -72,9 +72,41 @@ def test_a_fully_offered_checked_run_is_not_a_lower_bound():
 
 
 def test_the_reasons_a_rate_understates_are_closed_because_each_is_a_different_thing_to_fix():
-    assert tp.UNDERSTATED_BECAUSE == ("generator_saturated", "offered_below_seats", "generator_not_checked")
+    assert tp.UNDERSTATED_BECAUSE == ("generator_saturated", "offered_below_seats", "generator_not_checked",
+                                      "load_fully_absorbed")
     with pytest.raises(tp.Unmeasured, match="not one of"):
         rate(understated_because="probably_fine")
+
+
+def test_a_box_that_absorbed_everything_offered_is_a_lower_bound_even_with_more_load_than_seats():
+    """The case the first real measurement was in, and the one the other three entries do not cover.
+
+    A served box was offered 444 concurrent against 256 seats, the generator's worst dispatch lateness was 14
+    milliseconds, and every one of 12,099 requests came back inside an 8 second deadline. So the generator was not the
+    limit and the offer was not below the seats -- and the rate is still a lower bound, because nothing ever queued and a
+    ceiling nothing reached is a ceiling nobody measured.
+    """
+    absorbed = rate(per_hour=718410.0, goodput_per_hour=718410.0, deadline_seconds=8.0,
+                    offered=offered(concurrency=444, seats=256),
+                    understated_because="load_fully_absorbed")
+    assert absorbed.offered.starves_the_engine is False, "the seat comparison cannot see this case"
+    assert absorbed.is_lower_bound is True
+    assert "LOWER BOUND" in str(absorbed)
+
+
+def test_a_shortfall_against_a_fully_absorbed_run_is_unknown_rather_than_refused():
+    """Which is the whole point of recording it. Refusing an assignment because a box was never pushed hard enough would
+    be declining work on the strength of our own load generator."""
+    absorbed = rate(per_hour=718410.0, goodput_per_hour=718410.0, deadline_seconds=8.0,
+                    offered=offered(concurrency=444, seats=256),
+                    understated_because="load_fully_absorbed")
+    outcome, why = tp.deliverable(1_000_000.0, measured=absorbed)
+    assert outcome == "unknown"
+    assert "LOWER BOUND" in why
+
+    covered, why2 = tp.deliverable(500_000.0, measured=absorbed)
+    assert covered == "deliverable"
+    assert "at least this large" in why2
 
 
 # --- a closed loop cannot support a service level, at any sample size -----------------------------------------------------
