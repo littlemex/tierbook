@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook admit-fit  whether a fitted direction's variance share may be quoted, and what it is about
     tierbook read-harness  read a request body: what it says about the harness, and what it cannot
     tierbook admit-traces  what two runs' tool traces license: refuse, unknown, or neither
     tierbook conversation-cost  what a sequence of turns in one context cost, and whether two compare
@@ -731,6 +732,60 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -
 
 
 @_refuses
+def cmd_admit_fit(args) -> int:
+    """Whether a fitted direction's variance share may be quoted, and what it is a property of.
+
+    A door because the failure it prevents is a published sentence. The claim that opened this study -- a direction
+    occupying 0.081% of the activation variance, read as confirming a paper's under-10% -- was measured after the final
+    norm weights were applied. In the raw stream the same direction is **2nd** by variance, and turning the ridge alone
+    moved it from rank 2 to rank 75 while held-out AUC barely moved.
+
+    So this prints the share with its ridge, its geometry and what it was measured against, and refuses to compare two
+    fits that differ in any of them. Exit 2 when the numbers are well formed and support nothing.
+    """
+    null = None
+    if args.null:
+        median, at_quantile, quantile, draws, preserves = _fields(
+            args.null, ("median", "at_quantile", "quantile", "draws", "preserves"), option="--null")
+        null = cr.Null(median=float(median), at_quantile=float(at_quantile), quantile=float(quantile),
+                       draws=int(draws), preserves="" if preserves == "-" else preserves)
+
+    def build(spec: str, option: str) -> qt.Fit:
+        share, rank, geometry, ridge, against, layer, void = _fields(
+            spec, ("share", "rank", "geometry", "ridge", "measured_against", "layer", "void_because"), option=option)
+        return qt.Fit(share=float(share), rank=int(rank), geometry=geometry, ridge=float(ridge),
+                      measured_against=against, layer=int(layer),
+                      permutation="within_category" if null is not None else "none", null=null,
+                      void_because="" if void == "-" else void)
+
+    first = build(args.fit, "--fit")
+    print(f"fit: {first}")
+    if first.is_void:
+        print("refused: a void fit has no share to quote; a diverged solve produces a share and a rank like any other",
+              file=sys.stderr)
+        return 2
+    print(f"share as a property of THIS FIT: {first.about_this_fit():.4f} -- there is deliberately no accessor that "
+          f"makes it a property of the model")
+    if null is not None:
+        holds = first.rules_out_the_null()
+        print(f"distinguishable from a {args.null.split(':')[-1]} null at its {null.quantile:.2f} quantile: "
+              f"{'yes' if holds else 'NO'}")
+    if not args.against:
+        return 0
+    second = build(args.against, "--against")
+    print(f"against: {second}")
+    try:
+        qt.comparable_fits(first, second)
+    except EvidenceError as e:
+        # EvidenceError rather than a module's own class: `quantity` and `judge` both define `Inadmissible`, and naming
+        # one of them here is how this door first exited 1 where it meant 2.
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    print("comparable: same geometry, same ridge, same layer, so the difference between these shares is not the knob")
+    return 0
+
+
+@_refuses
 def cmd_read_harness(args) -> int:
     """Read a request body and print what it says about the harness, and what it cannot say.
 
@@ -1329,6 +1384,19 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    af = sub.add_parser("admit-fit", parents=[common],
+                        help="whether a fitted direction's variance share may be quoted, and what it is about")
+    af.add_argument("--fit", required=True,
+                    metavar="SHARE:RANK:GEOMETRY:RIDGE:MEASURED_AGAINST:LAYER:VOID_BECAUSE",
+                    help=f"GEOMETRY is one of {list(qt.GEOMETRIES)}; MEASURED_AGAINST is one of "
+                         f"{list(qt.VARIANCE_REFERENCES)}; VOID_BECAUSE is '-' unless the solve did not converge")
+    af.add_argument("--against", default="", metavar="SHARE:RANK:GEOMETRY:RIDGE:MEASURED_AGAINST:LAYER:VOID_BECAUSE",
+                    help="a second fit to compare. Refused unless the geometry, the ridge and the layer all match")
+    af.add_argument("--null", default="", metavar="MEDIAN:AT_QUANTILE:QUANTILE:DRAWS:PRESERVES",
+                    help="the permutation null as a DISTRIBUTION. A median alone cannot say which quantile a verdict is "
+                         "against, and above-the-median is a coin flip")
+    af.set_defaults(fn=cmd_admit_fit, registry=None)
 
     rh = sub.add_parser("read-harness", parents=[common],
                         help="read a request body and print what it says about the harness, and what it cannot say")

@@ -43,6 +43,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tierbook.evidence import EvidenceError
+
 from tierbook.reproduce import Rate
 
 #: What a measured constant may be measured on. `published_weights` is the only honest answer this mechanism can
@@ -59,10 +61,19 @@ REFUSED_KEYS = ("shape", "d_model", "depth", "vocab_size", "tokenizer_length", "
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 
 
-class Inadmissible(Exception):
+class Inadmissible(EvidenceError):
     """A judge was asked to run against a candidate its contract does not cover. Raised before the judge's output is
     read, because a mismatched judge still produces a working-looking gate -- one measured at 0.7176 against 0.7529
-    for the matched one, a difference whose interval included zero -- so a mismatch is not detectable downstream."""
+    for the matched one, a difference whose interval included zero -- so a mismatch is not detectable downstream.
+
+    **Based on `EvidenceError` rather than `Exception`, and the reason is a defect this cost.** `quantity` defines an
+    `Inadmissible` too, and the two were unrelated classes sharing a name: a door written as `except jd.Inadmissible`
+    silently missed every refusal `quantity` raised, which is exactly what happened when `admit-fit` was added -- its
+    refusal fell through to the outer handler and exited 1 where the door meant 2.
+
+    Two exception classes with one name and no common base make every `except` a guess about which module raised. With
+    this base, **`except EvidenceError` is always right**, and a caller that does not know which module refused does not
+    need to."""
 
 
 @dataclass(frozen=True)

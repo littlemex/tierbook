@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from tierbook.evidence import (ESCALATION_SUBJECTS, SUBJECTS, Elicitation,  # noqa: F401
                               EvidenceError)
+from tierbook.criterion import Null
 from tierbook.judge import WeightDigest
 from tierbook.spend import SignalPrice
 
@@ -453,6 +454,172 @@ class Strength:
     def __str__(self) -> str:
         lo, hi = self.interval
         return f"{self.value:.4f} [{lo:.4f}, {hi:.4f}] over {self.n} ({self.statistic}, {self.interval_method})"
+
+
+#: The space a fitted direction's variance share was measured in. Closed, and closed because the SAME direction is
+#: high-variance in one of these and low-variance in the other: the final norm's weights rescale every coordinate, so
+#: they change which directions are large.
+#:
+#: This is the entry that cost the study its opening claim. A figure read as "this box confirms the paper's under-10%"
+#: was measured **after** the norm weights were applied; in the raw stream the same direction is **2nd** by variance.
+GEOMETRIES = ("raw_residual", "norm_scaled")
+
+#: What the variance share was measured against. Closed, because the wrong one is not a weaker measurement, it is a
+#: different quantity: a direction fitted and measured in one sample is being scored on the covariance it was chosen to
+#: exploit.
+VARIANCE_REFERENCES = ("fitting_sample", "held_out_covariance")
+
+#: How the null was built, when one was. Unrestricted permutation lets a direction that merely predicts the ITEM'S
+#: CATEGORY earn credit, and the stratified form is what removed it -- at one layer the real direction turned out
+#: indistinguishable from a direction that only knows the category.
+PERMUTATION_SCHEMES = ("none", "unrestricted", "within_category")
+
+
+@dataclass(frozen=True)
+class Fit:
+    """A fitted direction's variance share, carrying the knob and the space it was computed in.
+
+    **The measurement this type exists for.** Same data, same labels, same layer, and only the ridge changing:
+
+    | ridge | raw: share / rank | norm-scaled: share / rank |
+    |---|---|---|
+    | 0.5 | 0.2424 / 2 | 0.2351 / 2 |
+    | 20 | 0.1438 / 2 | 0.0042 / 28 |
+    | 100 | 0.0556 / 4 | 0.0014 / **75** |
+
+    **Rank 2 to rank 75 by turning one knob**, while held-out AUC barely moved. So the variance share of a fitted
+    direction is a property of the fit and **not of the model**, and a figure quoted without its ridge and its geometry
+    is a figure about nothing in particular. `share` is therefore never exposed as a bare number: it is reachable only
+    through `about_this_fit()`, and `about_the_model()` does not exist.
+
+    The two smallest ridges in that sweep diverged numerically and read AUC 0.5549. Those rows are **void, not
+    evidence**, which is why `void_because` exists and why a void fit refuses to report a share at all.
+    """
+
+    share: float
+    rank: int
+    geometry: str
+    ridge: float
+    measured_against: str
+    layer: int
+    permutation: str = "none"
+    #: The null as a DISTRIBUTION with the quantile a verdict may use, not a median. Reusing `criterion.Null` rather than
+    #: carrying a float, because the same defect was already found and closed one module over: "beats the null" with only
+    #: a middle recorded can mean either the middle or the tail, and **being above the median is a coin flip**. The first
+    #: version of this field WAS a bare median, and it called the study's own raw-L28 row -- share 0.1311 against a null
+    #: median of 0.1432, one-sided p 0.225 -- a result, on the wrong side of that coin.
+    null: Null | None = None
+    #: Why this row carries no evidence, when it does not. A numerically diverged solve produces a share and a rank like
+    #: any other, and nothing about the numbers says they came from a fit that did not converge -- so the only way a void
+    #: row stops being quoted is if asking for its share raises.
+    void_because: str = ""
+
+    def __post_init__(self) -> None:
+        if self.geometry not in GEOMETRIES:
+            raise Inadmissible(
+                f"{self.geometry!r} is not one of {GEOMETRIES}. The same direction is 2nd by variance in the raw stream "
+                f"and 75th after the norm weights are applied, so a share without its space is a number about nothing "
+                f"in particular")
+        if self.measured_against not in VARIANCE_REFERENCES:
+            raise Inadmissible(f"{self.measured_against!r} is not one of {VARIANCE_REFERENCES}")
+        if self.permutation not in PERMUTATION_SCHEMES:
+            raise Inadmissible(f"{self.permutation!r} is not one of {PERMUTATION_SCHEMES}")
+        if not 0.0 <= self.share <= 1.0:
+            raise Inadmissible(f"share={self.share!r} is not a fraction of the variance")
+        if self.rank < 1:
+            raise Inadmissible(f"rank={self.rank} is not a rank; the largest direction is 1st")
+        if self.ridge <= 0:
+            raise Inadmissible(
+                f"ridge={self.ridge!r} is not a regularisation. An unregularised fit is a different estimator rather "
+                f"than the zero end of this one, and the sweep this type records has its two smallest ridges void for "
+                f"numerical divergence")
+        if self.layer < 0:
+            raise Inadmissible(f"layer={self.layer} is not a layer")
+        if (self.null is None) != (self.permutation == "none"):
+            raise Inadmissible(
+                f"permutation={self.permutation!r} and null={self.null!r}: a null was built and not recorded, or one was "
+                f"recorded for a scheme that says nothing was permuted. What was held fixed is the whole difference "
+                f"between a null that rules out the item's category and one that does not, and the real share is only "
+                f"readable against it -- 0.0623 sits above every one of 200 nulls at one layer and indistinguishable "
+                f"from them at another")
+        if self.null is not None and not isinstance(self.null, Null):
+            raise Inadmissible(
+                f"null={self.null!r} is not a Null. A bare median here is the defect closed one module over: it cannot "
+                f"say which quantile a verdict is against, and above-the-median is a coin flip")
+
+    @property
+    def is_void(self) -> bool:
+        return bool(self.void_because)
+
+    def about_this_fit(self) -> float:
+        """The share, and the name says everything this number is about.
+
+        There is deliberately no `about_the_model()`. The ridge moved this figure from rank 2 to rank 75 on identical
+        data, so no accessor here can honestly answer a question about where the model keeps its information.
+        """
+        if self.is_void:
+            raise Inadmissible(
+                f"this fit is void ({self.void_because}) and has no share to report. A diverged solve produces a share "
+                f"and a rank like any other, and nothing in the numbers says so -- reporting it is how a void row gets "
+                f"quoted as evidence")
+        return self.share
+
+    def rules_out_the_null(self) -> bool:
+        """Whether the share is distinguishable from a direction with no signal in it.
+
+        Refused rather than answered when the share was measured in the fitting sample: a direction chosen to exploit a
+        covariance and then scored against that same covariance is not being tested. This was the FIRST control run here
+        and it is the one the adversarial round replaced.
+        """
+        if self.null is None:
+            raise Inadmissible(
+                "no null was built for this fit, so there is nothing for the share to be distinguishable from. Landing "
+                "in the low-variance tail is the solver's default, which is why a low-variance finding was never "
+                "evidence on its own")
+        if self.measured_against == "fitting_sample":
+            raise Inadmissible(
+                "this share was measured in the sample the direction was fitted on, so the direction is being scored "
+                "against the covariance it was chosen to exploit. Fit on train and measure against the held-out "
+                "covariance, which is the form that refuted the original claim in every cell")
+        if self.is_void:
+            raise Inadmissible(f"this fit is void ({self.void_because})")
+        return self.share > self.null.at_quantile
+
+    def __str__(self) -> str:
+        head = (f"share {self.share:.4f} (rank {self.rank}) at layer {self.layer} in {self.geometry}, ridge "
+                f"{self.ridge:g}, against {self.measured_against}")
+        if self.is_void:
+            return head + f" -- VOID: {self.void_because}"
+        if self.null is not None:
+            head += (f", {self.null.draws} {self.permutation} permutations (median {self.null.median:.4f}, "
+                     f"{self.null.quantile:.2f} quantile {self.null.at_quantile:.4f})")
+        return head
+
+
+def comparable_fits(a: Fit, b: Fit) -> None:
+    """Refuse to read two fits against each other unless the knob and the space were held.
+
+    The defect in its exact shape: rank 2 and rank 75 are the same data at two ridges, and quoting them side by side
+    reads as the model moving. A comparison across geometries is the same error one level up, since the norm weights
+    decide which directions are large before any fit happens.
+    """
+    # Voidness is checked FIRST, and the order is the point: a void row carries no evidence at any ridge, so refusing it
+    # for the ridge tells a caller how to fix a comparison that can never be made.
+    for fit in (a, b):
+        if fit.is_void:
+            raise Inadmissible(f"one of these fits is void ({fit.void_because}) and carries no evidence to compare")
+    if a.geometry != b.geometry:
+        raise Inadmissible(
+            f"these fits were computed in {a.geometry!r} and {b.geometry!r}. The norm weights rescale every coordinate "
+            f"and therefore change which directions are high-variance, so the difference between these shares is partly "
+            f"the difference between the spaces")
+    if a.ridge != b.ridge:
+        raise Inadmissible(
+            f"these fits used ridge {a.ridge:g} and {b.ridge:g}. On identical data one knob moved this figure from rank "
+            f"2 to rank 75 while held-out AUC barely moved, so the difference between them is the knob")
+    if a.layer != b.layer:
+        raise Inadmissible(f"these fits are at layers {a.layer} and {b.layer}; the comparison is across depth, which is "
+                           f"a different question and needs saying so")
 
 
 @dataclass(frozen=True)

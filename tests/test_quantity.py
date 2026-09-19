@@ -614,3 +614,123 @@ def test_the_door_exits_two_when_only_topic_signals_are_declared(tmp_path, capsy
     code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:30:r1"])
     assert code == 2
     assert "0 of 1" in text
+
+
+# --- a fitted quantity carries the knob and the space it was computed in ---------------------------------------------------
+
+def a_null(median=0.1432, at_quantile=0.1810, draws=200):
+    from tierbook.criterion import Null
+    return Null(median=median, at_quantile=at_quantile, quantile=0.95, draws=draws, preserves="category")
+
+
+def a_fit(**over):
+    base = dict(share=0.1311, rank=2, geometry="raw_residual", ridge=20.0,
+                measured_against="held_out_covariance", layer=28,
+                permutation="within_category", null=a_null())
+    base.update(over)
+    return qt.Fit(**base)
+
+
+def test_the_ledgers_own_two_verdicts_come_out_of_this_type():
+    """Raw L28: share 0.1311 against a null median of 0.1432, one-sided p 0.225 -- not distinguishable. Raw L36: 0.0623
+    above every one of 200 nulls. A type that got either of these backwards would be worse than no type."""
+    assert a_fit().rules_out_the_null() is False
+    l36 = a_fit(share=0.0623, rank=4, layer=36, null=a_null(median=0.0310, at_quantile=0.0480))
+    assert l36.rules_out_the_null() is True
+
+
+def test_the_null_is_a_distribution_and_not_a_median():
+    """The first version of this field was a bare median, and above-the-median is a coin flip -- it would have called the
+    raw-L28 row a result. The same defect was already closed one module over, which is why the type is shared."""
+    from tierbook.criterion import Null
+    assert isinstance(a_fit().null, Null)
+    with pytest.raises(qt.Inadmissible, match="above-the-median is a coin flip"):
+        a_fit(null=0.1432)
+
+
+def test_a_share_between_the_median_and_the_tail_is_not_a_result():
+    """The discriminating case, and the only region where the median and the declared quantile disagree. Without it a
+    mutation swapping one for the other passes every other test here -- which it did: the L28 row sits below both and the
+    L36 row above both, so neither exercises the distinction the type exists for.
+
+    Above the middle of the null is where **half of all no-signal directions land.**"""
+    between = a_fit(share=0.1500, null=a_null(median=0.1432, at_quantile=0.1810))
+    assert between.share > between.null.median, "the case has to be above the median or it proves nothing"
+    assert between.share < between.null.at_quantile, "and below the declared quantile"
+    assert between.rules_out_the_null() is False
+
+
+def test_the_share_is_only_reachable_as_a_property_of_the_fit():
+    """There is deliberately no `about_the_model`. One knob moved this figure from rank 2 to rank 75 on identical data."""
+    assert a_fit().about_this_fit() == pytest.approx(0.1311)
+    assert not hasattr(qt.Fit, "about_the_model")
+
+
+def test_two_ridges_are_not_comparable_because_the_knob_moved_rank_2_to_rank_75():
+    with pytest.raises(qt.Inadmissible, match="the difference between them is the knob"):
+        qt.comparable_fits(a_fit(ridge=20.0), a_fit(share=0.0556, rank=4, ridge=100.0))
+
+
+def test_two_geometries_are_not_comparable_because_the_norm_decides_which_directions_are_large():
+    with pytest.raises(qt.Inadmissible, match="difference between the spaces"):
+        qt.comparable_fits(a_fit(), a_fit(share=0.0049, rank=28, geometry="norm_scaled",
+                                         null=a_null(median=0.0133, at_quantile=0.0200)))
+
+
+def test_two_layers_are_a_different_question_and_have_to_say_so():
+    with pytest.raises(qt.Inadmissible, match="across depth"):
+        qt.comparable_fits(a_fit(), a_fit(layer=36, null=a_null(median=0.0310, at_quantile=0.0480)))
+
+
+def test_a_share_measured_in_the_fitting_sample_cannot_be_tested_against_a_null():
+    """The direction is being scored against the covariance it was chosen to exploit. This was the first control run in
+    the study and it is the one the adversarial round replaced."""
+    with pytest.raises(qt.Inadmissible, match="chosen to exploit"):
+        a_fit(measured_against="fitting_sample").rules_out_the_null()
+
+
+def test_a_fit_with_no_null_cannot_rule_one_out():
+    """Landing in the low-variance tail is the solver's default, so a low-variance finding was never evidence alone."""
+    with pytest.raises(qt.Inadmissible, match="solver's default"):
+        a_fit(permutation="none", null=None).rules_out_the_null()
+
+
+def test_a_scheme_and_a_null_travel_together_or_neither_does():
+    with pytest.raises(qt.Inadmissible, match="held fixed"):
+        a_fit(permutation="none")
+    with pytest.raises(qt.Inadmissible, match="held fixed"):
+        a_fit(null=None)
+
+
+def test_a_void_row_refuses_to_report_a_share_at_all():
+    """A diverged solve produces a share and a rank like any other, and nothing in the numbers says so."""
+    void = a_fit(share=0.2424, ridge=0.5, permutation="none", null=None,
+                 void_because="the solve diverged numerically; dev AUC read 0.5549")
+    assert void.is_void is True
+    with pytest.raises(qt.Inadmissible, match="how a void row gets"):
+        void.about_this_fit()
+    with pytest.raises(qt.Inadmissible, match="carries no evidence"):
+        qt.comparable_fits(a_fit(), void)
+
+
+def test_the_closed_vocabularies_are_what_the_measurement_needed():
+    assert qt.GEOMETRIES == ("raw_residual", "norm_scaled")
+    assert qt.VARIANCE_REFERENCES == ("fitting_sample", "held_out_covariance")
+    assert qt.PERMUTATION_SCHEMES == ("none", "unrestricted", "within_category")
+    for bad, field in (("post_norm", "geometry"), ("train", "measured_against"), ("shuffled", "permutation")):
+        with pytest.raises(qt.Inadmissible, match="not one of"):
+            a_fit(**{field: bad})
+
+
+def test_an_unregularised_fit_is_a_different_estimator_rather_than_the_zero_end_of_this_one():
+    with pytest.raises(qt.Inadmissible, match="different estimator"):
+        a_fit(ridge=0.0)
+
+
+def test_both_modules_refusals_share_one_base_so_a_caller_need_not_guess_which_raised():
+    """Two exception classes with one name and no common base made every `except` a guess, and a door written against
+    one of them exited 1 where it meant 2."""
+    from tierbook import judge as jd
+    from tierbook.evidence import EvidenceError
+    assert issubclass(qt.Inadmissible, EvidenceError)
+    assert issubclass(jd.Inadmissible, EvidenceError)

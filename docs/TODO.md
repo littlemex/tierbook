@@ -163,11 +163,11 @@ no single rare token existed in a 248,320-entry vocabulary. The code states the 
 **Done when.** The request is filed upstream with the three asks already named: an outcome observer, per-step scheduled
 token counts, and a field on the response for an action.
 
-### T7 -- The remaining shape the ledger names three times
+### T7 -- DONE (F137). A fitted quantity carries its knob and its geometry
 
-`F16` asks a fitted quantity to carry its hyper-parameters and the geometry it was computed in. `F22` asks a recorded
-effect to say whether it is one setting or a sweep, with the control's value beside it. The second is largely
-discharged by `OperatingPoint` (`fixed` against `integrated`) and `Baseline`; the first is not built.
+`quantity.Fit` with `GEOMETRIES`, `VARIANCE_REFERENCES`, `PERMUTATION_SCHEMES`, a `criterion.Null` rather than a bare
+median, `void_because`, and `comparable_fits` refusing a difference in ridge, geometry or layer. There is no accessor
+that makes the share a property of the model. Caller: `tierbook admit-fit`.
 
 ### T8 -- DONE (F134), and the premise was wrong
 

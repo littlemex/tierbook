@@ -6436,6 +6436,66 @@ feature would have and it is the only thing that found any of these.
 
 Python 37 tests, TypeScript 29, five golden identities reproduced by both. Suite here: **1,781 passing, 3 skipped.**
 
+## F137 — A fitted quantity now carries the knob and the space it was computed in
+
+Closes T7, which is the last item F16 named and nobody had built. `quantity.Fit` carries the ridge, the geometry, what
+the variance was measured against, the layer, and the null -- and there is **deliberately no accessor that makes the
+share a property of the model.**
+
+The measurement it exists for, from F16: same data, same labels, same layer, **only the ridge changing**.
+
+| ridge | raw: share / rank | norm-scaled: share / rank |
+|---|---|---|
+| 0.5 | 0.2424 / 2 | 0.2351 / 2 |
+| 20 | 0.1438 / 2 | 0.0042 / 28 |
+| 100 | 0.0556 / 4 | 0.0014 / **75** |
+
+**Rank 2 to rank 75 by turning one knob** while held-out AUC barely moved. So `comparable_fits` refuses two fits that
+differ in ridge, in geometry or in layer, and `about_this_fit()` is the only way to reach the number.
+
+`GEOMETRIES` is closed because the norm weights **rescale every coordinate and therefore change which directions are
+large** -- the figure that opened this study was measured after them, and in the raw stream the same direction is 2nd.
+`VARIANCE_REFERENCES` is closed because a share measured in the fitting sample scores a direction against the covariance
+it was chosen to exploit. `PERMUTATION_SCHEMES` is closed because unrestricted permutation lets a direction that only
+predicts the item's **category** earn credit.
+
+`void_because` exists because the sweep's two smallest ridges diverged numerically and read AUC 0.5549. A void row
+produces a share and a rank like any other, and **nothing in the numbers says so** -- so asking for its share raises, and
+the void check runs **first** in `comparable_fits`: refusing a void row for its ridge tells a caller how to fix a
+comparison that can never be made.
+
+Verified against the ledger's own verdicts: raw L28 (share 0.1311, one-sided p 0.225) comes out **not** distinguishable,
+and raw L36 (0.0623, above all 200 nulls) comes out distinguishable. Production caller `tierbook admit-fit`.
+
+### The first version of this was wrong in the way one module over had already been fixed
+
+`Fit` initially carried a bare `null_median` and `rules_out_the_null` compared against it. **Above the median is a coin
+flip** -- half of all no-signal directions land there -- and that is the exact defect `criterion.Null` was built for
+("the null is a distribution, not a scalar"). So `Fit` now carries a `criterion.Null` rather than a float, which is the
+same defect closed as a **kind** rather than twice as instances.
+
+### The mutation that survived, and the shape of the gap
+
+Ten mutations, nine caught. The one that passed was **swapping the declared quantile for the median** -- the single most
+important invariant here. The reason is worth keeping: the two test cases sat **below both** and **above both**, so
+neither exercised the region where the median and the tail disagree. The test now uses share 0.1500 against median
+0.1432 and quantile 0.1810 and asserts it is *in* that region before asserting the verdict.
+
+**A note on how the count in this entry was got wrong twice.** Both times the number was written from a run taken *before* the last test was added. The fix is mechanical -- measure last, immediately before writing -- and it is recorded here rather than in a commit message because F136 shipped with the same error and needed its own correction commit.
+
+**This is the second time the same test-shape error has appeared** -- the other was an attribute-rejection test that
+rejected a *late* key, so an implementation stopping at the first refusal lost nothing and passed. The general form: **a
+test has to sit where the two candidate behaviours differ**, and "it passes" says nothing until it does.
+
+### A defect found by writing the door
+
+`judge.Inadmissible` and `quantity.Inadmissible` were **unrelated classes sharing a name**, so `except jd.Inadmissible`
+silently missed every refusal `quantity` raised -- and the new door exited 1 where it meant 2. `judge.Inadmissible` now
+derives from `EvidenceError` like the rest, so **`except EvidenceError` is always right** and a caller need not guess
+which module refused. Four call sites named the judge class and all still work.
+
+Suite: **1,795 passing, 3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.
