@@ -285,6 +285,20 @@ class Policy:
     #: from what a rule happens to name cannot end that.
     candidates: tuple = ()
 
+    def __post_init__(self) -> None:
+        # A `rules` entry that is not a `Rule` is refused here rather than watched for, because every property on this
+        # class reads `r.guards` and a bare `Guard` in this tuple breaks all of them -- `overlaps`, `can_ever_fire`,
+        # `gaps`, `guarded_candidates`, `in_domain`. One of them, `undeclared_vars`, was written to match that broken
+        # shape instead (`r.var`), so it worked on the malformed object and raised on every real policy; the first caller
+        # outside this repository's own tests is what found it. Adding a check to that one property would leave the same
+        # trap set for the next one, so the malformed object stops being constructible at all.
+        for i, r in enumerate(self.rules):
+            if not isinstance(r, Rule):
+                raise TypeError(
+                    f"rules[{i}] is a {type(r).__name__}, not a Rule. A rule is a CONJUNCTION of guards and every "
+                    f"reader here walks `rule.guards`; a bare Guard in this position makes each of them either raise or "
+                    f"silently answer about an object with no guards. Wrap it: Rule((guard,), (candidate,), because)")
+
     @property
     def vocabulary(self) -> tuple[str, ...]:
         """The state variables this policy's guards may read. Falls back to the defaults when none was declared."""
@@ -305,7 +319,9 @@ class Policy:
         at request time is worse than refusing to compile it. What changed is only **who decides which names exist.**
         """
         known = set(self.vocabulary)
-        return sorted({var_name(r.var) for r in self.rules if var_name(r.var) not in known})
+        # Over the GUARDS, because a rule is a conjunction of them. `__post_init__` is what keeps this honest now: the
+        # object this used to be written against cannot be built.
+        return sorted({var_name(g.var) for r in self.rules for g in r.guards if var_name(g.var) not in known})
 
     @property
     def overlaps(self) -> list[str]:
