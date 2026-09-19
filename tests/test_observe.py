@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from tierbook import observe as ob  # noqa: E402
-from tierbook.decide import STATE_VARS  # noqa: E402
+from tierbook.decide import DEFAULT_STATE_VARS  # noqa: E402
 
 MODEL = "Qwen/Qwen3.6-35B-A3B"
 
@@ -139,7 +139,9 @@ def test_a_complete_observation_carries_every_state_variable():
     got = ob.observe(metrics_url="http://x/metrics", model_name=MODEL, gateway_authorised=True,
                      measured_on="2026-09-01", now=4600.0, previous=first.as_dict()["readings"],
                      fetcher=lambda url, timeout=5.0: later)
-    assert set(got.state) == set(STATE_VARS), set(STATE_VARS) - set(got.state)
+    # The DEFAULT vocabulary, because this is a test of what THIS COLLECTOR scrapes from an engine. What a policy
+    # may read is the policy's declaration, and `expected_for` is the accessor for that.
+    assert set(got.state) == set(DEFAULT_STATE_VARS), set(DEFAULT_STATE_VARS) - set(got.state)
     assert got.complete is True and got.not_observed == {}
     assert got.state["inflight"] == 5.0
     assert got.state["arrival_rate_per_hour"] == pytest.approx(60.0)

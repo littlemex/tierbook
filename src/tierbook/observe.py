@@ -37,7 +37,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
-from .decide import STATE_VARS
+from .decide import DEFAULT_PER_CANDIDATE, DEFAULT_STATE_VARS
 
 #: A Prometheus sample line: `name{label="v",...} 1.0`. Written here rather than pulled in as a dependency because
 #: the three metrics this reads are a fixed, small set and a parser for them is six lines.
@@ -56,9 +56,14 @@ WAITING = "vllm:num_requests_waiting"
 #: A monotonic counter of finished requests, which is what an arrival rate is differenced from.
 FINISHED = "vllm:request_success_total"
 
-#: Which state variables belong to a candidate rather than to the family. `decide`'s guards read these qualified --
-#: `inflight:box` -- because one number called `inflight` cannot describe two candidates.
-PER_CANDIDATE = frozenset({"inflight", "available"})
+#: Which of the DEFAULT variables belong to a candidate rather than to the family. `decide`'s guards read these
+#: qualified -- `inflight:box` -- because one number called `inflight` cannot describe two candidates.
+#:
+#: A default rather than a rule: whether a variable is about one candidate or about the whole arrangement is a property of
+#: the variable a caller declares, and `Policy.per_candidate_vars` is where a policy says so. This module collects the
+#: variables it knows how to scrape from an engine; a caller declaring `price_per_mtok` or `hour_of_day` supplies those
+#: itself, and `Observation.expected` is told the vocabulary rather than assuming one.
+PER_CANDIDATE = frozenset(DEFAULT_PER_CANDIDATE)
 
 
 class NotObserved(Exception):
@@ -110,17 +115,32 @@ class Observation:
             return None
         return round(self.freshest - self.stalest, 3)
 
+    def expected_for(self, vocabulary, per_candidate=None) -> set:
+        """The state keys a complete observation carries **for a given vocabulary**, qualified the way `decide` reads them.
+
+        Takes the vocabulary rather than reading a module constant, because which facts a policy conditions on is the
+        policy's to declare. Pass `Policy.vocabulary` and `Policy.per_candidate_vars`.
+        """
+        per = set(PER_CANDIDATE if per_candidate is None else per_candidate)
+        return {f"{var}:{self.candidate}" if self.candidate and var in per else var for var in vocabulary}
+
     @property
     def expected(self) -> set:
-        """The state keys a complete observation carries, qualified the way `decide` reads them."""
-        out = set()
-        for var in STATE_VARS:
-            out.add(f"{var}:{self.candidate}" if self.candidate and var in PER_CANDIDATE else var)
-        return out
+        """The keys a complete observation carries for the DEFAULT vocabulary.
+
+        Kept because this module scrapes exactly those variables from an engine, so "did I collect what I know how to
+        collect" is a question about this collector. It is not a statement about what a policy may read -- use
+        `expected_for` with the policy's own vocabulary for that.
+        """
+        return self.expected_for(DEFAULT_STATE_VARS)
 
     @property
     def complete(self) -> bool:
         return not self.not_observed and self.state.keys() >= self.expected
+
+    def complete_for(self, vocabulary, per_candidate=None) -> bool:
+        """Whether this observation carries everything a given policy's guards read."""
+        return not self.not_observed and self.state.keys() >= self.expected_for(vocabulary, per_candidate)
 
     def as_dict(self) -> dict:
         return {

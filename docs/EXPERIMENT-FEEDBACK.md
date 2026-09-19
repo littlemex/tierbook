@@ -6637,6 +6637,45 @@ name.
 Five mutations, all caught, **including re-adding the list**: a test asserts `ESCALATION_SUBJECTS` exists on neither
 module, because re-adding it is exactly how this regresses. Suite: **1,841 passing, 3 skipped.**
 
+## F141 — The state vocabulary moves from the module to the policy
+
+The second instance of F140's violation, found by sweeping **all 60 closed vocabularies** in the package and asking of
+each whether it enumerates *what a thing is* or *which things are worth using*.
+
+`decide.STATE_VARS` named five variables a guard was allowed to read: `inflight`, `available`,
+`metered_authorised`, `arrival_rate_per_hour`, `evidence_age_days`. `Rule.__post_init__` refused anything else.
+
+**The governing document names price revisions, rate limits, degradation, request shape, floors, SLOs, quotas and time
+of day as things this same mechanism must handle -- and not one of them was in that tuple.** A study conditioning on
+`price_per_mtok` or `hour_of_day` could not write a guard at all. The mechanism had decided which facts a policy may
+condition on, which is the opposite of a meta mechanism.
+
+### What moved, and the guarantee that survived
+
+`Policy` gained `state_vars` and `per_candidate`. A rule now validates its **shape** -- a non-empty name, at most one
+candidate qualifier, a comparison this evaluates -- and `Policy.undeclared_vars()` reports rules reading a name the
+policy never declared.
+
+**The guarantee is unchanged and only its owner moved**: a guard cannot read a fact nobody supplies, because
+discovering that at request time is worse than refusing to compile it. What changed is **who decides which facts
+exist**.
+
+`DEFAULT_STATE_VARS` keeps the five, as a default a caller may use rather than a gate, and an empty declaration falls
+back to it -- so every existing caller works and the default is visibly a default. `observe.Observation` gained
+`expected_for(vocabulary)` and `complete_for(...)`; its `expected` property stays and now means "what **this
+collector** scrapes from an engine", which is a question about the collector rather than a statement about what a
+policy may read.
+
+### The sweep's other candidates, recorded so they are judged rather than forgotten
+
+`judge.DIGEST_SUBJECTS` and `judge.REFUSED_KEYS` name what a digest can be **of**, and the refusal there is
+structural: a shape and a name genuinely cannot identify a model, and two models agreeing on every declarable field
+had probe amplitudes a factor of four apart. `quantity.GEOMETRIES` is the one still worth arguing about --
+`raw_residual` and `norm_scaled` are this architecture's two spaces, and another architecture has others. It is left
+for now and named here so the next reader does not have to rediscover it.
+
+Five mutations, all caught, **including re-adding the module-level gate**. Suite: **1,845 passing, 3 skipped.**
+
 ## Not requirements, deliberately
 
 Kept here so they are not re-proposed as work.

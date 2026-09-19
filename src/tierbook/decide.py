@@ -54,13 +54,27 @@ if TYPE_CHECKING:
 #: than one reserved candidate, and a single global counter guarded by a per-candidate threshold is a category
 #: error the moment two of them exist -- or the moment two families share one box, since the threshold comes
 #: from a per-family service curve.
-STATE_VARS = (
+#: **A DEFAULT, not a gate.** These five are the variables this project happened to need, offered so a caller with the
+#: same needs does not retype them. A `Rule` is **not** validated against this list.
+#:
+#: It used to be, and that was a violation of the rule at the top of `__init__.py`: the mechanism decided which facts a
+#: policy was allowed to condition on. The governing document names price revisions, rate limits, degradation, request
+#: shape, floors, SLOs, quotas and time of day as things this same mechanism must handle -- **and not one of them is in
+#: this tuple.** A study needing `price_per_mtok` or `hour_of_day` could not write a guard at all.
+#:
+#: What the mechanism enforces instead is that a guard reads a variable **its own policy declares**, so a rule cannot
+#: read a fact nobody supplies. The vocabulary is per policy and the contents are the caller's.
+DEFAULT_STATE_VARS = (
     "inflight",                 # concurrent requests already on a named candidate
     "available",                # whether a named candidate is serving at all
     "metered_authorised",       # whether the gateway will still authorise spend on metered candidates
     "arrival_rate_per_hour",    # observed arrivals for this family
     "evidence_age_days",        # how old the measurements behind this policy are
 )
+
+#: Which of the defaults are read per candidate rather than globally. Also a default, for the same reason: whether a
+#: variable is about one candidate or about the whole arrangement is a property of the variable a caller declares.
+DEFAULT_PER_CANDIDATE = ("inflight", "available")
 
 
 def var_name(spec: str) -> str:
@@ -149,9 +163,15 @@ class Guard:
     derived_from: str              # the measurement, or the probe that would supply it
 
     def __post_init__(self):
-        if var_name(self.var) not in STATE_VARS:
-            raise ValueError(f"{self.var!r} does not name a state variable this evaluates; one of {STATE_VARS}, "
-                             "optionally qualified as <var>:<candidate>")
+        # SHAPE only. Which names are meaningful belongs to the policy that declares them, and `Policy` checks that a
+        # rule reads one its own vocabulary carries -- so a guard still cannot read a fact nobody supplies, without this
+        # module deciding what facts exist.
+        if not var_name(self.var).strip():
+            raise ValueError(f"{self.var!r} names no state variable; the form is <var> for a global fact or "
+                             f"<var>:<candidate> for one about a named candidate")
+        if self.var.count(":") > 1:
+            raise ValueError(f"{self.var!r} has more than one candidate qualifier, so nothing says which candidate the "
+                             f"guard is about")
         if self.op not in ("<", "<=", "==", ">=", ">"):
             raise ValueError(f"{self.op!r} is not a comparison this evaluates")
 
@@ -223,6 +243,13 @@ class Policy:
     family: str
     rules: tuple[Rule, ...]
     default: tuple[str, ...]
+    #: The state variables this policy's guards may read, and which of them are per candidate. **Declared here rather
+    #: than fixed in the module**, so a study conditioning on a price revision, a quota or an hour of the day can write a
+    #: guard -- all three are named in the governing document as this mechanism's business, and none was in the old
+    #: module-level list. Empty falls back to `DEFAULT_STATE_VARS`, which keeps every existing caller working while making
+    #: the default visibly a default.
+    state_vars: tuple[str, ...] = ()
+    per_candidate: tuple[str, ...] = ()
     domain: dict = field(default_factory=dict)
     #: CONTRACT C1: named `validated`, not `certified` -- this is the non-inferiority validation status (a held-out
     #: fold supported this assignment against the reference), never SCOPE section 2 admissibility. Before this
@@ -257,6 +284,28 @@ class Policy:
     #: set entirely -- invisible to exploration, never labelled, its evidence never refreshed -- and a set built
     #: from what a rule happens to name cannot end that.
     candidates: tuple = ()
+
+    @property
+    def vocabulary(self) -> tuple[str, ...]:
+        """The state variables this policy's guards may read. Falls back to the defaults when none was declared."""
+        return self.state_vars or DEFAULT_STATE_VARS
+
+    @property
+    def per_candidate_vars(self) -> tuple[str, ...]:
+        """Which of this policy's variables are read per candidate."""
+        if self.per_candidate:
+            return self.per_candidate
+        return tuple(v for v in DEFAULT_PER_CANDIDATE if v in self.vocabulary)
+
+    def undeclared_vars(self) -> list[str]:
+        """Variables this policy's rules read and its vocabulary does not carry.
+
+        The guarantee that survived moving the vocabulary out of the module: a guard cannot read a fact nobody supplies,
+        because a rule reading a name the policy never declared has nothing to be evaluated against and discovering that
+        at request time is worse than refusing to compile it. What changed is only **who decides which names exist.**
+        """
+        known = set(self.vocabulary)
+        return sorted({var_name(r.var) for r in self.rules if var_name(r.var) not in known})
 
     @property
     def overlaps(self) -> list[str]:
