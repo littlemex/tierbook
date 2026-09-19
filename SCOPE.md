@@ -10,6 +10,29 @@ instead the work drifted into a protocol repository, its second implementation, 
 real and none of it was asked for **at that moment**. Drift of that shape does not announce itself — every step was
 defensible on its own, and the sum was a different project.
 
+### The constraint that governs every item below
+
+**tierbook is a META mechanism. Logic is INJECTED into it and is never built into it.**
+
+What that forbids, concretely: a closed vocabulary that encodes *which* signals are worth using, a threshold that
+came out of one corpus, a refusal derived from a finding rather than from the record in front of it. If a study
+measured that some signal does not help, that is a **measurement to be recorded** -- not a list the mechanism
+refuses against, because the next corpus may measure the opposite and must be able to say so.
+
+**What every experiment in this repository was for.** Not to produce the routing rules. To find out **what kinds of
+thing a general mechanism has to be able to hold** -- which conditions have to be recordable, which refusals are
+structural rather than empirical, which fields a claim needs before it can be checked. The findings are the input to
+that question and never the answer shipped as code.
+
+**The test.** For anything in `src/`, ask: could a different study, on a different corpus, with a different
+conclusion, express its own answer through this? If the mechanism has already decided, it is wrong, however well
+the decision is supported here.
+
+This has had to be said more than once, and each time the violation looked like good engineering: a vocabulary
+naming the two subjects a gate may read, a hardcoded escalation-subject list, an admissibility rule that refused a
+topic signal a priori. Every one was supported by a real measurement here and every one made a different study's
+answer unrepresentable.
+
 ### The order, in sequence. Nothing later starts before everything earlier is done.
 
 1. **Finish the measuring framework.** Cost, accuracy **and performance**. Performance is the thin one: latency has a

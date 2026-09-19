@@ -1,5 +1,15 @@
 # What the experiments have asked of the implementation
 
+> **What this file is for, and what it is not.** Every entry below is a measurement, and **a measurement is an input
+> to the question "what must a general mechanism be able to hold", never an answer shipped as code.** tierbook is a
+> META mechanism: logic is injected into it and is never built into it. So a finding here becomes a **recordable
+> field, a shape a claim must have, or a structural refusal** -- and never a closed list of which signals are worth
+> using or a threshold taken from this corpus. The next corpus may measure the opposite and has to be able to say so.
+>
+> Violations of this have all looked like good engineering. Read an entry asking *which of those three it became*; if
+> the answer is "a rule that decided for the caller", the entry was applied wrongly.
+
+
 This file exists because of a policy change made on 2026-09-12, after v0.3.0 shipped: **the mechanism is no
 longer built ahead of the research.** The optimisation study is the subject, and the implementation changes only
 when an experiment has been held up by something the implementation does or does not record.
@@ -6583,6 +6593,49 @@ instead of before. Suite: **1,836 passing, 3 skipped.**
 pipeline. Both were fixed by checking the exit code of the thing being tested. The general form is the same defect this
 ledger records elsewhere -- **a check that cannot fail is not a check** -- and it is worth noting that it appeared in the
 verification rather than in the code twice.
+
+## F140 — `ESCALATION_SUBJECTS` is removed: the mechanism was deciding which signals are worth using
+
+**A violation of the rule this file now opens with, found by being told three times.** `evidence.py` carried
+`ESCALATION_SUBJECTS = ("own_competence", "item_difficulty")` and `quantity.py` returned `subject in
+ESCALATION_SUBJECTS`. `quorum.evaluate_signal` refused every other subject outright.
+
+It was **supported by a real measurement here** -- the same readout named an item's field at 0.7593 against a chance of
+0.1429 and predicted its own error at 0.4227, below what a coin gets -- and it was **still wrong**: a study measuring
+topic to predict competence **had no way to say so**, and the refusal was derived from one corpus rather than from the
+record it was refusing.
+
+### What replaced it, and the second attempt that was also wrong
+
+`Performance` gained `predicts` -- **free text, not a closed vocabulary**, because deciding which targets are legitimate
+is the study's job. `Quantity.shown_to_predict(target)` reads whether *this record* shows the signal beat a declared
+baseline against *that* target, and `why_not_shown_to_predict` distinguishes the four ways it can fail to: no
+performance at all, a performance that does not say what it predicts, a performance against a **different** target, and
+a performance that beat nothing.
+
+**The first replacement was also a violation** and is worth recording. `admissible_for_a_gate` was changed to require
+measured evidence against a caller-supplied target -- better, and still a policy: **exploring an unmeasured signal is a
+legitimate thing to do, and this package has a module for it.** So the filter is gone entirely. What remains is three
+filters that are properties of the record and hold whatever anybody studies: wrong model, wrong elicitation, not
+readable before the cost the gate exists to avoid.
+
+`quorum.evaluate_signal` still requires a signal to **name** what it is about -- that refusal survives, because a policy
+built on one thing and reported as built on another is a different defect -- and no longer judges which name is worth
+having.
+
+### What it cost, which is the evidence the change is real
+
+**Twenty tests failed**, and two of them asserted the removed rule directly. Those two are the strongest evidence
+available that this was a behaviour change rather than a tidy-up, and they were rewritten deliberately rather than
+adapted: `test_a_signal_policy_cannot_be_built_from_a_topic_signal` became `test_a_signal_has_to_say_what_it_is_about`,
+and the parametrised "both escalation subjects are admitted" became **all four subjects admitted**.
+
+A CLI door printed `not usable: field_name` for a topic signal, putting the same hardcoded judgement in an operator's
+face. Its test now turns on a record property -- a quantity readable only after generation -- rather than on a subject's
+name.
+
+Five mutations, all caught, **including re-adding the list**: a test asserts `ESCALATION_SUBJECTS` exists on neither
+module, because re-adding it is exactly how this regresses. Suite: **1,841 passing, 3 skipped.**
 
 ## Not requirements, deliberately
 

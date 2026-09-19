@@ -1,5 +1,16 @@
 """A quantity a policy may condition on, with its price, its availability, where it came from and when it is valid.
 
+**META MECHANISM RULE, and this module is where it was broken.** Logic is injected; it is never built in. This module
+carried an `ESCALATION_SUBJECTS` list naming the two subjects a gate was allowed to read, and a predicate returning
+`subject in ESCALATION_SUBJECTS`. That put a measurement inside the mechanism: a topic signal was refused **a
+priori**, so a study measuring topic to predict competence had no way to say so, and the refusal was derived from one
+corpus rather than from the record it was refusing. It is gone -- what replaced it reads the evidence the record
+carries and asks the caller which target it cares about.
+
+Vocabularies here name **what a thing is** (`SUBJECTS`, `VALUE_KINDS`, `AVAILABILITY`) and never **which things are
+worth using**. The difference is the whole design: the first is description a caller has to supply, the second is a
+decision the caller came here to make.
+
 Five rounds of internal-readout work ended with a review saying the mechanism should hold **no readout-specific feature
 at all**, and instead make a measurable quantity a thing with properties, so an internal readout is admissible without
 being privileged. Entropy, a hidden-state probe, a price and a queue length are then the same kind of thing, and the
@@ -26,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tierbook.evidence import (ESCALATION_SUBJECTS, SUBJECTS, Elicitation,  # noqa: F401
+from tierbook.evidence import (SUBJECTS, Elicitation,  # noqa: F401
                               EvidenceError)
 from tierbook.criterion import Null
 from tierbook.judge import WeightDigest
@@ -261,14 +272,44 @@ class Quantity:
         """Whether obtaining this costs nothing beyond what the request pays anyway."""
         return self.price.extra_passes == 0
 
-    def answers_an_escalation_question(self) -> bool:
-        """Whether this is about something an escalation decision turns on.
+    def shown_to_predict(self, target: str) -> bool:
+        """Whether THIS RECORD shows the signal predicts `target` better than a declared baseline.
 
-        A gate asks "should this go somewhere better", and only competence or difficulty speaks to that. A topic signal
-        answers a different question -- and answers it well, at five times chance -- while saying nothing about
-        competence, so admitting it here would route by subject while reporting that it routes by difficulty.
+        **Read off the record rather than decided here, and that is the correction.** The previous version returned
+        `self.subject in ESCALATION_SUBJECTS` -- a closed list naming the two subjects one corpus found useful. That put a
+        measurement inside the mechanism: a topic signal was refused a priori, so a study measuring topic to predict
+        competence had no way to say so, and the refusal was not derived from anything in the record it was refusing.
+
+        What the mechanism can hold a caller to is the shape of the evidence: a performance curve, the target it was
+        measured against, and a baseline it beat. What it must not do is decide which targets are worth predicting.
+
+        An absent performance answers False for every target. That is "the record does not claim this", not "the signal
+        is useless", and `why_not_shown_to_predict` says which of the two.
         """
-        return self.subject in ESCALATION_SUBJECTS
+        if self.performance is None or not self.performance.predicts:
+            return False
+        if self.performance.predicts != target:
+            return False
+        best = max((point[1] for point in self.performance.curve), default=None)
+        if best is None:
+            return False
+        return any(best > baseline.value for baseline in self.performance.baselines)
+
+    def why_not_shown_to_predict(self, target: str) -> str:
+        """One sentence naming what is missing between this record and a claim that it predicts `target`."""
+        if self.shown_to_predict(target):
+            return f"{self.name} was measured against {target!r} and beat a declared baseline"
+        if self.performance is None:
+            return (f"{self.name} carries no measured performance, so nothing here says whether it predicts {target!r}. "
+                    f"That is an absence of evidence rather than evidence of absence")
+        if not self.performance.predicts:
+            return (f"{self.name} carries a performance curve that does not say what it was measured to predict, so it "
+                    f"cannot be read against {target!r} or against anything else")
+        if self.performance.predicts != target:
+            return (f"{self.name} was measured against {self.performance.predicts!r} and is being asked about "
+                    f"{target!r}. A signal that predicts one thing is not evidence about another")
+        return (f"{self.name} was measured against {target!r} and did not beat any of its declared baselines "
+                f"{[b.kind for b in self.performance.baselines]}")
 
     def usable_before_generating(self) -> bool:
         """Whether a decision about *whether to generate* can condition on this.
@@ -338,6 +379,14 @@ class Performance:
 
     curve: tuple[tuple[float, float], ...]
     baselines: tuple[Baseline, ...]
+    #: What this signal was measured to predict. **Free text, and deliberately not a closed vocabulary** -- deciding
+    #: which targets are legitimate is the study's job and not this package's. An earlier version of this module had a
+    #: closed `ESCALATION_SUBJECTS` and refused a topic signal outright on the strength of one corpus, which made a
+    #: finding unrepresentable rather than recordable: a study where topic does predict competence could not say so.
+    #:
+    #: Empty means nobody said, and then `shown_to_predict` answers False for every target -- not because the signal is
+    #: useless but because the record does not claim anything.
+    predicts: str = ""
 
     def __post_init__(self) -> None:
         if len(self.curve) < 2:
@@ -705,19 +754,26 @@ class StratifiedPerformance:
 
 def admissible_for_a_gate(quantities: list[Quantity], *, elicitation: Elicitation,
                           served: WeightDigest) -> list[Quantity]:
-    """Which of these a pre-generation gate may condition on, and nothing else.
+    """Which of these a pre-generation gate CAN condition on, as a matter of what the records are about.
 
-    Four filters, and each rejects for a different reason a caller would otherwise have to check by hand: the model
-    served is not the one it was measured on; the prompt condition differs, so the number is about different items; it
-    is not available until after the cost the gate exists to avoid has been paid; or it is about the wrong thing -- a
-    topic signal reads at five times chance and says nothing about competence, so admitting it would route by subject
-    while reporting that it routes by difficulty.
+    **Three filters, and all three hold whatever anybody is studying.** The model served is not the one it was measured
+    on, so the number is about a different object. The prompt condition differs, so it is about different items. It is
+    not available until after the cost the gate exists to avoid has been paid, so a gate cannot read it at all.
+
+    **What this function deliberately does NOT filter on is whether the signal is any good.** Two earlier versions did.
+    The first knew which subjects were permitted, from a list naming the two this corpus found useful, so a topic signal
+    was refused a priori and a study measuring topic to predict competence could not express it. The second asked for
+    measured evidence against a target -- better, and still wrong, because **exploring an unmeasured signal is a
+    legitimate thing to do** and this package has a module for it.
+
+    So the caller decides. `Quantity.shown_to_predict(target)` reports what a record shows and
+    `why_not_shown_to_predict` says what is missing; requiring it is a policy, and a policy belongs to whoever is
+    running the study.
 
     Returned as a list rather than raising, because "no quantity is admissible here" is an answer a caller acts on --
-    it means the gate has nothing to decide with, which is a finding rather than an error.
+    it means the gate has nothing to read, which is a finding rather than an error.
     """
     return [q for q in quantities
             if q.measured_on == served
             and q.elicitation.template_digest == elicitation.template_digest
-            and q.usable_before_generating()
-            and q.answers_an_escalation_question()]
+            and q.usable_before_generating()]

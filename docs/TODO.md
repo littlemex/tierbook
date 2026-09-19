@@ -1,5 +1,26 @@
 # What is not done, and what each item is blocked on
 
+**tierbook is a META mechanism. Logic is INJECTED into it and is never built into it.**
+
+What that forbids, concretely: a closed vocabulary that encodes *which* signals are worth using, a threshold that
+came out of one corpus, a refusal derived from a finding rather than from the record in front of it. If a study
+measured that some signal does not help, that is a **measurement to be recorded** -- not a list the mechanism
+refuses against, because the next corpus may measure the opposite and must be able to say so.
+
+**What every experiment in this repository was for.** Not to produce the routing rules. To find out **what kinds of
+thing a general mechanism has to be able to hold** -- which conditions have to be recordable, which refusals are
+structural rather than empirical, which fields a claim needs before it can be checked. The findings are the input to
+that question and never the answer shipped as code.
+
+**The test.** For anything in `src/`, ask: could a different study, on a different corpus, with a different
+conclusion, express its own answer through this? If the mechanism has already decided, it is wrong, however well
+the decision is supported here.
+
+**Applied to this list:** an item that reads "decide which signals a gate may use" is misphrased. The mechanism's
+job is to make a signal's evidence recordable and to refuse a claim the record cannot support. Which signals a
+particular study then uses is that study's.
+
+
 One place for work that is known and not started. An item here names what it is, why it matters, and **what would tell
 us it is finished** -- an entry that cannot say the last of those is a wish rather than a task.
 
