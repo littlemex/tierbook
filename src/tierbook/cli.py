@@ -20,6 +20,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook logs        what a log file can and cannot support as a benchmark
     tierbook observe     read the state a decision is conditioned on, and say what could not be read
     tierbook assign      route one request against a compiled policy and record the decision
+    tierbook admit-throughput  what a measured rate may support, and whether two rates may be compared
     tierbook admit-fit  whether a fitted direction's variance share may be quoted, and what it is about
     tierbook read-harness  read a request body: what it says about the harness, and what it cannot
     tierbook admit-traces  what two runs' tool traces license: refuse, unknown, or neither
@@ -64,6 +65,7 @@ from tierbook import harness as hn
 from tierbook import judge as jd
 from tierbook import quantity as qt
 from tierbook import spend as sp_mod
+from tierbook import throughput as tp
 from tierbook.policy import (assign_family, break_even_price, capacity_note, capacity_priority,
                              cutover_violation, evidence_class, load_registry, occupancy_at, registry_version,
                              reservation_verdict)
@@ -732,6 +734,47 @@ def _fields(spec: str, names: tuple[str, ...], *, option: str, sep: str = ":") -
 
 
 @_refuses
+def cmd_admit_throughput(args) -> int:
+    """What a measured rate is allowed to support, and whether two rates may be read against each other.
+
+    A door because every refusal behind it is a number this project published and took back. A rate measured against a
+    load generator that was itself the bottleneck understates the box -- one client against two moved the same
+    measurement from 425,879 to 584,739 an hour -- and a rate from a closed loop cannot support a service level at any
+    sample size, because a closed loop cannot form a queue.
+
+    Exit 2 when the rates are well formed and cannot support what is being asked of them.
+    """
+    def build(spec: str, option: str) -> tp.Throughput:
+        (per_hour, arrivals, concurrency, seats, deadline, goodput, understated, generator) = _fields(
+            spec, ("per_hour", "arrivals", "concurrency", "seats", "deadline_seconds", "goodput_per_hour",
+                   "understated_because", "generator"), option=option)
+        return tp.Throughput(
+            per_hour=float(per_hour), arrivals=arrivals,
+            offered=tp.Offered(concurrency=int(concurrency), seats=None if seats == "-" else int(seats),
+                               generator=generator),
+            deadline_seconds=None if deadline == "-" else float(deadline),
+            goodput_per_hour=None if goodput == "-" else float(goodput),
+            understated_because="" if understated == "-" else understated)
+
+    first = build(args.rate, "--rate")
+    print(f"rate: {first}")
+    if first.is_lower_bound:
+        print("this rate understates the box, so it bounds the capacity from below and does not measure it")
+    print(first.why_not_a_service_level())
+    if not args.against:
+        return 0 if first.supports_a_service_level_claim() else 2
+    second = build(args.against, "--against")
+    print(f"against: {second}")
+    try:
+        tp.comparable_load(first, second)
+    except EvidenceError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    print("comparable: same arrivals, same seat count and the same deadline, so the difference is the box")
+    return 0
+
+
+@_refuses
 def cmd_admit_fit(args) -> int:
     """Whether a fitted direction's variance share may be quoted, and what it is a property of.
 
@@ -1384,6 +1427,18 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("logs", parents=[common], help="what a log file can and cannot support")
     g.add_argument("path")
     g.set_defaults(fn=cmd_logs)
+
+    at2 = sub.add_parser("admit-throughput", parents=[common],
+                         help="what a measured rate may support, and whether two rates may be compared")
+    at2.add_argument("--rate", required=True,
+                     metavar="PER_HOUR:ARRIVALS:CONCURRENCY:SEATS:DEADLINE:GOODPUT:UNDERSTATED:GENERATOR",
+                     help=f"ARRIVALS is one of {list(tp.ARRIVALS)}; SEATS is the engine's admission limit or '-' when "
+                          f"nobody read it; DEADLINE and GOODPUT travel together or are both '-'; UNDERSTATED is one of "
+                          f"{list(tp.UNDERSTATED_BECAUSE)} or '-'")
+    at2.add_argument("--against", default="",
+                     metavar="PER_HOUR:ARRIVALS:CONCURRENCY:SEATS:DEADLINE:GOODPUT:UNDERSTATED:GENERATOR",
+                     help="a second rate. Refused unless the arrivals, the seat count and the deadline all match")
+    at2.set_defaults(fn=cmd_admit_throughput, registry=None)
 
     af = sub.add_parser("admit-fit", parents=[common],
                         help="whether a fitted direction's variance share may be quoted, and what it is about")
