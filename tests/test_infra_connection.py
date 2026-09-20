@@ -526,3 +526,23 @@ def test_a_side_marked_as_ours_actually_reaches_the_destroy(tmp_path):
     assert "nothing to destroy" not in got.stdout, "a resource marked as ours was skipped"
     assert got.returncode != 0, "a teardown that cannot find its working directory must fail loudly"
     assert "destroy it by hand" in got.stderr
+
+
+def test_the_image_is_pushed_before_the_service_that_pulls_it():
+    """Ordering, and it is not a style question: it decides whether a first run finishes at all.
+
+    An ECS service whose task cannot pull its image never reaches a steady state, so CloudFormation waits on it until
+    its own timeout -- about three hours -- with the reason visible only in the service's events. Deploying every stack
+    and then building the image therefore hangs on a FRESH deployment, and appears to work only when an earlier run left
+    an image behind. Measured on a first run: the service sat in CREATE_IN_PROGRESS while the registry held zero images.
+
+    Checked by position in the script because the alternative is a paid deployment per assertion.
+    """
+    body = SCRIPT.read_text()
+    fn = body[body.index("gateway_create() {"):body.index("gateway_build_image() {")]
+    ecr = fn.index("-ecr\" --require-approval never")
+    build = fn.index("gateway_build_image \"$dir\"")
+    deploy_all = fn.index("./scripts/deploy-all.sh")
+    assert ecr < build < deploy_all, (
+        "the order must be: registry stack, then the image, then the rest of the stacks. "
+        f"got registry at {ecr}, image at {build}, deploy-all at {deploy_all}")

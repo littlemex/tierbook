@@ -28,16 +28,22 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+
+# --- configuration -------------------------------------------------------------------------------------------------
+#
+# Read BEFORE anything derived from it. The first version computed the work directory two lines above this and then
+# sourced the file, so `TIERBOOK_WORK_DIR` set in config.env was silently ignored and a run wrote its state, its
+# checkouts and its connection file somewhere the operator had not asked for. Every value the config can set has to be
+# read before the first thing that reads it.
+
+[ -f "${TIERBOOK_INFRA_CONFIG:-$HERE/config.env}" ] && . "${TIERBOOK_INFRA_CONFIG:-$HERE/config.env}"
+
 WORK="${TIERBOOK_WORK_DIR:-$HOME/tmp/tierbook/infra}"
 STATE="$WORK/state.json"
 CONNECTION="${TIERBOOK_CONNECTION_FILE:-$WORK/connection.json}"
 # Overridable so the applier can be exercised against content a test controls. The applier is the part with three
 # branches and therefore the part worth testing; the real patches are checked separately for being valid diffs.
 PATCH_DIR="${TIERBOOK_PATCH_DIR:-$HERE/patches}"
-
-# --- configuration -------------------------------------------------------------------------------------------------
-
-[ -f "${TIERBOOK_INFRA_CONFIG:-$HERE/config.env}" ] && . "${TIERBOOK_INFRA_CONFIG:-$HERE/config.env}"
 
 AWS_PROFILE_ARG=()
 [ -n "${AWS_PROFILE:-}" ] && AWS_PROFILE_ARG=(--profile "$AWS_PROFILE")
@@ -151,7 +157,9 @@ cmd_doctor() {
     if command -v "$t" >/dev/null 2>&1; then info "found $t at $(command -v "$t")"
     else warn "MISSING $t -- needed only to CREATE (adopting an existing one does not need it)"; fi
   done
-  if command -v "$GATEWAY_CONTAINER_CLI" >/dev/null 2>&1; then
+  if [ -n "${TIERBOOK_IMAGE_BUILDER:-}" ]; then
+    info "a remote image builder is configured ($TIERBOOK_IMAGE_BUILDER), so no local container runtime is needed"
+  elif command -v "$GATEWAY_CONTAINER_CLI" >/dev/null 2>&1; then
     info "found container runtime $GATEWAY_CONTAINER_CLI"
   else
     warn "MISSING container runtime '$GATEWAY_CONTAINER_CLI' -- needed only to build the gateway image."
@@ -168,6 +176,15 @@ cmd_doctor() {
 
   step "configuration"
   [ -n "$GATEWAY_PREFIX" ] || warn "TIERBOOK_GATEWAY_PREFIX unset -- required unless TIERBOOK_GATEWAY=skip"
+  if [ -n "$GATEWAY_PREFIX" ] && [ "$GATEWAY_MODE" != existing ] && [ "$GATEWAY_MODE" != skip ]; then
+    local retained; retained="$(gateway_retained_here)"
+    if [ -n "$retained" ]; then
+      warn "the prefix '$GATEWAY_PREFIX' has been used before. A create would fail partway through on these, which are"
+      warn "  retained on purpose when the stacks are destroyed:"
+      printf '%s\n' "$retained" | while read -r line; do warn "  $line"; done
+      warn "  Use an unused prefix, or delete them deliberately."
+    fi
+  fi
   [ -n "$CLUSTER_NAME" ]   || warn "TIERBOOK_CLUSTER_NAME unset -- required unless TIERBOOK_CLUSTER=skip"
   [ -n "$API_MODEL" ]      || warn "TIERBOOK_API_MODEL unset -- the metered arm has no model id"
   if [ -z "$API_PRICE_PER_MTOK" ]; then
@@ -218,6 +235,37 @@ checkout_pinned() {  # checkout_pinned <dir> <repo> <ref> <name>
   printf '%s' "$at"
 }
 
+# **A gateway prefix is single-use.** Several of its resources are created with RemovalPolicy.RETAIN because they hold
+# data -- the registry's images, the DynamoDB tables, the bootstrap-admin secret -- so destroying the stacks leaves them
+# behind ON PURPOSE. A later `create` with the same prefix then fails partway through, once CloudFormation reaches the
+# first of them, with "already exists" and a CDK stack trace: eight minutes in, and after the image build.
+#
+# Listed and refused up front instead. Deleting them is the operator's decision and not this script's, because what
+# survives a teardown here is exactly the data somebody chose to keep.
+gateway_retained_here() {  # prints one line per retained resource found under this prefix
+  aws ecr describe-repositories "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --repository-names "${GATEWAY_PREFIX}-backend" --query 'repositories[0].repositoryName' --output text 2>/dev/null \
+    | grep -v '^None$' | sed 's/^/  ECR repository /' || true
+  aws dynamodb list-tables "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --query "TableNames[?starts_with(@, '${GATEWAY_PREFIX}-')]" --output text 2>/dev/null \
+    | tr '\t' '\n' | grep -v '^$' | sed 's/^/  DynamoDB table /' || true
+  aws secretsmanager describe-secret "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --secret-id "${GATEWAY_PREFIX}/bootstrap-admin-temp-password" --query 'Name' --output text 2>/dev/null \
+    | grep -v '^None$' | sed 's/^/  secret /' || true
+}
+
+gateway_refuse_reused_prefix() {
+  local found; found="$(gateway_retained_here)"
+  [ -n "$found" ] || return 0
+  refuse "the prefix '$GATEWAY_PREFIX' has been used before. These resources are retained when the gateway's stacks are
+  destroyed, because they hold data, and the deploy cannot be created over them:
+
+$found
+
+  Use a prefix nobody has used -- the safe move, and what this script would do if the choice were its to make -- or
+  delete the ones above deliberately. A retained table is somebody's ledger."
+}
+
 gateway_checkout() {
   local dir="$WORK/stratoclave"
   GATEWAY_AT="$(checkout_pinned "$dir" "$GATEWAY_REPO" "$GATEWAY_REF" gateway)"
@@ -239,22 +287,39 @@ gateway_create() {
   [ -n "$GATEWAY_ADMIN_EMAIL" ] || refuse "TIERBOOK_GATEWAY_ADMIN_EMAIL is required: the gateway seeds its first
   administrator from it and nothing else can issue the API key tierbook needs."
 
+  gateway_refuse_reused_prefix
+
   local dir; dir="$(gateway_checkout)"
 
   step "applying patches to the gateway checkout"
   apply_patches stratoclave "$dir"
 
-  # The admin email goes in as an ordinary deploy input. That only works because of the patch above -- without it the
-  # variable never reaches the container and this deploy would finish with no administrator and no error.
-  step "deploying the gateway stacks (prefix '$GATEWAY_PREFIX', 15-20 min, billable)"
+  # **The image has to exist before the ECS service does.** The service's task definition names a tag in the registry,
+  # and a service whose task cannot pull never reaches a steady state -- so CloudFormation waits on it until its own
+  # timeout, roughly three hours, with the real reason visible only in the service's events
+  # (`CannotPullContainerError ... not found`). Deploying everything and then building, which is the order the upstream
+  # installer uses, therefore hangs on a FRESH deployment; it only appears to work when a previous run left an image
+  # behind. Measured: a first run sat on `ECS::Service ... CREATE_IN_PROGRESS` while the registry held zero images.
+  #
+  # So the registry comes up on its own first, then the image, then everything else. The registry stack is a handful of
+  # resources and takes under a minute, and `deploy-all.sh` afterwards finds it already there.
+  step "deploying the registry alone, so the image can exist before the service that pulls it"
+  ( cd "$dir/iac" \
+    && AWS_PROFILE="${AWS_PROFILE:-}" STRATOCLAVE_PREFIX="$GATEWAY_PREFIX" STRATOCLAVE_REGION="$GATEWAY_REGION" \
+       CDK_DEFAULT_REGION="$GATEWAY_REGION" \
+       npx cdk deploy "${GATEWAY_PREFIX}-ecr" --require-approval never ) || die "the registry stack failed."
+
+  step "building and pushing the gateway image"
+  gateway_build_image "$dir"
+
+  # The admin email goes in as an ordinary deploy input, which works because the gateway now passes it through to the
+  # container itself. Before that fix landed upstream this deploy finished with no administrator and no error.
+  step "deploying the remaining gateway stacks (prefix '$GATEWAY_PREFIX', 15-20 min, billable)"
   ( cd "$dir/iac" \
     && AWS_PROFILE="${AWS_PROFILE:-}" STRATOCLAVE_PREFIX="$GATEWAY_PREFIX" STRATOCLAVE_REGION="$GATEWAY_REGION" \
        CDK_DEFAULT_REGION="$GATEWAY_REGION" ALLOW_ADMIN_CREATION=false \
        STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL="$GATEWAY_ADMIN_EMAIL" \
        ./scripts/deploy-all.sh ) || die "gateway deploy failed."
-
-  step "building and pushing the gateway image"
-  gateway_build_image "$dir"
 
   # The backend seeds the administrator on its first healthy start, which happens once the image is in place. Nothing to
   # do here but wait for the service to settle.
@@ -621,6 +686,29 @@ cmd_measure() {
     warn "  from a starved one, so the measurement will be recorded as a lower bound on that ground alone."
   fi
 
+  # **Warm the engine before measuring it.** The readiness probe answers /health, which the server does before it has
+  # finished capturing CUDA graphs and filling its caches, so a probe that starts the instant `rollout status` returns is
+  # timing a cold engine. Measured: the same box, model, instance and arrival rate produced 5,680 of 5,680 requests
+  # completed when warm and 189 of 5,680 when measured immediately after readiness, with p50 latency 1.3s against 17s.
+  step "warming the engine, because readiness answers before the engine is fast"
+  local warm_pod warmed=0
+  warm_pod="$(kc get pod -l app=gpu-vllm -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+  [ -n "$warm_pod" ] || die "no serving pod to warm."
+  for i in $(seq 1 30); do
+    if kc exec "$warm_pod" -- python3 -c "
+import json,urllib.request
+b={'model':'$BOX_MODEL','messages':[{'role':'user','content':'warm'}],'max_tokens':16}
+r=urllib.request.Request('http://localhost:8000/v1/chat/completions',data=json.dumps(b).encode(),
+                         headers={'Content-Type':'application/json'})
+urllib.request.urlopen(r,timeout=30).read()" >/dev/null 2>&1; then
+      warmed=$((warmed + 1))
+      [ "$warmed" -ge 5 ] && break
+    fi
+    sleep 5
+  done
+  [ "$warmed" -ge 5 ] || warn "the engine answered fewer than five warm-up requests; the measurement may be of a cold box"
+  info "warm-up: $warmed requests answered"
+
   step "running the open-loop probe INSIDE the cluster"
   # In-cluster on purpose. Across a tunnel the number produced is the tunnel's, and this project has twice published a
   # load generator's own limit as a box's capacity.
@@ -662,6 +750,27 @@ PY
   kc logs job/tierbook-probe > "$WORK/probe.json" 2>/dev/null || die "could not read the probe's output."
   /usr/bin/python3 -c "import json,sys; json.load(open('$WORK/probe.json'))" \
     || die "the probe's output is not the JSON this script expects; see $WORK/probe.json"
+
+  # **A run in overload cannot price anything.** When most of what came back missed the deadline, the token rate is a
+  # property of the queue rather than of the box, and dividing an hourly instance price by it produces a number that
+  # looks like a price and is an artifact. Measured: at 96 arrivals a second this box completed 189 of 5,680 requests
+  # with 40 inside the deadline, and the price that fell out was $18.29 per output Mtok against $0.15 from a run the box
+  # could actually serve -- a factor of 120, with nothing in the output to say which was which.
+  #
+  # So the refusal is here, with the numbers that produced it and the one knob that fixes it.
+  /usr/bin/python3 - "$WORK/probe.json" <<'PY' || refuse "the probe ran the box into overload, so no price can be derived
+  from it. Lower TIERBOOK_PROBE_RATE_PER_SECOND until most requests come back inside the deadline, and measure again."
+import json, sys
+d = json.load(open(sys.argv[1]))
+o = d["observed"]
+completed, offered, inside = o["completed"], o["offered_arrivals"], o["inside_deadline"]
+served = completed / offered if offered else 0.0
+in_time = inside / completed if completed else 0.0
+print(f"  offered {offered}, completed {completed} ({served:.1%}), inside the deadline {inside} ({in_time:.1%} of completed)")
+if served < 0.9 or in_time < 0.9:
+    print("  this is a box in overload, not a box being measured", file=sys.stderr)
+    raise SystemExit(1)
+PY
 
   step "deriving the box price from what was measured"
   # THE RULE THIS IMPLEMENTS: a fixed-cost candidate's price per token cannot be stated without a measured token rate.

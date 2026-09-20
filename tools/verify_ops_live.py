@@ -155,11 +155,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.from_connection:
         got = from_connection(a.from_connection)
-        a.box_url, a.box_model = got["box_url"], got["box_model"]
-        a.api_url, a.api_model = got["api_url"], got["api_model"]
-        a.api_key_file = got["api_key_file"]
-        a.box_price_per_mtok, a.api_price_per_mtok = got["box_price_per_mtok"], got["api_price_per_mtok"]
-        a.required_per_hour = got["required_per_hour"]
+        # An explicit flag wins over the file. The box's URL in particular has to be overridable: the file records the
+        # address inside the cluster, which is the right thing for it to record and not reachable from outside, so a
+        # caller bridging the port has to be able to say so without editing the file.
+        for flag, key in (("box_url", "box_url"), ("box_model", "box_model"), ("api_url", "api_url"),
+                          ("api_model", "api_model"), ("api_key_file", "api_key_file"),
+                          ("box_price_per_mtok", "box_price_per_mtok"),
+                          ("api_price_per_mtok", "api_price_per_mtok")):
+            if getattr(a, flag) is None:
+                setattr(a, flag, got[key])
+        if a.required_per_hour == 100.0:
+            a.required_per_hour = got["required_per_hour"]
         cap = got["capacity"]
         if cap:
             a.box_goodput_per_hour = cap["goodput_per_hour"]
