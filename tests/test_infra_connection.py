@@ -188,36 +188,143 @@ def test_the_two_prices_say_where_they_came_from(tmp_path):
     assert "supplied" in payload["api"]["price_basis"]
 
 
-def test_the_workarounds_name_what_removes_them():
-    """Each workaround compensates for another repository, and one nobody can retire is one nobody removes.
+PATCH_DIRS = {"stratoclave": ROOT / "infra" / "patches" / "stratoclave",
+              "distributed-ai": ROOT / "infra" / "patches" / "distributed-ai"}
 
-    This is a test rather than a convention because the whole reason the workarounds sit in one block is so that they
-    can be deleted when the upstream fix lands, and a block whose entries do not say what they are waiting for loses
-    that property silently.
+
+def seed_repo(root: Path, content: str) -> Path:
+    """A throwaway git repository, so the applier's three branches can be exercised on content this test controls."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "thing.txt").write_text(content)
+    for cmd in (["init", "-q"], ["add", "."], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
+        subprocess.run(["git", *cmd], cwd=root, check=True, capture_output=True)
+    return root
+
+
+def run_patches(tmp_path: Path, patch_dir: Path) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env.update({"TIERBOOK_WORK_DIR": str(tmp_path / "work"),
+                "TIERBOOK_CONNECTION_FILE": str(tmp_path / "connection.json"),
+                "TIERBOOK_INFRA_CONFIG": str(tmp_path / "absent.env"),
+                "TIERBOOK_PATCH_DIR": str(patch_dir)})
+    return subprocess.run(["bash", str(SCRIPT), "patches"], capture_output=True, text=True, env=env, cwd=str(ROOT))
+
+
+def a_patch(patch_dir: Path, *, before: str, after: str) -> None:
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    body = (
+        "A header explaining the gap, which git apply skips.\n---\n"
+        "diff --git a/thing.txt b/thing.txt\n"
+        "--- a/thing.txt\n+++ b/thing.txt\n"
+        f"@@ -1 +1 @@\n-{before}\n+{after}\n")
+    (patch_dir / "0001-change-the-thing.patch").write_text(body)
+
+
+def test_a_patch_that_applies_is_reported_as_applying(tmp_path):
+    seed_repo(tmp_path / "work" / "stratoclave", "before\n")
+    a_patch(tmp_path / "patches" / "stratoclave", before="before", after="after")
+    got = run_patches(tmp_path, tmp_path / "patches")
+    assert got.returncode == 0, got.stderr
+    assert "applies" in got.stdout and "ALREADY UPSTREAM" not in got.stdout
+
+
+def test_a_patch_already_in_the_checkout_is_reported_as_upstream(tmp_path):
+    """The state that matters most, because it is the one the other projects are about to put these patches into.
+
+    A mechanism that cannot tell "already fixed" from "applies" either re-applies a fix and fails, or keeps carrying a
+    patch nobody needs. The detection is `git apply --reverse --check`, which is a real question with a real answer.
+    """
+    seed_repo(tmp_path / "work" / "stratoclave", "after\n")
+    a_patch(tmp_path / "patches" / "stratoclave", before="before", after="after")
+    got = run_patches(tmp_path, tmp_path / "patches")
+    assert got.returncode == 0, got.stderr
+    assert "ALREADY UPSTREAM" in got.stdout
+    assert "delete it" in got.stdout, "it should say the patch can go, not just that it is redundant"
+
+
+def test_a_patch_that_no_longer_matches_is_reported_rather_than_forced(tmp_path):
+    """Upstream moved the code the patch is about. Applying part of it would deploy half a fix."""
+    seed_repo(tmp_path / "work" / "stratoclave", "something else entirely\n")
+    a_patch(tmp_path / "patches" / "stratoclave", before="before", after="after")
+    got = run_patches(tmp_path, tmp_path / "patches")
+    assert got.returncode == 0, got.stderr
+    assert "DOES NOT APPLY" in got.stdout
+    assert "regenerate" in got.stdout.lower()
+
+
+def run_patches_apply(tmp_path: Path, patch_dir: Path) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env.update({"TIERBOOK_WORK_DIR": str(tmp_path / "work"),
+                "TIERBOOK_CONNECTION_FILE": str(tmp_path / "connection.json"),
+                "TIERBOOK_INFRA_CONFIG": str(tmp_path / "absent.env"),
+                "TIERBOOK_PATCH_DIR": str(patch_dir)})
+    return subprocess.run(["bash", str(SCRIPT), "patches", "--apply"], capture_output=True, text=True,
+                          env=env, cwd=str(ROOT))
+
+
+def test_applying_a_patch_that_no_longer_matches_refuses_rather_than_continuing(tmp_path):
+    """The refusal, exercised rather than read. Reporting is not enough: the path that actually changes a checkout has to
+    stop, because applying part of a patch deploys half a fix.
+
+    An earlier version of this test asserted that the word `die` appeared in the applier, and a mutation that turned the
+    relevant `die` into a `warn` passed it -- there is another `die` in the same function, and the assertion found that
+    one. A test has to sit where the two candidate behaviours differ, which for a refusal means the exit code.
+    """
+    seed_repo(tmp_path / "work" / "stratoclave", "something else entirely\n")
+    a_patch(tmp_path / "patches" / "stratoclave", before="before", after="after")
+    got = run_patches_apply(tmp_path, tmp_path / "patches")
+    assert got.returncode != 0, f"applying a patch that no longer matches must fail; got {got.returncode}"
+    assert "no longer matches" in got.stderr
+    assert (tmp_path / "work" / "stratoclave" / "thing.txt").read_text() == "something else entirely\n", \
+        "the checkout must be left alone when the patch is refused"
+
+
+def test_applying_a_patch_that_fits_changes_the_checkout(tmp_path):
+    """The other side of the same door: when it applies, the file really changes, so the deploy that follows carries it."""
+    repo = seed_repo(tmp_path / "work" / "stratoclave", "before\n")
+    a_patch(tmp_path / "patches" / "stratoclave", before="before", after="after")
+    got = run_patches_apply(tmp_path, tmp_path / "patches")
+    assert got.returncode == 0, got.stderr
+    assert (repo / "thing.txt").read_text() == "after\n"
+
+
+def test_applying_a_patch_already_upstream_is_a_no_op_rather_than_a_failure(tmp_path):
+    """The state these patches are about to be in. Re-applying would fail; skipping has to be the behaviour."""
+    repo = seed_repo(tmp_path / "work" / "stratoclave", "after\n")
+    a_patch(tmp_path / "patches" / "stratoclave", before="before", after="after")
+    got = run_patches_apply(tmp_path, tmp_path / "patches")
+    assert got.returncode == 0, got.stderr
+    assert "already upstream" in got.stdout
+    assert (repo / "thing.txt").read_text() == "after\n"
+
+
+@pytest.mark.parametrize("name", sorted(PATCH_DIRS))
+def test_every_shipped_patch_is_a_real_diff_that_says_why_it_exists(name):
+    """A patch nobody can read is a patch nobody upstreams, and upstreaming is the point of keeping them as diffs."""
+    d = PATCH_DIRS[name]
+    patches = sorted(d.glob("*.patch"))
+    assert patches, f"no patches for {name}; if they were all upstreamed, delete the directory too"
+    for p in patches:
+        text = p.read_text()
+        assert "diff --git" in text, f"{p.name} is not a diff"
+        assert "---\n" in text.split("diff --git")[0], f"{p.name} has no header separated from its diff"
+        head = text.split("diff --git")[0]
+        assert "THE GAP" in head, f"{p.name} does not say what gap it closes"
+        assert "OBSERVED" in head, f"{p.name} does not say what was observed"
+        assert "THE FIX" in head, f"{p.name} does not say what it changes"
+        assert "Delete this patch once it is upstream" in head, f"{p.name} does not say when it can go"
+
+
+def test_nothing_operates_on_another_projects_live_resources():
+    """The whole point of moving to patches: the compensation is a diff, not surgery on a deployed object.
+
+    Live surgery cannot be sent upstream, drifts silently against a resource whose shape moved, and cannot answer "is
+    this fixed yet". Each of these strings is one of the operations the first version performed.
     """
     body = SCRIPT.read_text()
-    start = body.index("# --- workarounds for gaps upstream")
-    end = body.index("# --- the API key the loop needs")
-    block = body[start:end]
-    names = [line.split("(")[0].strip() for line in block.splitlines()
-             if line.startswith("workaround_") and line.rstrip().endswith("{")]
-    assert len(names) >= 2, f"expected the known workarounds to be here, found {names}"
-    for name in names:
-        section = block[block.index(name):]
-        section = section[:section.index("\n}")]
-        assert "UPSTREAM GAP" in section, f"{name} does not say what upstream gap it compensates for"
-        assert "REMOVE THIS when" in section, f"{name} does not say what would let it be deleted"
-
-
-def test_nothing_outside_the_workaround_block_patches_another_repositorys_resources():
-    """A workaround in the happy path is a workaround nobody finds. This keeps them gathered."""
-    body = SCRIPT.read_text()
-    start = body.index("# --- workarounds for gaps upstream")
-    end = body.index("# --- the API key the loop needs")
-    outside = body[:start] + body[end:]
-    for smell in ("register_task_definition", "--enable-auto-tool-choice"):
-        assert smell not in outside, \
-            f"`{smell}` appears outside the workaround block; a compensation on the happy path is one nobody retires"
+    for smell, what in (("register_task_definition", "rewriting another project's task definition"),
+                        ("patch deployment", "patching another project's Deployment in place")):
+        assert smell not in body, f"the script still does {what}; that belongs in infra/patches as a diff"
 
 
 def test_down_destroys_nothing_when_it_has_no_record_of_creating_anything(tmp_path):

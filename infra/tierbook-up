@@ -15,6 +15,8 @@
 #   ./infra/tierbook-up status     what exists right now, and which of it we would own
 #   ./infra/tierbook-up up         make it usable: adopt what exists, create what does not
 #   ./infra/tierbook-up connect    (re)write the connection file tierbook reads
+#   ./infra/tierbook-up patches    which patches against the other two repositories still apply, and which are upstream
+#   ./infra/tierbook-up patches --apply   apply them to the checkouts in the work directory, refusing on any that moved
 #   ./infra/tierbook-up measure    run the open-loop probe and DERIVE the box price from it
 #   ./infra/tierbook-up down       destroy only what this script created
 #
@@ -29,6 +31,9 @@ ROOT="$(cd "$HERE/.." && pwd)"
 WORK="${TIERBOOK_WORK_DIR:-$HOME/tmp/tierbook/infra}"
 STATE="$WORK/state.json"
 CONNECTION="${TIERBOOK_CONNECTION_FILE:-$WORK/connection.json}"
+# Overridable so the applier can be exercised against content a test controls. The applier is the part with three
+# branches and therefore the part worth testing; the real patches are checked separately for being valid diffs.
+PATCH_DIR="${TIERBOOK_PATCH_DIR:-$HERE/patches}"
 
 # --- configuration -------------------------------------------------------------------------------------------------
 
@@ -200,17 +205,27 @@ gateway_create() {
   administrator from it and nothing else can issue the API key tierbook needs."
 
   local dir; dir="$(gateway_checkout)"
+
+  step "applying patches to the gateway checkout"
+  apply_patches stratoclave "$dir"
+
+  # The admin email goes in as an ordinary deploy input. That only works because of the patch above -- without it the
+  # variable never reaches the container and this deploy would finish with no administrator and no error.
   step "deploying the gateway stacks (prefix '$GATEWAY_PREFIX', 15-20 min, billable)"
   ( cd "$dir/iac" \
     && AWS_PROFILE="${AWS_PROFILE:-}" STRATOCLAVE_PREFIX="$GATEWAY_PREFIX" STRATOCLAVE_REGION="$GATEWAY_REGION" \
        CDK_DEFAULT_REGION="$GATEWAY_REGION" ALLOW_ADMIN_CREATION=false \
+       STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL="$GATEWAY_ADMIN_EMAIL" \
        ./scripts/deploy-all.sh ) || die "gateway deploy failed."
 
   step "building and pushing the gateway image"
   gateway_build_image "$dir"
 
-  step "seeding the first administrator"
-  workaround_bootstrap_admin_env
+  # The backend seeds the administrator on its first healthy start, which happens once the image is in place. Nothing to
+  # do here but wait for the service to settle.
+  step "waiting for the service to become stable, which is when the administrator is seeded"
+  aws ecs wait services-stable "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --cluster "${GATEWAY_PREFIX}-cluster" --services "${GATEWAY_PREFIX}-backend" || true
 
   state_set gateway_owned true
   state_set gateway_prefix "$GATEWAY_PREFIX"
@@ -357,6 +372,8 @@ box_present() { kc get svc gpu-vllm >/dev/null 2>&1; }
 box_deploy() {
   local dir="$WORK/distributed-ai"
   [ -d "$dir/.git" ] || { info "cloning the cluster module for its charts"; git clone -q --depth 1 "$CLUSTER_REPO" "$dir"; }
+  step "applying patches to the cluster checkout"
+  apply_patches distributed-ai "$dir"
   local charts="$dir/infra/eks/charts"
 
   aws eks update-kubeconfig "${AWS_PROFILE_ARG[@]}" --region "$CLUSTER_REGION" --name "$CLUSTER_NAME" >/dev/null \
@@ -372,11 +389,17 @@ box_deploy() {
     --set gpuServingVllm.cpu="$BOX_CPU" \
     --set gpuServingVllm.shmSize="$BOX_SHM" \
     --set gpuServingVllm.maxModelLen="$BOX_MAX_LEN" \
+    --set "gpuServingVllm.extraArgs={--enable-auto-tool-choice,--tool-call-parser=${TIERBOOK_TOOL_CALL_PARSER:-hermes}}" \
     > "$WORK/box.yaml" || die "helm template failed."
+
+  # Checked here rather than trusted: if the patch did not take, the flags are absent from the rendered args and the box
+  # will reject every request a coding agent sends -- with a 400 that reads like a bad answer rather than a refusal.
+  grep -q -- "--enable-auto-tool-choice" "$WORK/box.yaml" \
+    || die "the rendered box carries no tool-choice flags, so it will reject every request carrying tool schemas. The
+  chart takes extraArgs only with the patch in infra/patches/distributed-ai applied; check `tierbook-up patches`."
 
   step "applying the box"
   kc apply -f "$WORK/box.yaml" || die "could not apply the box."
-  workaround_engine_tool_args
 
   info "waiting for the box to become ready (the model has to be pulled first)"
   kc wait --for=condition=available deployment/gpu-vllm --timeout=900s \
@@ -384,78 +407,97 @@ box_deploy() {
   state_set box_owned true
 }
 
-# --- workarounds for gaps upstream ---------------------------------------------------------------------------------
+# --- patches against the other two repositories ---------------------------------------------------------------------
 #
-# Every function here compensates for something in another repository, and each one says what it is waiting for. They
-# are gathered in one place on purpose: a workaround scattered through the happy path is a workaround nobody removes.
-# infra/README.md carries the same list, and the two requests describing the upstream fixes were sent separately.
+# WHY PATCHES RATHER THAN LIVE SURGERY. Two gaps upstream stop this wiring working, and there are two ways to deal with
+# them: reach into the deployed resources afterwards and fix them there, or patch the source before deploying. The first
+# version did the former -- registering a task definition revision, patching a running Deployment -- and it was wrong in
+# three ways that all have the same root: a change made to a live resource is not the change anybody upstream can read.
+#
+#   * it cannot be sent upstream. A diff can; `git format-patch` of these files is the contribution.
+#   * it drifts silently. A patch that no longer matches FAILS; live surgery keeps "working" against a resource whose
+#     shape moved underneath it.
+#   * it cannot retire itself honestly. "Is the fix upstream yet?" is `git apply --reverse --check`, which is a real
+#     question with a real answer, rather than an inspection of a deployed object that may have been patched by hand.
+#
+# So `infra/patches/<repo>/*.patch` holds the diffs, and this function applies them to a fresh checkout. Each patch is
+# in one of exactly three states, and all three are handled rather than two:
+#
+#   already upstream  -- `git apply --reverse --check` succeeds. Skipped, and said out loud, so the day the fix lands
+#                        the patch becomes visibly unnecessary instead of quietly redundant.
+#   applies           -- applied with --3way, which tolerates upstream moving around the hunk.
+#   no longer matches -- REFUSED. Upstream changed the code the patch is about, and guessing is how a deploy proceeds
+#                        with half a fix in it.
 
-workaround_bootstrap_admin_env() {
-  # UPSTREAM GAP (gateway): docs/DEPLOYMENT.md says to export STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL and redeploy the ECS
-  # stack, and the backend does read it at startup -- but the variable appears nowhere in the gateway's infrastructure
-  # code, so it never reaches the task definition and the documented procedure creates no user at all. Verified on a
-  # clean deployment: zero users afterwards, and one task definition revision carrying that single variable produced
-  # the user and the password.
-  #
-  # REMOVE THIS when the gateway passes the variable through (two lines beside ALLOW_ADMIN_CREATION in iac/bin/iac.ts).
-  # The check below is written so it becomes a no-op automatically on the day that lands.
-  local td have
-  td="$(aws ecs describe-task-definition "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
-        --task-definition "${GATEWAY_PREFIX}-backend" --query 'taskDefinition' --output json 2>/dev/null || true)"
-  [ -n "$td" ] || die "no task definition ${GATEWAY_PREFIX}-backend; the gateway deploy did not finish."
-  have="$(printf '%s' "$td" | /usr/bin/python3 -c "
-import json,sys
-td=json.load(sys.stdin)
-names={e['name'] for e in td['containerDefinitions'][0].get('environment',[])}
-print('yes' if 'STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL' in names else 'no')")"
-  if [ "$have" = yes ]; then
-    info "the gateway now passes the bootstrap-admin variable itself; no workaround needed"
-  else
-    warn "applying a workaround: the gateway's documented first-admin path cannot work, because the variable it"
-    warn "  depends on never reaches the task definition. Registering one revision that adds it."
-    printf '%s' "$td" | /usr/bin/python3 - "$GATEWAY_ADMIN_EMAIL" "$GATEWAY_REGION" "${AWS_PROFILE:-}" <<'PY'
-import boto3, json, sys
-email, region, profile = sys.argv[1], sys.argv[2], sys.argv[3]
-td = json.load(sys.stdin)
-sess = boto3.Session(profile_name=profile) if profile else boto3.Session()
-ecs = sess.client("ecs", region_name=region)
-keep = {k: td[k] for k in ("family", "taskRoleArn", "executionRoleArn", "networkMode", "containerDefinitions",
-                           "volumes", "placementConstraints", "requiresCompatibilities", "cpu", "memory",
-                           "runtimePlatform") if k in td}
-cd = keep["containerDefinitions"][0]
-cd["environment"] = [e for e in cd.get("environment", [])
-                     if e["name"] != "STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL"]
-cd["environment"].append({"name": "STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL", "value": email})
-new = ecs.register_task_definition(**keep)["taskDefinition"]
-print(f"registered {new['family']}:{new['revision']}")
-PY
-    aws ecs update-service "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
-      --cluster "${GATEWAY_PREFIX}-cluster" --service "${GATEWAY_PREFIX}-backend" \
-      --task-definition "${GATEWAY_PREFIX}-backend" --force-new-deployment >/dev/null \
-      || die "could not roll the service onto the new revision."
-    info "waiting for the service to become stable"
-    aws ecs wait services-stable "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
-      --cluster "${GATEWAY_PREFIX}-cluster" --services "${GATEWAY_PREFIX}-backend" || true
-  fi
+apply_patches() {  # apply_patches <repo-dir-name> <checkout>
+  local name="$1" checkout="$2"
+  local dir="$PATCH_DIR/$name"
+  [ -d "$dir" ] || { info "no patches for $name"; return 0; }
+  local any=0
+  for patch in "$dir"/*.patch; do
+    [ -e "$patch" ] || continue
+    any=1
+    local base; base="$(basename "$patch")"
+    if git -C "$checkout" apply --reverse --check "$patch" >/dev/null 2>&1; then
+      info "$name: $base is already upstream -- skipping (this patch can be deleted)"
+    elif git -C "$checkout" apply --3way --check "$patch" >/dev/null 2>&1; then
+      git -C "$checkout" apply --3way "$patch" || die "$name: $base passed its check and then failed to apply."
+      info "$name: applied $base"
+    else
+      die "$name: $base no longer matches this checkout. Upstream moved the code it is about, so applying part of it
+  would deploy half a fix. Regenerate the patch against the current checkout ($checkout) and re-run."
+    fi
+  done
+  [ "$any" = 1 ] || info "no patches for $name"
 }
 
-workaround_engine_tool_args() {
-  # UPSTREAM GAP (cluster charts): gpu-serving-vllm.yaml renders a closed list of five engine arguments with no
-  # extraArgs escape hatch, so the engine cannot be started with the two flags that let it accept tool schemas. Every
-  # request a coding agent sends carries tool schemas, so without this the box returns 400 to all of them.
-  #
-  # REMOVE THIS when the chart grows `extraArgs` (three template lines and one values key).
-  local args
-  args="$(kc get deployment gpu-vllm -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || echo '')"
-  if printf '%s' "$args" | grep -q -- "--enable-auto-tool-choice"; then
-    info "the box already accepts tool schemas; no workaround needed"
+cmd_patches() {
+  # Reports by default; with --apply it calls the SAME `apply_patches` the deploy path calls, against the checkouts in
+  # the work directory. Two reasons for the second mode: preparing a checkout by hand before deploying is a real thing to
+  # want, and it means the refusal on a patch that no longer matches is reachable without spending money -- a refusal
+  # nothing can exercise is a refusal nobody has checked.
+  if [ "${1:-}" = --apply ]; then
+    for name in stratoclave distributed-ai; do
+      local checkout="$WORK/$name"
+      [ -d "$PATCH_DIR/$name" ] || continue
+      if [ -d "$checkout/.git" ]; then
+        step "applying patches to $name"
+        apply_patches "$name" "$checkout"
+      else
+        warn "no checkout at $checkout; nothing to apply to"
+      fi
+    done
     return
   fi
-  warn "applying a workaround: patching the box's engine arguments so it accepts tool schemas."
-  warn "  The serving chart has no way to pass an engine flag, and a coding agent always sends tool schemas."
-  kc patch deployment gpu-vllm --type=json -p "$(printf '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--enable-auto-tool-choice"},{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--tool-call-parser=%s"}]' "${TIERBOOK_TOOL_CALL_PARSER:-hermes}")" >/dev/null \
-    || die "could not patch the box's engine arguments."
-  kc rollout status deployment/gpu-vllm --timeout=900s >/dev/null || die "the patched box did not come back."
+  local checked=0
+  for name in stratoclave distributed-ai; do
+    local dir="$PATCH_DIR/$name"
+    [ -d "$dir" ] || continue
+    step "patches for $name"
+    local checkout
+    case "$name" in
+      stratoclave)     checkout="$WORK/stratoclave" ;;
+      distributed-ai)  checkout="$WORK/distributed-ai" ;;
+    esac
+    if [ ! -d "$checkout/.git" ]; then
+      warn "no checkout at $checkout yet, so their state cannot be read. Listing them instead:"
+      for patch in "$dir"/*.patch; do [ -e "$patch" ] && info "  $(basename "$patch")"; done
+      continue
+    fi
+    checked=1
+    for patch in "$dir"/*.patch; do
+      [ -e "$patch" ] || continue
+      local base; base="$(basename "$patch")"
+      if git -C "$checkout" apply --reverse --check "$patch" >/dev/null 2>&1; then
+        info "$base: ALREADY UPSTREAM -- delete it"
+      elif git -C "$checkout" apply --3way --check "$patch" >/dev/null 2>&1; then
+        info "$base: applies"
+      else
+        warn "$base: DOES NOT APPLY -- upstream moved; regenerate it"
+      fi
+    done
+  done
+  [ "$checked" = 1 ] || warn "nothing was checked against a real checkout. Run `up` once, or clone into $WORK."
 }
 
 # --- the API key the loop needs -------------------------------------------------------------------------------------
@@ -483,8 +525,18 @@ idp = sess.client("cognito-idp", region_name=region)
 
 users = idp.list_users(UserPoolId=pool).get("Users", [])
 if not users:
-    raise SystemExit("the gateway's user pool has no users. The first administrator was not seeded, so no key can be "
-                     "issued. Run `up` again -- the workaround for the upstream gap runs there.")
+    raise SystemExit(
+        "the gateway's user pool has no users, so there is no administrator and no API key can be issued.\n"
+        "\n"
+        "If this gateway was ADOPTED rather than created here, that is the expected outcome and not something this\n"
+        "script should fix: seeding an administrator means redeploying its ECS stack, and redeploying somebody else's\n"
+        "gateway is not this script's business. Two ways forward, and they are the operator's choice:\n"
+        "  * have whoever owns it create the first administrator, then re-run `tierbook-up connect`; or\n"
+        "  * point TIERBOOK_GATEWAY_PREFIX at a prefix of your own and let this script create one, where the patch in\n"
+        "    infra/patches/stratoclave makes the documented procedure actually work.\n"
+        "\n"
+        "If this gateway WAS created here, the deploy did not carry the bootstrap email. Check that the patch applied:\n"
+        "  ./infra/tierbook-up patches")
 username = users[0]["Username"]
 
 # A password of our own, set permanently, so the NEW_PASSWORD_REQUIRED exchange is not standing between this script and
@@ -808,8 +860,7 @@ cmd_up() {
   if [ "$CLUSTER_MODE" != skip ]; then
     state_set cluster_name "$CLUSTER_NAME"; state_set cluster_region "$CLUSTER_REGION"
     if box_present; then
-      info "the box is already deployed"
-      workaround_engine_tool_args
+      info "the box is already deployed; leaving it as it is"
     else
       box_deploy
     fi
@@ -832,6 +883,7 @@ case "${1:-}" in
   status)  cmd_status ;;
   up)      cmd_up ;;
   connect) cmd_connect ;;
+  patches) shift; cmd_patches "$@" ;;
   measure) cmd_measure; cmd_connect ;;
   down)    cmd_down ;;
   *) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;

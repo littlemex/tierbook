@@ -1,0 +1,54 @@
+gpuServingVllm: accept extra engine arguments
+
+THE GAP. The template renders a closed list of five engine arguments with no way to add one. A request carrying `tools`
+is rejected outright unless the engine was started with --enable-auto-tool-choice and a --tool-call-parser, and every
+request a coding agent sends carries tools. So a chart that serves an OpenAI-compatible endpoint cannot serve what an
+OpenAI-compatible coding agent actually sends.
+
+OBSERVED: HTTP 400, `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set`, on every
+request, with no way to fix it through the chart.
+
+THE FIX appends a caller-supplied list after the rendered arguments. Default is an empty list, so the rendered
+Deployment is byte-identical for anyone not setting it (checked by rendering both ways). The parser name is
+model-specific, so the chart deliberately holds no table of them.
+
+The same closed-list shape is in neuron-serving-vllm.yaml, which additionally fixes --max-num-seqs and --max-model-len
+by value; left alone here to keep this patch to one template.
+
+Sent as a request to the project separately. Delete this patch once it is upstream -- tierbook-up detects that itself.
+---
+diff --git a/infra/eks/charts/experiments/templates/gpu-serving-vllm.yaml b/infra/eks/charts/experiments/templates/gpu-serving-vllm.yaml
+index 9d23da7..2135797 100644
+--- a/infra/eks/charts/experiments/templates/gpu-serving-vllm.yaml
++++ b/infra/eks/charts/experiments/templates/gpu-serving-vllm.yaml
+@@ -49,6 +49,9 @@ spec:
+             - --max-model-len={{ $v.maxModelLen | default 4096 }}
+             - --gpu-memory-utilization={{ $v.gpuMemoryUtilization | default "0.85" }}
+             - --port={{ $v.port | default 8000 }}
++            {{- range $v.extraArgs | default list }}
++            - {{ . | quote }}
++            {{- end }}
+           env:
+             # HF token for gated models (optional; ungated models need no token).
+             - name: HF_TOKEN
+diff --git a/infra/eks/charts/experiments/values.yaml b/infra/eks/charts/experiments/values.yaml
+index 9becd67..f106371 100644
+--- a/infra/eks/charts/experiments/values.yaml
++++ b/infra/eks/charts/experiments/values.yaml
+@@ -443,6 +443,16 @@ gpuServingVllm:
+   maxModelLen: 4096
+   gpuMemoryUtilization: "0.85"
+   port: 8000
++  # Extra engine flags, appended verbatim to the args above. Empty by default, so the rendered Deployment is unchanged
++  # for anyone not setting it.
++  #
++  # The case this exists for: a request carrying `tools` is rejected outright unless the engine was started with
++  # `--enable-auto-tool-choice` and a `--tool-call-parser`, and every request a coding agent sends carries tools. The
++  # parser name is model-specific (hermes, llama3_json, mistral, ...), so this chart deliberately does not hold a table
++  # of them -- a table here is a table that goes stale.
++  #
++  #   extraArgs: ["--enable-auto-tool-choice", "--tool-call-parser=hermes"]
++  extraArgs: []
+   readinessInitialDelaySeconds: 60
+   readinessPeriodSeconds: 10
+   readinessFailureThreshold: 90

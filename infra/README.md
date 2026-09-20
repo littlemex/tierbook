@@ -72,20 +72,26 @@ What it carries, and what it deliberately leaves null:
 - `api.capacity: null`, because nothing measured the metered endpoint. Null becomes `unknown` downstream, which is a
   different thing from a claim, and the mechanism keeps them apart.
 
-## Workarounds for gaps in the other two repositories
+## The two changes the other repositories need
 
-Both are gathered in one block in the script, each stating the gap it compensates for and what would let it be deleted.
-A test asserts both properties, and a second test asserts that no compensation sits outside that block — a workaround on
-the happy path is one nobody retires.
+They live in `infra/patches/` as **diffs**, applied to a fresh checkout before anything deploys, and the same diffs are
+what gets sent upstream. See `infra/patches/README.md` for both, and for why this is a patch directory rather than
+surgery on the deployed resources — the short version is that a change made to a live resource cannot be sent upstream,
+drifts silently when upstream moves, and cannot answer "is it fixed yet".
 
-| what it does | why it is needed | when to delete it |
-|---|---|---|
-| registers one task definition revision adding `STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL` | the gateway's documented first-admin procedure cannot work: the backend reads that variable at startup and nothing puts it into the task definition, so a clean deployment ends with zero users | when the gateway passes it through (two lines beside `ALLOW_ADMIN_CREATION`) |
-| patches the box's engine arguments to accept tool schemas | the serving chart renders a closed list of five engine arguments, and every request a coding agent sends carries tool schemas, so without this the box returns 400 to all of them | when the chart grows an `extraArgs` list |
+```bash
+./infra/tierbook-up patches      # already upstream / applies / no longer matches, per patch
+```
 
-Each check is written so that it becomes a no-op automatically once upstream lands: it looks at the live resource, says
-"no workaround needed" when the gap is closed, and only then does nothing. The two requests describing those fixes were
-sent to the respective projects separately.
+Three states, all handled. The first is the one that matters as the fixes land: a patch already in the checkout is
+detected by `git apply --reverse --check`, skipped, and reported as deletable — so the day upstream carries it, deploys
+keep working and the patch becomes visibly unnecessary instead of quietly redundant. A patch that no longer matches is
+**refused**, because applying part of it deploys half a fix.
+
+**One case the patches cannot reach.** A gateway this script *adopted* was deployed by somebody else, and seeding its
+first administrator means redeploying their ECS stack. This script will not do that. If an adopted gateway has no
+administrator, `up` stops and names the two ways forward: have its owner create one, or point the prefix at a gateway of
+your own, where the patch makes the documented procedure work.
 
 ## What this script does not do
 
