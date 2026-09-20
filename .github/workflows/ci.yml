@@ -98,12 +98,3 @@ jobs:
           grep -q "no load probe has been run" /tmp/exp.txt
           grep -q "tool-agent-user-retail" /tmp/exp.txt
           test ! -f /tmp/router.json
-      - name: the manifests parse and assume no cluster
-        run: |
-          python -c "
-          import glob, yaml
-          for f in sorted(glob.glob('deploy/base/*.yaml')):
-              list(yaml.safe_load_all(open(f)))
-          "
-          # A manifest that names a namespace has made a decision about somebody else's cluster.
-          ! grep -rn "^  namespace:" deploy/base/

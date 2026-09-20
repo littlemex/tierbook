@@ -24,7 +24,10 @@ dependencies = []
 [project.optional-dependencies]
 # Only for validating a record you have written by hand. The router does not need it.
 schema = ["jsonschema>=4"]
-dev = ["pytest>=7", "jsonschema>=4"]
+# PyYAML is here and nowhere else: the deploy manifests are YAML and a test that they parse needs a parser. The
+# "no runtime dependencies" rule above is about the router, which reads JSON and does arithmetic -- a dev-only parser
+# cannot break a component that decides where money goes.
+dev = ["pytest>=7", "jsonschema>=4", "pyyaml>=6"]
 
 [project.scripts]
 tierbook = "tierbook.cli:main"
