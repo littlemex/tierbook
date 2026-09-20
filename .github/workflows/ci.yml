@@ -65,14 +65,39 @@ jobs:
           tierbook compile --registry examples/ledger/tiers --validations examples/ledger/validation \
             --config examples/ledger/candidates.json --out /tmp/tc.json --today 2026-08-30 | tee /tmp/outc.txt
           grep -q "objective cost" /tmp/outc.txt
-          # Without the assumed throughput the rule prefers the cheap API, which is the tier the held-out
-          # fold preferred. A change that puts the self-hosted tier back has reintroduced an unmeasured input.
-          python -c "import json; e=json.load(open('/tmp/tc.json'))['families']['tool-agent-user-retail']['cannot_reject']; assert e['chosen']==['api-cheap-a'], e['chosen']; assert e['status']=='assigned', e['status']"
-      - name: the exported router config names the tier the held-out fold supported
+          # The invariant, rather than the ranking it happens to produce: a reservation is NOT amortised into a
+          # per-request price. The bill arrives whether or not a request uses the capacity, and an average would be
+          # circular because routing to it is what changes the denominator -- so with no accounting window stated,
+          # the marginal charge is zero and the economics verdict stays undecidable. Reintroducing an amortised
+          # figure (which is how an unmeasured throughput gets in) makes that cost non-zero and fails here.
+          #
+          # This asserted `api-cheap-a` until 2026-09-10 and was left behind when the decision changed;
+          # tests/test_boundary.py carries the authoritative version of the same claim.
+          python -c "
+          import json
+          e = json.load(open('/tmp/tc.json'))['families']['tool-agent-user-retail']['cannot_reject']
+          assert e['status'] == 'assigned', e['status']
+          sh = next(r for r in e['ranked'] if r['arrangement'] == ['self-hosted-a'])
+          if e['self_hosted_economics']['verdict'] == 'undecidable':
+              assert sh['cost_per_request'] == 0.0, ('a reservation with no stated accounting window was given a '
+                                                    'per-request price', sh, e['self_hosted_economics'])
+          assert e['chosen'] == ['self-hosted-a'], e['chosen']
+          "
+      # The shipped example stops one step short of a router config, and this is the step that says so out loud.
+      # Its only rule guards on the occupancy at which the reserved candidate stops meeting its latency target, and
+      # no load probe has been run, so no rule can fire and there is nothing to export. That refusal is the correct
+      # behaviour -- a router config whose policy cannot fire would route everything to the default while looking
+      # like a decision -- and it has been the behaviour since 2026-09-08, when a single probe stopped supporting a
+      # capacity bound. Until the probe is run, the positive case lives at the function level in
+      # tests/test_boundary.py, which compiles without the guard.
+      - name: exporting refuses while the policy has a guard nobody measured
         run: |
-          tierbook export-vsr --table /tmp/tc.json --config examples/ledger/candidates.json \
-            --signal tool-agent-user-retail=retail --default-model api-strong-a --out /tmp/router.json
-          python -c "import json; c=json.load(open('/tmp/router.json')); d=c['routing']['decisions']; assert len(d)==1 and d[0]['modelRefs'][0]['model']=='api-cheap-a', d"
+          ! tierbook export-vsr --table /tmp/tc.json --config examples/ledger/candidates.json \
+            --signal tool-agent-user-retail=retail --default-model api-strong-a --out /tmp/router.json 2>/tmp/exp.txt
+          grep -q "no family produced an exportable decision" /tmp/exp.txt
+          grep -q "no load probe has been run" /tmp/exp.txt
+          grep -q "tool-agent-user-retail" /tmp/exp.txt
+          test ! -f /tmp/router.json
       - name: the manifests parse and assume no cluster
         run: |
           python -c "
