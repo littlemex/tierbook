@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import sys
 import urllib.error
 import urllib.request
@@ -76,16 +77,72 @@ def live_agent(*, box_url: str, box_model: str, api_url: str, api_model: str, ap
     return agent
 
 
+#: The keys this driver reads out of a connection file written by `infra/tierbook-up connect`. Named as a constant
+#: rather than read inline, because it is a contract between two programs and `tests/test_infra_connection.py` checks
+#: the same list against a real connection file. A seam whose shape lives in two heads drifts; one whose shape is a
+#: constant with a test on it cannot.
+CONNECTION_KEYS = {
+    "box": ("model", "in_cluster_url", "price_per_mtok", "price_basis", "price_is_upper_bound", "capacity"),
+    "api": ("model", "chat_completions_url", "api_key_file", "price_per_mtok", "price_basis", "capacity"),
+    "top": ("version", "required_per_hour"),
+}
+
+#: What a capacity block in the connection file has to carry. Every one of these is a field `throughput.Throughput`
+#: refuses to be built without, so a connection file missing any of them cannot produce capacity evidence at all.
+CONNECTION_CAPACITY_KEYS = ("per_hour", "goodput_per_hour", "deadline_seconds", "arrivals",
+                            "offered_concurrency", "seats", "understated_because")
+
+
+def from_connection(path: str) -> dict:
+    """Turn a connection file into the arguments this driver takes, refusing rather than filling in gaps.
+
+    The refusals are the point. A connection file with no derived box price is a file whose `measure` step never ran,
+    and substituting a plausible price here would put an invented number where the whole discipline of this repository
+    is that a fixed-cost candidate's price comes from a measured token rate.
+    """
+    conn = json.loads(pathlib.Path(path).read_text())
+    if conn.get("version") != 1:
+        raise SystemExit(f"connection file version {conn.get('version')!r} is not 1; this driver reads version 1")
+    for side in ("box", "api"):
+        missing = [k for k in CONNECTION_KEYS[side] if k not in conn.get(side, {})]
+        if missing:
+            raise SystemExit(f"connection file is missing {side}.{{{','.join(missing)}}}; it was not written by "
+                             f"`infra/tierbook-up connect`, or that script and this driver have drifted apart")
+    box, api = conn["box"], conn["api"]
+    if box["price_per_mtok"] is None:
+        raise SystemExit("the connection file has no derived box price. Run `infra/tierbook-up measure`: the box's "
+                         "price is an instance's hourly rate over a MEASURED token rate, and there is no substitute")
+    if not api["chat_completions_url"] or not api["api_key_file"]:
+        raise SystemExit("the connection file has no gateway URL or no API key file; the metered arm cannot be called")
+    cap = box.get("capacity")
+    if cap is not None:
+        missing = [k for k in CONNECTION_CAPACITY_KEYS if k not in cap]
+        if missing:
+            raise SystemExit(f"the box's capacity block is missing {missing}; a rate without its arrivals, deadline, "
+                             f"offered load and seat count cannot be recorded as a measurement")
+    return {
+        "box_url": box["in_cluster_url"], "box_model": box["model"],
+        "api_url": api["chat_completions_url"], "api_model": api["model"],
+        "api_key_file": api["api_key_file"],
+        "box_price_per_mtok": float(box["price_per_mtok"]),
+        "api_price_per_mtok": float(api["price_per_mtok"]),
+        "required_per_hour": float(conn["required_per_hour"]),
+        "capacity": cap,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--box-url", required=True)
-    ap.add_argument("--box-model", required=True)
-    ap.add_argument("--api-url", required=True)
-    ap.add_argument("--api-model", required=True)
-    ap.add_argument("--api-key-file", required=True)
-    ap.add_argument("--box-price-per-mtok", type=float, required=True,
+    ap.add_argument("--from-connection", default=None,
+                    help="a connection file written by infra/tierbook-up; supplies every value below")
+    ap.add_argument("--box-url")
+    ap.add_argument("--box-model")
+    ap.add_argument("--api-url")
+    ap.add_argument("--api-model")
+    ap.add_argument("--api-key-file")
+    ap.add_argument("--box-price-per-mtok", type=float,
                     help="derived: the instance's hourly rate over a MEASURED token rate")
-    ap.add_argument("--api-price-per-mtok", type=float, required=True, help="the published list price")
+    ap.add_argument("--api-price-per-mtok", type=float, help="the published list price")
     ap.add_argument("--turns", type=int, default=12)
     ap.add_argument("--required-per-hour", type=float, default=100.0)
     ap.add_argument("--box-goodput-per-hour", type=float, default=None,
@@ -95,6 +152,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--box-seats", type=int, default=None)
     ap.add_argument("--box-understated-because", default="")
     a = ap.parse_args(argv)
+
+    if a.from_connection:
+        got = from_connection(a.from_connection)
+        a.box_url, a.box_model = got["box_url"], got["box_model"]
+        a.api_url, a.api_model = got["api_url"], got["api_model"]
+        a.api_key_file = got["api_key_file"]
+        a.box_price_per_mtok, a.api_price_per_mtok = got["box_price_per_mtok"], got["api_price_per_mtok"]
+        a.required_per_hour = got["required_per_hour"]
+        cap = got["capacity"]
+        if cap:
+            a.box_goodput_per_hour = cap["goodput_per_hour"]
+            a.box_deadline_seconds = cap["deadline_seconds"]
+            a.box_offered_concurrency = cap["offered_concurrency"]
+            a.box_seats = cap["seats"]
+            a.box_understated_because = cap["understated_because"]
+    else:
+        needed = [n for n in ("box_url", "box_model", "api_url", "api_model", "api_key_file",
+                              "box_price_per_mtok", "api_price_per_mtok") if getattr(a, n) is None]
+        if needed:
+            ap.error("without --from-connection these are required: " + ", ".join("--" + n.replace("_", "-")
+                                                                                 for n in needed))
 
     capacity: dict[str, object] = {}
     if a.box_goodput_per_hour is not None:

@@ -201,6 +201,22 @@ admissible, because a measurement over the 12% of traffic that arrived with a te
 that 12%. If nothing is admissible, tierbook says **"not measurable for correctness from these logs"**, which
 is a real result: it names what you would have to start recording.
 
+## On a cluster you do not have yet
+
+`infra/tierbook-up` brings the candidates to a state this repository can drive, in one command: it adopts a gateway and a
+cluster that already exist, creates the ones that do not, serves a box from the cluster repository's own chart, measures
+its throughput from inside the cluster, derives the box's price from that measurement, and writes one connection file.
+
+```bash
+cp infra/config.example.env infra/config.env    # four required values
+./infra/tierbook-up doctor                      # creates nothing, charges nothing
+./infra/tierbook-up up
+```
+
+**It never destroys anything it did not create**, and when its record of what it created is missing it assumes it created
+nothing. Both directions are tested, because the first version of the state reader made `down` silently skip the very
+resources it owned. `infra/README.md` says which of the two prices is derived and which is refused rather than guessed.
+
 ## On a cluster you already have
 
 `deploy/` is three objects and no cluster. See `deploy/README.md`.
