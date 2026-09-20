@@ -50,7 +50,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import combinations
 
-from tierbook.evidence import ESCALATION_SUBJECTS, UNOBSERVED, EvidenceError
+from tierbook.evidence import SUBJECTS, UNOBSERVED, EvidenceError
 from tierbook.outcomes import Cell, OutcomeTable
 
 
@@ -279,12 +279,14 @@ def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
     uncertainty (higher means less sure); `probe_usd` is what reading it costs per item, which is not
     zero when the signal comes from an extra call.
     """
-    if about not in ESCALATION_SUBJECTS:
+    if about not in SUBJECTS:
         raise EvidenceError(
-            f"about={about!r} is not one of {ESCALATION_SUBJECTS}. A signal policy escalates, and only competence or "
-            f"difficulty speaks to whether an item should be escalated; a topic signal answers a different question "
-            f"well -- at five times chance -- and says nothing about competence, so a policy built on it would escalate "
-            f"by subject while being reported as escalating by confidence")
+            f"about={about!r} is not one of {SUBJECTS}. The signal has to say what it is about, because a policy built "
+            f"on one thing and reported as built on another is the failure this argument exists to prevent. What it is "
+            f"NOT is a judgement about which of them is worth escalating on: this function used to refuse everything "
+            f"except competence and difficulty, on the strength of one corpus, which made a study measuring topic to "
+            f"predict competence unable to say so. Whether the signal earns its place is decided by what is measured "
+            f"about it, not by which name it carries")
     item_ids = list(items if items is not None else table.items)
 
     def cost_of(item: str, tier: str) -> float | None:

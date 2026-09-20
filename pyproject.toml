@@ -24,7 +24,10 @@ dependencies = []
 [project.optional-dependencies]
 # Only for validating a record you have written by hand. The router does not need it.
 schema = ["jsonschema>=4"]
-dev = ["pytest>=7", "jsonschema>=4"]
+# PyYAML is here and nowhere else: the deploy manifests are YAML and a test that they parse needs a parser. The
+# "no runtime dependencies" rule above is about the router, which reads JSON and does arithmetic -- a dev-only parser
+# cannot break a component that decides where money goes.
+dev = ["pytest>=7", "jsonschema>=4", "pyyaml>=6"]
 
 [project.scripts]
 tierbook = "tierbook.cli:main"
@@ -43,4 +46,7 @@ packages = ["src/tierbook"]
 # candidate file is deployed away from a ledger, which is everywhere. A test asserts it is present.
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "harness/tests"]
+# The example's tests are collected with the rest. An example whose tests nobody runs is documentation that has
+# stopped being true, and this one exists to prove the mechanism carries logic it has never heard of -- which is a claim
+# that has to be checked on every commit rather than the day it was written.
+testpaths = ["tests", "harness/tests", "examples/opencode_ops/tests"]

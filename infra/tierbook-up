@@ -1,0 +1,1063 @@
+#!/usr/bin/env bash
+#
+# tierbook-up -- bring the gateway, the cluster and the served box to a state tierbook can drive, in one command.
+#
+# WHY THIS EXISTS. tierbook measures three currencies against real candidates, and the candidates live in two other
+# repositories that each stand up on their own. Wiring them together took, by hand, about two hours and produced a
+# connection description nobody could reproduce. This script is that wiring, written down.
+#
+# THE ONE INVARIANT, and it is the reason for the state file: this script NEVER destroys anything it did not create.
+# Everything it creates is recorded as created_by_us; everything it finds is recorded as adopted. `down` acts only on
+# the first kind. An operator running this against an account that already has a production gateway must be able to
+# run `down` without holding their breath.
+#
+#   ./infra/tierbook-up doctor     what is missing before anything is spent
+#   ./infra/tierbook-up status     what exists right now, and which of it we would own
+#   ./infra/tierbook-up up         make it usable: adopt what exists, create what does not
+#   ./infra/tierbook-up connect    (re)write the connection file tierbook reads
+#   ./infra/tierbook-up patches    which patches against the other two repositories still apply, and which are upstream
+#   ./infra/tierbook-up patches --apply   apply them to the checkouts in the work directory, refusing on any that moved
+#   ./infra/tierbook-up measure    run the open-loop probe and DERIVE the box price from it
+#   ./infra/tierbook-up down       destroy only what this script created
+#
+# Every value comes from the environment or from a config file, and the ones that cannot be derived are REFUSED rather
+# than defaulted. See infra/README.md for the list and for why the two prices are supplied differently.
+set -euo pipefail
+
+# --- where things are ----------------------------------------------------------------------------------------------
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+
+# --- configuration -------------------------------------------------------------------------------------------------
+#
+# Read BEFORE anything derived from it. The first version computed the work directory two lines above this and then
+# sourced the file, so `TIERBOOK_WORK_DIR` set in config.env was silently ignored and a run wrote its state, its
+# checkouts and its connection file somewhere the operator had not asked for. Every value the config can set has to be
+# read before the first thing that reads it.
+
+[ -f "${TIERBOOK_INFRA_CONFIG:-$HERE/config.env}" ] && . "${TIERBOOK_INFRA_CONFIG:-$HERE/config.env}"
+
+WORK="${TIERBOOK_WORK_DIR:-$HOME/tmp/tierbook/infra}"
+STATE="$WORK/state.json"
+CONNECTION="${TIERBOOK_CONNECTION_FILE:-$WORK/connection.json}"
+# Overridable so the applier can be exercised against content a test controls. The applier is the part with three
+# branches and therefore the part worth testing; the real patches are checked separately for being valid diffs.
+PATCH_DIR="${TIERBOOK_PATCH_DIR:-$HERE/patches}"
+
+AWS_PROFILE_ARG=()
+[ -n "${AWS_PROFILE:-}" ] && AWS_PROFILE_ARG=(--profile "$AWS_PROFILE")
+
+GATEWAY_MODE="${TIERBOOK_GATEWAY:-auto}"          # auto | create | existing | skip
+CLUSTER_MODE="${TIERBOOK_CLUSTER:-auto}"          # auto | create | existing | skip
+
+GATEWAY_PREFIX="${TIERBOOK_GATEWAY_PREFIX:-}"
+GATEWAY_REGION="${TIERBOOK_GATEWAY_REGION:-us-east-1}"
+GATEWAY_REPO="${TIERBOOK_GATEWAY_REPO:-https://github.com/littlemex/stratoclave.git}"
+#: The exact commit of the gateway this was verified against. Neither of the two repositories cuts versions, so a commit
+#: is the only thing that names a state of them -- and "the tip of main" is not a state, it is whatever main happens to
+#: be the day somebody runs this. Pinning is what makes a run reproducible and a failure attributable.
+GATEWAY_REF="${TIERBOOK_GATEWAY_REF:-db7760356d9f87a4a11ee3a3b01607fc397942af}"
+GATEWAY_ADMIN_EMAIL="${TIERBOOK_GATEWAY_ADMIN_EMAIL:-}"
+GATEWAY_CONTAINER_CLI="${TIERBOOK_CONTAINER_CLI:-docker}"
+
+CLUSTER_NAME="${TIERBOOK_CLUSTER_NAME:-}"
+CLUSTER_REGION="${TIERBOOK_CLUSTER_REGION:-ap-northeast-1}"
+CLUSTER_REPO="${TIERBOOK_CLUSTER_REPO:-git@github.com:littlemex/distributed-ai.git}"
+CLUSTER_REF="${TIERBOOK_CLUSTER_REF:-b16a7d36a39cd5a8127069cf8c6cba78f4b0ecce}"
+CLUSTER_STATE_BUCKET="${TIERBOOK_CLUSTER_STATE_BUCKET:-}"
+CLUSTER_LOCK_TABLE="${TIERBOOK_CLUSTER_LOCK_TABLE:-}"
+
+BOX_MODEL="${TIERBOOK_BOX_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}"
+BOX_POOL="${TIERBOOK_BOX_POOL:-gpu-dev}"
+BOX_INSTANCE="${TIERBOOK_BOX_INSTANCE:-g6e.xlarge}"
+BOX_MEMORY="${TIERBOOK_BOX_MEMORY:-16Gi}"
+BOX_SHM="${TIERBOOK_BOX_SHM:-4Gi}"
+BOX_CPU="${TIERBOOK_BOX_CPU:-2}"
+BOX_MAX_LEN="${TIERBOOK_BOX_MAX_MODEL_LEN:-4096}"
+BOX_SEATS="${TIERBOOK_BOX_SEATS:-}"               # read from the engine log when empty
+
+API_MODEL="${TIERBOOK_API_MODEL:-}"
+API_PRICE_PER_MTOK="${TIERBOOK_API_PRICE_PER_MTOK:-}"
+
+PROBE_RATE="${TIERBOOK_PROBE_RATE_PER_SECOND:-96}"
+PROBE_SECONDS="${TIERBOOK_PROBE_SECONDS:-60}"
+PROBE_DEADLINE="${TIERBOOK_PROBE_DEADLINE_SECONDS:-8}"
+REQUIRED_PER_HOUR="${TIERBOOK_REQUIRED_PER_HOUR:-100}"
+
+# --- output --------------------------------------------------------------------------------------------------------
+
+G=$'\033[0;32m'; Y=$'\033[1;33m'; R=$'\033[0;31m'; B=$'\033[0;34m'; N=$'\033[0m'
+info() { printf '%s[tierbook]%s %s\n' "$G" "$N" "$1"; }
+warn() { printf '%s[tierbook]%s %s\n' "$Y" "$N" "$1"; }
+step() { printf '\n%s[tierbook]%s == %s ==\n' "$B" "$N" "$1"; }
+die()  { printf '%s[tierbook]%s %s\n' "$R" "$N" "$1" >&2; exit 1; }
+
+# A refusal, not a default. Named separately because this script's whole discipline is that a value nobody supplied is
+# not a value of zero, and the message has to say which of the two kinds of number is missing.
+refuse() { printf '%s[tierbook]%s %s\n' "$R" "$N" "$1" >&2; exit 2; }
+
+# --- state ---------------------------------------------------------------------------------------------------------
+#
+# One JSON object, written whole each time. The fields that matter are the `*_owned` booleans: they are the difference
+# between a teardown that cleans up after itself and a teardown that deletes somebody's gateway.
+
+state_init() {
+  mkdir -p "$WORK"
+  [ -f "$STATE" ] || printf '{}\n' > "$STATE"
+}
+
+state_get() {  # state_get <key> [default]
+  /usr/bin/python3 - "$STATE" "$1" "${2:-}" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+v = d.get(sys.argv[2], sys.argv[3])
+# Booleans come back as JSON `true`/`false`, NOT as Python's `True`/`False`. The shell compares these against the
+# literal `true`, and printing Python's repr made every comparison fail -- which meant `down` skipped destroying the
+# very resources it had created and left them billing. The test for the teardown is what found it.
+if isinstance(v, bool):
+    print("true" if v else "false")
+else:
+    print("" if v is None else (json.dumps(v) if isinstance(v, (dict, list)) else v))
+PY
+}
+
+state_set() {  # state_set <key> <value> [--json]
+  /usr/bin/python3 - "$STATE" "$1" "$2" "${3:-}" <<'PY'
+import json, sys
+path, key, value, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    d = json.load(open(path))
+except Exception:
+    d = {}
+if mode == "--json":
+    value = json.loads(value)
+elif value in ("true", "false"):
+    value = value == "true"
+d[key] = value
+json.dump(d, open(path, "w"), indent=1, sort_keys=True)
+PY
+}
+
+# --- prerequisites -------------------------------------------------------------------------------------------------
+
+cmd_doctor() {
+  step "prerequisites"
+  local missing=0
+  for t in aws /usr/bin/python3 git; do
+    if command -v "$t" >/dev/null 2>&1 || [ -x "$t" ]; then info "found $t"
+    else warn "MISSING $t"; missing=1; fi
+  done
+  for t in terraform kubectl helm node npm; do
+    # Presence, not a parsed version. Three of these five print their version in a different shape and one prints JSON,
+    # so a single probe produced "npm ({)" -- a version string nobody can read is worse than no version string.
+    if command -v "$t" >/dev/null 2>&1; then info "found $t at $(command -v "$t")"
+    else warn "MISSING $t -- needed only to CREATE (adopting an existing one does not need it)"; fi
+  done
+  if [ -n "${TIERBOOK_IMAGE_BUILDER:-}" ]; then
+    info "a remote image builder is configured ($TIERBOOK_IMAGE_BUILDER), so no local container runtime is needed"
+  elif command -v "$GATEWAY_CONTAINER_CLI" >/dev/null 2>&1; then
+    info "found container runtime $GATEWAY_CONTAINER_CLI"
+  else
+    warn "MISSING container runtime '$GATEWAY_CONTAINER_CLI' -- needed only to build the gateway image."
+    warn "  Set TIERBOOK_CONTAINER_CLI=finch (or nerdctl, podman), or TIERBOOK_IMAGE_BUILDER=<ssm-instance-id> to"
+    warn "  build on a remote host. The gateway's own build script already reads CONTAINER_CLI."
+  fi
+
+  step "identity and permissions"
+  local who
+  who="$(aws sts get-caller-identity "${AWS_PROFILE_ARG[@]}" --query Arn --output text 2>/dev/null)" \
+    || die "aws sts get-caller-identity failed. Authenticate first (this script never authenticates for you)."
+  info "caller: $who"
+  info "the operator is assumed to hold the rights for all three: tierbook, the gateway stacks, and the cluster."
+
+  step "configuration"
+  [ -n "$GATEWAY_PREFIX" ] || warn "TIERBOOK_GATEWAY_PREFIX unset -- required unless TIERBOOK_GATEWAY=skip"
+  if [ -n "$GATEWAY_PREFIX" ] && [ "$GATEWAY_MODE" != existing ] && [ "$GATEWAY_MODE" != skip ]; then
+    local retained; retained="$(gateway_retained_here)"
+    if [ -n "$retained" ]; then
+      warn "the prefix '$GATEWAY_PREFIX' has been used before. A create would fail partway through on these, which are"
+      warn "  retained on purpose when the stacks are destroyed:"
+      printf '%s\n' "$retained" | while read -r line; do warn "  $line"; done
+      warn "  Use an unused prefix, or delete them deliberately."
+    fi
+  fi
+  [ -n "$CLUSTER_NAME" ]   || warn "TIERBOOK_CLUSTER_NAME unset -- required unless TIERBOOK_CLUSTER=skip"
+  [ -n "$API_MODEL" ]      || warn "TIERBOOK_API_MODEL unset -- the metered arm has no model id"
+  if [ -z "$API_PRICE_PER_MTOK" ]; then
+    warn "TIERBOOK_API_PRICE_PER_MTOK unset. This one is NOT derived and NOT defaulted: it is a published list price,"
+    warn "  a different kind of fact from the box's price, which this script derives from a measurement. Supply it."
+  fi
+  [ "$missing" = 0 ] || die "missing a tool this script cannot work without."
+  info "doctor finished. Nothing was created and nothing was charged."
+}
+
+# --- the gateway ---------------------------------------------------------------------------------------------------
+
+gateway_stacks_present() {
+  aws cloudformation describe-stacks "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --stack-name "${GATEWAY_PREFIX}-ecs" --query 'Stacks[0].StackStatus' --output text 2>/dev/null | grep -q COMPLETE
+}
+
+gateway_base_url() {
+  local dom
+  dom="$(aws cloudformation describe-stacks "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --stack-name "${GATEWAY_PREFIX}-frontend" \
+    --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" --output text 2>/dev/null || true)"
+  [ -n "$dom" ] && [ "$dom" != "None" ] && printf 'https://%s' "$dom"
+}
+
+# Fetch one commit and check it out, rather than cloning a branch. `--depth 1` of a SHA gets that commit's tree and no
+# history, which is all a deploy needs and is the only form that cannot drift: a shallow clone of `main` is a clone of
+# whatever main was at that minute, and two runs a week apart would deploy different code while reporting the same thing.
+#
+# An existing checkout is moved onto the pin rather than left alone. A stale working tree that happens to be there is the
+# quiet version of the same problem.
+checkout_pinned() {  # checkout_pinned <dir> <repo> <ref> <name>
+  local dir="$1" repo="$2" ref="$3" name="$4"
+  if [ ! -d "$dir/.git" ]; then
+    info "$name: cloning at $ref"
+    mkdir -p "$dir"
+    git -C "$dir" init -q
+    git -C "$dir" remote add origin "$repo"
+  fi
+  git -C "$dir" fetch -q --depth 1 origin "$ref" 2>/dev/null \
+    || git -C "$dir" fetch -q origin "$ref" \
+    || die "$name: could not fetch $ref from $repo. Fetching a single commit needs the FULL 40 character id -- most
+  servers refuse an abbreviated one -- so set TIERBOOK_GATEWAY_REF or TIERBOOK_CLUSTER_REF to the complete hash."
+  git -C "$dir" checkout -q --detach FETCH_HEAD || die "$name: could not check out $ref."
+  git -C "$dir" clean -qfd
+  local at; at="$(git -C "$dir" rev-parse HEAD)"
+  info "$name: at $at"
+  printf '%s' "$at"
+}
+
+# **A gateway prefix is single-use.** Several of its resources are created with RemovalPolicy.RETAIN because they hold
+# data -- the registry's images, the DynamoDB tables, the bootstrap-admin secret -- so destroying the stacks leaves them
+# behind ON PURPOSE. A later `create` with the same prefix then fails partway through, once CloudFormation reaches the
+# first of them, with "already exists" and a CDK stack trace: eight minutes in, and after the image build.
+#
+# Listed and refused up front instead. Deleting them is the operator's decision and not this script's, because what
+# survives a teardown here is exactly the data somebody chose to keep.
+gateway_retained_here() {  # prints one line per retained resource found under this prefix
+  aws ecr describe-repositories "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --repository-names "${GATEWAY_PREFIX}-backend" --query 'repositories[0].repositoryName' --output text 2>/dev/null \
+    | grep -v '^None$' | sed 's/^/  ECR repository /' || true
+  aws dynamodb list-tables "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --query "TableNames[?starts_with(@, '${GATEWAY_PREFIX}-')]" --output text 2>/dev/null \
+    | tr '\t' '\n' | grep -v '^$' | sed 's/^/  DynamoDB table /' || true
+  aws secretsmanager describe-secret "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --secret-id "${GATEWAY_PREFIX}/bootstrap-admin-temp-password" --query 'Name' --output text 2>/dev/null \
+    | grep -v '^None$' | sed 's/^/  secret /' || true
+}
+
+gateway_refuse_reused_prefix() {
+  local found; found="$(gateway_retained_here)"
+  [ -n "$found" ] || return 0
+  refuse "the prefix '$GATEWAY_PREFIX' has been used before. These resources are retained when the gateway's stacks are
+  destroyed, because they hold data, and the deploy cannot be created over them:
+
+$found
+
+  Use a prefix nobody has used -- the safe move, and what this script would do if the choice were its to make -- or
+  delete the ones above deliberately. A retained table is somebody's ledger."
+}
+
+gateway_checkout() {
+  local dir="$WORK/stratoclave"
+  GATEWAY_AT="$(checkout_pinned "$dir" "$GATEWAY_REPO" "$GATEWAY_REF" gateway)"
+  state_set gateway_commit "$GATEWAY_AT"
+  ( cd "$dir/iac" && [ -d node_modules ] || npm install >/dev/null ) || die "gateway npm install failed."
+  printf '%s' "$dir"
+}
+
+cluster_checkout() {
+  local dir="$WORK/distributed-ai"
+  CLUSTER_AT="$(checkout_pinned "$dir" "$CLUSTER_REPO" "$CLUSTER_REF" cluster)"
+  state_set cluster_commit "$CLUSTER_AT"
+  printf '%s' "$dir"
+}
+
+gateway_create() {
+  [ -n "$GATEWAY_PREFIX" ] || refuse "TIERBOOK_GATEWAY_PREFIX is required to create a gateway. A default prefix would
+  deploy beside -- or worse, into -- somebody else's stacks."
+  [ -n "$GATEWAY_ADMIN_EMAIL" ] || refuse "TIERBOOK_GATEWAY_ADMIN_EMAIL is required: the gateway seeds its first
+  administrator from it and nothing else can issue the API key tierbook needs."
+
+  gateway_refuse_reused_prefix
+
+  local dir; dir="$(gateway_checkout)"
+
+  step "applying patches to the gateway checkout"
+  apply_patches stratoclave "$dir"
+
+  # **The image has to exist before the ECS service does.** The service's task definition names a tag in the registry,
+  # and a service whose task cannot pull never reaches a steady state -- so CloudFormation waits on it until its own
+  # timeout, roughly three hours, with the real reason visible only in the service's events
+  # (`CannotPullContainerError ... not found`). Deploying everything and then building, which is the order the upstream
+  # installer uses, therefore hangs on a FRESH deployment; it only appears to work when a previous run left an image
+  # behind. Measured: a first run sat on `ECS::Service ... CREATE_IN_PROGRESS` while the registry held zero images.
+  #
+  # So the registry comes up on its own first, then the image, then everything else. The registry stack is a handful of
+  # resources and takes under a minute, and `deploy-all.sh` afterwards finds it already there.
+  step "deploying the registry alone, so the image can exist before the service that pulls it"
+  ( cd "$dir/iac" \
+    && AWS_PROFILE="${AWS_PROFILE:-}" STRATOCLAVE_PREFIX="$GATEWAY_PREFIX" STRATOCLAVE_REGION="$GATEWAY_REGION" \
+       CDK_DEFAULT_REGION="$GATEWAY_REGION" \
+       npx cdk deploy "${GATEWAY_PREFIX}-ecr" --require-approval never ) || die "the registry stack failed."
+
+  step "building and pushing the gateway image"
+  gateway_build_image "$dir"
+
+  # The admin email goes in as an ordinary deploy input, which works because the gateway now passes it through to the
+  # container itself. Before that fix landed upstream this deploy finished with no administrator and no error.
+  step "deploying the remaining gateway stacks (prefix '$GATEWAY_PREFIX', 15-20 min, billable)"
+  ( cd "$dir/iac" \
+    && AWS_PROFILE="${AWS_PROFILE:-}" STRATOCLAVE_PREFIX="$GATEWAY_PREFIX" STRATOCLAVE_REGION="$GATEWAY_REGION" \
+       CDK_DEFAULT_REGION="$GATEWAY_REGION" ALLOW_ADMIN_CREATION=false \
+       STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL="$GATEWAY_ADMIN_EMAIL" \
+       ./scripts/deploy-all.sh ) || die "gateway deploy failed."
+
+  # The backend seeds the administrator on its first healthy start, which happens once the image is in place. Nothing to
+  # do here but wait for the service to settle.
+  step "waiting for the service to become stable, which is when the administrator is seeded"
+  aws ecs wait services-stable "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --cluster "${GATEWAY_PREFIX}-cluster" --services "${GATEWAY_PREFIX}-backend" || true
+
+  state_set gateway_owned true
+  state_set gateway_prefix "$GATEWAY_PREFIX"
+  state_set gateway_region "$GATEWAY_REGION"
+}
+
+gateway_build_image() {
+  local dir="$1"
+  if [ -n "${TIERBOOK_IMAGE_BUILDER:-}" ]; then
+    info "building the image on remote host ${TIERBOOK_IMAGE_BUILDER} (no container runtime needed here)"
+    gateway_build_image_remote
+    return
+  fi
+  command -v "$GATEWAY_CONTAINER_CLI" >/dev/null 2>&1 \
+    || die "no container runtime. Set TIERBOOK_CONTAINER_CLI or TIERBOOK_IMAGE_BUILDER."
+  ( cd "$dir/iac" \
+    && AWS_REGION="$GATEWAY_REGION" STRATOCLAVE_PREFIX="$GATEWAY_PREFIX" CONTAINER_CLI="$GATEWAY_CONTAINER_CLI" \
+       ./scripts/build-and-push.sh ) || die "image build failed."
+}
+
+gateway_build_image_remote() {
+  # Deliberately minimal: it runs the gateway's OWN build script on a host that has a runtime. The private container
+  # config directory is a workaround for a shared builder whose ~/.docker is root-owned; see workarounds below.
+  local script="$WORK/remote-build.sh"
+  cat > "$script" <<REMOTE
+#!/usr/bin/env bash
+set -euo pipefail
+export AWS_REGION="$GATEWAY_REGION" STRATOCLAVE_PREFIX="$GATEWAY_PREFIX" CONTAINER_CLI=docker
+export DOCKER_CONFIG=\$HOME/.docker-tierbook BUILDX_CONFIG=\$HOME/.docker-tierbook/buildx
+mkdir -p "\$BUILDX_CONFIG" "\$HOME/tierbook-build" && cd "\$HOME/tierbook-build"
+rm -rf stratoclave && git clone -q --depth 1 "$GATEWAY_REPO" stratoclave && cd stratoclave
+./iac/scripts/build-and-push.sh
+REMOTE
+  local b64; b64="$(base64 < "$script" | tr -d '\n')"
+  /usr/bin/python3 - "$b64" "${TIERBOOK_IMAGE_BUILDER_USER:-ec2-user}" > "$WORK/ssm-params.json" <<'PY'
+import json, sys
+b64, user = sys.argv[1], sys.argv[2]
+json.dump({"commands": [
+  f"echo {b64} | base64 -d | sudo -u {user} tee /home/{user}/tierbook-remote-build.sh > /dev/null",
+  f"sudo chmod +x /home/{user}/tierbook-remote-build.sh",
+  f"sudo -u {user} bash -lc /home/{user}/tierbook-remote-build.sh",
+]}, open(sys.stdout.fileno(), "w"))
+PY
+  local cid
+  cid="$(aws ssm send-command "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --instance-ids "$TIERBOOK_IMAGE_BUILDER" --document-name AWS-RunShellScript \
+    --parameters "file://$WORK/ssm-params.json" --timeout-seconds 1800 \
+    --query 'Command.CommandId' --output text)" || die "could not dispatch the remote build."
+  info "remote build dispatched: $cid -- waiting"
+  local status=""
+  for _ in $(seq 1 120); do
+    sleep 15
+    status="$(aws ssm get-command-invocation "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+      --command-id "$cid" --instance-id "$TIERBOOK_IMAGE_BUILDER" --query Status --output text 2>/dev/null || echo InProgress)"
+    case "$status" in Success) info "remote build succeeded"; return 0 ;; Failed|Cancelled|TimedOut) break ;; esac
+  done
+  aws ssm get-command-invocation "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" --command-id "$cid" \
+    --instance-id "$TIERBOOK_IMAGE_BUILDER" --query 'StandardErrorContent' --output text | tail -20 >&2 || true
+  die "remote image build ended as $status"
+}
+
+# --- the cluster ---------------------------------------------------------------------------------------------------
+
+cluster_present() {
+  aws eks describe-cluster "${AWS_PROFILE_ARG[@]}" --region "$CLUSTER_REGION" --name "$CLUSTER_NAME" \
+    --query 'cluster.status' --output text 2>/dev/null | grep -q ACTIVE
+}
+
+cluster_context() { printf 'arn:aws:eks:%s:%s:cluster/%s' "$CLUSTER_REGION" "$(account_id)" "$CLUSTER_NAME"; }
+
+account_id() { aws sts get-caller-identity "${AWS_PROFILE_ARG[@]}" --query Account --output text; }
+
+kc() { kubectl --context "$(cluster_context)" "$@"; }
+
+cluster_create() {
+  [ -n "$CLUSTER_NAME" ] || refuse "TIERBOOK_CLUSTER_NAME is required to create a cluster."
+  [ -n "$CLUSTER_STATE_BUCKET" ] || refuse "TIERBOOK_CLUSTER_STATE_BUCKET is required. Terraform state for a cluster
+  must not live only on this laptop: losing it means the cluster cannot be destroyed, which is the expensive failure."
+
+  local dir; dir="$(cluster_checkout)"
+  local eks="$dir/infra/eks"
+
+  step "writing the cluster's inputs"
+  cat > "$eks/terraform.tfvars" <<TFVARS
+# Written by tierbook-up. Storage is off deliberately: all three filesystems bill continuously and this cluster exists
+# to serve a box and be measured, not to hold data.
+region             = "$CLUSTER_REGION"
+cluster_name       = "$CLUSTER_NAME"
+kubernetes_version = "${TIERBOOK_KUBERNETES_VERSION:-1.35}"
+vpc_cidr           = "${TIERBOOK_VPC_CIDR:-10.42.0.0/16}"
+environment        = "dev"
+
+gpu_operator_install_driver = false
+gpu_operator_enable_gdrcopy = false
+
+cpu_nodepool_enabled    = true
+cpu_instance_categories = ["c", "m", "r"]
+
+fsx_enabled     = false
+openzfs_enabled = false
+efs_enabled     = false
+
+cb_alert_email_addresses = []
+
+accelerator_pools = {
+  $BOX_POOL = {
+    instance_types      = ["$BOX_INSTANCE"]
+    device_plugin       = "nvidia"
+    capacity_type       = "on-demand"
+    efa_interface_count = ${TIERBOOK_EFA_INTERFACES:-0}
+  }
+}
+
+tags = {
+  Project   = "distributed-ai"
+  ManagedBy = "terraform"
+  Purpose   = "tierbook-candidate"
+}
+TFVARS
+
+  step "pointing terraform at remote state"
+  ( cd "$eks" && ./scripts/bootstrap-remote-state.sh -c "$CLUSTER_NAME" -b "$CLUSTER_STATE_BUCKET" \
+      -r "$CLUSTER_REGION" ${CLUSTER_LOCK_TABLE:+-t "$CLUSTER_LOCK_TABLE"} \
+      ${AWS_PROFILE:+-p "$AWS_PROFILE"} ) || die "remote state bootstrap failed."
+
+  step "applying the cluster (about 20 min, billable)"
+  ( cd "$eks" && terraform init -backend-config=backend.hcl -input=false >/dev/null \
+      && terraform apply -input=false -auto-approve ) || die "cluster apply failed."
+
+  state_set cluster_owned true
+  state_set cluster_name "$CLUSTER_NAME"
+  state_set cluster_region "$CLUSTER_REGION"
+  state_set cluster_dir "$eks"
+}
+
+# --- the served box ------------------------------------------------------------------------------------------------
+
+box_present() { kc get svc gpu-vllm >/dev/null 2>&1; }
+
+box_deploy() {
+  local dir; dir="$(cluster_checkout)"
+  step "applying patches to the cluster checkout"
+  apply_patches distributed-ai "$dir"
+  local charts="$dir/infra/eks/charts"
+
+  aws eks update-kubeconfig "${AWS_PROFILE_ARG[@]}" --region "$CLUSTER_REGION" --name "$CLUSTER_NAME" >/dev/null \
+    || die "could not write a kubeconfig for $CLUSTER_NAME."
+
+  step "rendering the serving chart"
+  helm dependency update --skip-refresh "$charts/experiments" >/dev/null 2>&1 || true
+  helm template tierbook-box "$charts/experiments" \
+    --set gpuServingVllm.enabled=true \
+    --set gpuServingVllm.nodeRole="$BOX_POOL" \
+    --set gpuServingVllm.model="$BOX_MODEL" \
+    --set gpuServingVllm.memory="$BOX_MEMORY" \
+    --set gpuServingVllm.cpu="$BOX_CPU" \
+    --set gpuServingVllm.shmSize="$BOX_SHM" \
+    --set gpuServingVllm.maxModelLen="$BOX_MAX_LEN" \
+    --set "gpuServingVllm.extraArgs={--enable-auto-tool-choice,--tool-call-parser=${TIERBOOK_TOOL_CALL_PARSER:-hermes}}" \
+    > "$WORK/box.yaml" || die "helm template failed."
+
+  # Checked here rather than trusted: if the patch did not take, the flags are absent from the rendered args and the box
+  # will reject every request a coding agent sends -- with a 400 that reads like a bad answer rather than a refusal.
+  grep -q -- "--enable-auto-tool-choice" "$WORK/box.yaml" \
+    || die "the rendered box carries no tool-choice flags, so it would reject every request carrying tool schemas. The
+  chart takes extraArgs from the commit CLUSTER_REF pins; a pin older than that change renders them away silently. Check
+  which commit was checked out: \`tierbook-up status\`."
+
+  step "applying the box"
+  kc apply -f "$WORK/box.yaml" || die "could not apply the box."
+
+  info "waiting for the box to become ready (the model has to be pulled first)"
+  kc wait --for=condition=available deployment/gpu-vllm --timeout=900s \
+    || die "the box did not become ready. Check: kubectl logs -l app=gpu-vllm"
+  state_set box_owned true
+}
+
+# --- patches against the other two repositories ---------------------------------------------------------------------
+#
+# THERE ARE NONE RIGHT NOW, and that is the point of the pin above rather than a reason to delete this. Both gaps this
+# mechanism was built for -- the gateway's first-admin variable never reaching its task definition, and the serving
+# chart's closed list of engine arguments -- are fixed upstream, and `GATEWAY_REF`/`CLUSTER_REF` name the commits that
+# carry the fixes. A pin is the stronger of the two mechanisms: a patch compensates for code that is wrong, a pin states
+# which code was verified. `infra/patches/README.md` says how to add one when the next gap turns up.
+#
+# WHY PATCHES RATHER THAN LIVE SURGERY. Two gaps upstream stop this wiring working, and there are two ways to deal with
+# them: reach into the deployed resources afterwards and fix them there, or patch the source before deploying. The first
+# version did the former -- registering a task definition revision, patching a running Deployment -- and it was wrong in
+# three ways that all have the same root: a change made to a live resource is not the change anybody upstream can read.
+#
+#   * it cannot be sent upstream. A diff can; `git format-patch` of these files is the contribution.
+#   * it drifts silently. A patch that no longer matches FAILS; live surgery keeps "working" against a resource whose
+#     shape moved underneath it.
+#   * it cannot retire itself honestly. "Is the fix upstream yet?" is `git apply --reverse --check`, which is a real
+#     question with a real answer, rather than an inspection of a deployed object that may have been patched by hand.
+#
+# So `infra/patches/<repo>/*.patch` holds the diffs, and this function applies them to a fresh checkout. Each patch is
+# in one of exactly three states, and all three are handled rather than two:
+#
+#   already upstream  -- `git apply --reverse --check` succeeds. Skipped, and said out loud, so the day the fix lands
+#                        the patch becomes visibly unnecessary instead of quietly redundant.
+#   applies           -- applied with --3way, which tolerates upstream moving around the hunk.
+#   no longer matches -- REFUSED. Upstream changed the code the patch is about, and guessing is how a deploy proceeds
+#                        with half a fix in it.
+
+apply_patches() {  # apply_patches <repo-dir-name> <checkout>
+  local name="$1" checkout="$2"
+  local dir="$PATCH_DIR/$name"
+  [ -d "$dir" ] || { info "no patches for $name"; return 0; }
+  local any=0
+  for patch in "$dir"/*.patch; do
+    [ -e "$patch" ] || continue
+    any=1
+    local base; base="$(basename "$patch")"
+    if git -C "$checkout" apply --reverse --check "$patch" >/dev/null 2>&1; then
+      info "$name: $base is already upstream -- skipping (this patch can be deleted)"
+    elif git -C "$checkout" apply --3way --check "$patch" >/dev/null 2>&1; then
+      git -C "$checkout" apply --3way "$patch" || die "$name: $base passed its check and then failed to apply."
+      info "$name: applied $base"
+    else
+      die "$name: $base no longer matches this checkout. Upstream moved the code it is about, so applying part of it
+  would deploy half a fix. Regenerate the patch against the current checkout ($checkout) and re-run."
+    fi
+  done
+  [ "$any" = 1 ] || info "no patches for $name"
+}
+
+cmd_patches() {
+  # Reports by default; with --apply it calls the SAME `apply_patches` the deploy path calls, against the checkouts in
+  # the work directory. Two reasons for the second mode: preparing a checkout by hand before deploying is a real thing to
+  # want, and it means the refusal on a patch that no longer matches is reachable without spending money -- a refusal
+  # nothing can exercise is a refusal nobody has checked.
+  if [ "${1:-}" = --apply ]; then
+    for name in stratoclave distributed-ai; do
+      local checkout="$WORK/$name"
+      [ -d "$PATCH_DIR/$name" ] || continue
+      if [ -d "$checkout/.git" ]; then
+        step "applying patches to $name"
+        apply_patches "$name" "$checkout"
+      else
+        warn "no checkout at $checkout; nothing to apply to"
+      fi
+    done
+    return
+  fi
+  local checked=0
+  for name in stratoclave distributed-ai; do
+    local dir="$PATCH_DIR/$name"
+    [ -d "$dir" ] || continue
+    step "patches for $name"
+    local checkout
+    case "$name" in
+      stratoclave)     checkout="$WORK/stratoclave" ;;
+      distributed-ai)  checkout="$WORK/distributed-ai" ;;
+    esac
+    if [ ! -d "$checkout/.git" ]; then
+      warn "no checkout at $checkout yet, so their state cannot be read. Listing them instead:"
+      for patch in "$dir"/*.patch; do [ -e "$patch" ] && info "  $(basename "$patch")"; done
+      continue
+    fi
+    checked=1
+    for patch in "$dir"/*.patch; do
+      [ -e "$patch" ] || continue
+      local base; base="$(basename "$patch")"
+      if git -C "$checkout" apply --reverse --check "$patch" >/dev/null 2>&1; then
+        info "$base: ALREADY UPSTREAM -- delete it"
+      elif git -C "$checkout" apply --3way --check "$patch" >/dev/null 2>&1; then
+        info "$base: applies"
+      else
+        warn "$base: DOES NOT APPLY -- upstream moved; regenerate it"
+      fi
+    done
+  done
+  [ "$checked" = 1 ] || warn "nothing was checked against a real checkout. Run `up` once, or clone into $WORK."
+}
+
+# --- the API key the loop needs -------------------------------------------------------------------------------------
+
+gateway_issue_key() {
+  local base; base="$(gateway_base_url)"
+  [ -n "$base" ] || die "the gateway has no CloudFront domain output; it is not finished deploying."
+  local pool client
+  pool="$(aws cloudformation describe-stacks "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --stack-name "${GATEWAY_PREFIX}-cognito" \
+    --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)"
+  client="$(aws cloudformation describe-stacks "${AWS_PROFILE_ARG[@]}" --region "$GATEWAY_REGION" \
+    --stack-name "${GATEWAY_PREFIX}-cognito" \
+    --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text)"
+  [ -n "$pool" ] && [ -n "$client" ] || die "could not read the gateway's user pool from its own stack outputs."
+
+  AWS_PROFILE="${AWS_PROFILE:-}" /usr/bin/python3 - \
+    "$pool" "$client" "$base" "$GATEWAY_REGION" "$WORK" <<'PY'
+import boto3, json, os, pathlib, secrets, string, sys, urllib.error, urllib.request
+
+pool, client, base, region, work = sys.argv[1:6]
+profile = os.environ.get("AWS_PROFILE") or None
+sess = boto3.Session(profile_name=profile) if profile else boto3.Session()
+idp = sess.client("cognito-idp", region_name=region)
+
+users = idp.list_users(UserPoolId=pool).get("Users", [])
+if not users:
+    raise SystemExit(
+        "the gateway's user pool has no users, so there is no administrator and no API key can be issued.\n"
+        "\n"
+        "If this gateway was ADOPTED rather than created here, that is the expected outcome and not something this\n"
+        "script should fix: seeding an administrator means redeploying its ECS stack, and redeploying somebody else's\n"
+        "gateway is not this script's business. Two ways forward, and they are the operator's choice:\n"
+        "  * have whoever owns it create the first administrator, then re-run `tierbook-up connect`; or\n"
+        "  * point TIERBOOK_GATEWAY_PREFIX at a prefix of your own and let this script create one, where the patch in\n"
+        "    infra/patches/stratoclave makes the documented procedure actually work.\n"
+        "\n"
+        "If this gateway WAS created here, the deploy did not carry the bootstrap email. Check that the patch applied:\n"
+        "  ./infra/tierbook-up patches")
+username = users[0]["Username"]
+
+# A password of our own, set permanently, so the NEW_PASSWORD_REQUIRED exchange is not standing between this script and
+# the key it needs. The temporary password the backend wrote stays in Secrets Manager untouched.
+alphabet = string.ascii_letters + string.digits
+pw = "Tb!" + "".join(secrets.choice(alphabet) for _ in range(24)) + "7z"
+idp.admin_set_user_password(UserPoolId=pool, Username=username, Password=pw, Permanent=True)
+tok = idp.admin_initiate_auth(UserPoolId=pool, ClientId=client, AuthFlow="ADMIN_USER_PASSWORD_AUTH",
+                              AuthParameters={"USERNAME": username, "PASSWORD": pw})["AuthenticationResult"]
+
+# The access token, not the id token: the gateway refuses an id token outright, which is the correct behaviour and the
+# kind of thing worth writing down rather than rediscovering.
+req = urllib.request.Request(f"{base}/api/mvp/admin/users/{username}/api-keys", method="POST",
+                             data=json.dumps({"name": "tierbook-infra"}).encode())
+req.add_header("content-type", "application/json")
+req.add_header("authorization", f"Bearer {tok['AccessToken']}")
+try:
+    with urllib.request.urlopen(req, timeout=90) as r:
+        issued = json.loads(r.read())
+except urllib.error.HTTPError as e:
+    raise SystemExit(f"issuing an API key failed with {e.code}: {e.read()[:300].decode(errors='replace')}")
+
+p = pathlib.Path(work) / "api-key.txt"
+p.write_text(issued["plaintext_key"])
+p.chmod(0o600)
+print(f"issued key {issued['key_id'][:10]}... scopes {issued['scopes']} -> {p}")
+PY
+}
+
+# --- measuring, and deriving the box price from the measurement ------------------------------------------------------
+
+cmd_measure() {
+  cluster_present || die "no cluster named '$CLUSTER_NAME'; nothing to measure."
+  box_present || die "the box is not deployed; run `up` first."
+
+  step "reading the engine's own admission limit"
+  local seats="$BOX_SEATS"
+  if [ -z "$seats" ]; then
+    seats="$(kc logs -l app=gpu-vllm --tail=-1 2>/dev/null | grep -o 'max_num_seqs=[0-9]*' | head -1 | cut -d= -f2 || true)"
+  fi
+  if [ -n "$seats" ]; then
+    info "seats (max_num_seqs): $seats"
+  else
+    warn "could not read the seat count from the engine's log. Without it nothing downstream can tell a saturated box"
+    warn "  from a starved one, so the measurement will be recorded as a lower bound on that ground alone."
+  fi
+
+  # **Warm the engine before measuring it.** The readiness probe answers /health, which the server does before it has
+  # finished capturing CUDA graphs and filling its caches, so a probe that starts the instant `rollout status` returns is
+  # timing a cold engine. Measured: the same box, model, instance and arrival rate produced 5,680 of 5,680 requests
+  # completed when warm and 189 of 5,680 when measured immediately after readiness, with p50 latency 1.3s against 17s.
+  step "warming the engine, because readiness answers before the engine is fast"
+  local warm_pod warmed=0
+  warm_pod="$(kc get pod -l app=gpu-vllm -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+  [ -n "$warm_pod" ] || die "no serving pod to warm."
+  for i in $(seq 1 30); do
+    if kc exec "$warm_pod" -- python3 -c "
+import json,urllib.request
+b={'model':'$BOX_MODEL','messages':[{'role':'user','content':'warm'}],'max_tokens':16}
+r=urllib.request.Request('http://localhost:8000/v1/chat/completions',data=json.dumps(b).encode(),
+                         headers={'Content-Type':'application/json'})
+urllib.request.urlopen(r,timeout=30).read()" >/dev/null 2>&1; then
+      warmed=$((warmed + 1))
+      [ "$warmed" -ge 5 ] && break
+    fi
+    sleep 5
+  done
+  [ "$warmed" -ge 5 ] || warn "the engine answered fewer than five warm-up requests; the measurement may be of a cold box"
+  info "warm-up: $warmed requests answered"
+
+  step "running the open-loop probe INSIDE the cluster"
+  # In-cluster on purpose. Across a tunnel the number produced is the tunnel's, and this project has twice published a
+  # load generator's own limit as a box's capacity.
+  kc delete job tierbook-probe --ignore-not-found >/dev/null 2>&1 || true
+  kc create configmap tierbook-probe --from-file=open_loop_probe.py="$ROOT/tools/open_loop_probe.py" \
+    --dry-run=client -o yaml | kc apply -f - >/dev/null
+  /usr/bin/python3 - "$BOX_MODEL" "$PROBE_RATE" "$PROBE_SECONDS" "$PROBE_DEADLINE" "${seats:-}" > "$WORK/probe-job.yaml" <<'PY'
+import sys
+model, rate, seconds, deadline, seats = sys.argv[1:6]
+args = [f'"--url=http://gpu-vllm:8000/v1/chat/completions"', f'"--model={model}"',
+        f'"--rate-per-second={rate}"', f'"--seconds={seconds}"', f'"--deadline-seconds={deadline}"',
+        '"--max-tokens=64"']
+if seats:
+    args.append(f'"--seats={seats}"')
+print(f"""apiVersion: batch/v1
+kind: Job
+metadata: {{ name: tierbook-probe }}
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: python:3.12-slim
+          command: ["python", "/probe/open_loop_probe.py"]
+          args: [{", ".join(args)}]
+          volumeMounts: [{{ name: probe, mountPath: /probe }}]
+          resources:
+            requests: {{ cpu: "1", memory: 1Gi }}
+            limits:   {{ cpu: "3", memory: 2Gi }}
+      volumes:
+        - name: probe
+          configMap: {{ name: tierbook-probe }}""")
+PY
+  kc apply -f "$WORK/probe-job.yaml" >/dev/null
+  kc wait --for=condition=complete job/tierbook-probe --timeout="$(( PROBE_SECONDS + 240 ))s" \
+    || die "the probe did not finish. Check: kubectl logs job/tierbook-probe"
+  kc logs job/tierbook-probe > "$WORK/probe.json" 2>/dev/null || die "could not read the probe's output."
+  /usr/bin/python3 -c "import json,sys; json.load(open('$WORK/probe.json'))" \
+    || die "the probe's output is not the JSON this script expects; see $WORK/probe.json"
+
+  # **A run in overload cannot price anything.** When most of what came back missed the deadline, the token rate is a
+  # property of the queue rather than of the box, and dividing an hourly instance price by it produces a number that
+  # looks like a price and is an artifact. Measured: at 96 arrivals a second this box completed 189 of 5,680 requests
+  # with 40 inside the deadline, and the price that fell out was $18.29 per output Mtok against $0.15 from a run the box
+  # could actually serve -- a factor of 120, with nothing in the output to say which was which.
+  #
+  # So the refusal is here, with the numbers that produced it and the one knob that fixes it.
+  /usr/bin/python3 - "$WORK/probe.json" <<'PY' || refuse "the probe ran the box into overload, so no price can be derived
+  from it. Lower TIERBOOK_PROBE_RATE_PER_SECOND until most requests come back inside the deadline, and measure again."
+import json, sys
+d = json.load(open(sys.argv[1]))
+o = d["observed"]
+completed, offered, inside = o["completed"], o["offered_arrivals"], o["inside_deadline"]
+served = completed / offered if offered else 0.0
+in_time = inside / completed if completed else 0.0
+print(f"  offered {offered}, completed {completed} ({served:.1%}), inside the deadline {inside} ({in_time:.1%} of completed)")
+if served < 0.9 or in_time < 0.9:
+    print("  this is a box in overload, not a box being measured", file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+  step "deriving the box price from what was measured"
+  # THE RULE THIS IMPLEMENTS: a fixed-cost candidate's price per token cannot be stated without a measured token rate.
+  # The instance price comes from the price list API rather than from a table in this script, because a price typed here
+  # is wrong the first time the region or the instance type changes.
+  local hourly
+  hourly="$(aws pricing get-products "${AWS_PROFILE_ARG[@]}" --region us-east-1 --service-code AmazonEC2 \
+    --filters "Type=TERM_MATCH,Field=instanceType,Value=$BOX_INSTANCE" \
+              "Type=TERM_MATCH,Field=regionCode,Value=$CLUSTER_REGION" \
+              "Type=TERM_MATCH,Field=tenancy,Value=Shared" \
+              "Type=TERM_MATCH,Field=operatingSystem,Value=Linux" \
+              "Type=TERM_MATCH,Field=preInstalledSw,Value=NA" \
+              "Type=TERM_MATCH,Field=capacitystatus,Value=Used" \
+    --max-results 1 --output json 2>/dev/null \
+    | /usr/bin/python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for p in d.get('PriceList', []):
+    o=json.loads(p)
+    for t in o['terms']['OnDemand'].values():
+        for dim in t['priceDimensions'].values():
+            print(dim['pricePerUnit']['USD']); raise SystemExit
+" || true)"
+  [ -n "$hourly" ] || refuse "could not read the on-demand hourly price for $BOX_INSTANCE in $CLUSTER_REGION from the
+  price list API. This script will not substitute a number of its own: the box's whole price rests on it."
+
+  /usr/bin/python3 - "$WORK/probe.json" "$hourly" "$WORK/box-price.json" <<'PY'
+import json, sys
+probe = json.load(open(sys.argv[1]))
+hourly = float(sys.argv[2])
+obs = probe["observed"]
+tok_per_hour = obs["output_tokens"] / obs["wall_seconds"] * 3600.0
+if tok_per_hour <= 0:
+    raise SystemExit("the probe recorded no output tokens, so no price can be derived from it.")
+usd_per_mtok = hourly / (tok_per_hour / 1e6)
+lower_bound = bool(probe.get("understated_because")) or (
+    probe["offered"].get("seats") is not None
+    and probe["offered"]["concurrency"] < probe["offered"]["seats"])
+out = {
+    "instance_usd_per_hour": hourly,
+    "output_tokens_per_hour": round(tok_per_hour, 1),
+    "usd_per_output_mtok": round(usd_per_mtok, 6),
+    "throughput_is_lower_bound": lower_bound,
+    "understated_because": probe.get("understated_because", ""),
+    # Said explicitly because the direction is the thing people get backwards: dividing by a rate that is a LOWER bound
+    # makes the price an UPPER bound. Quoting it as the price is the mistake.
+    "price_is_upper_bound": lower_bound,
+}
+json.dump(out, open(sys.argv[3], "w"), indent=1)
+print(f"  instance ${hourly}/hour over {tok_per_hour/1e6:.3f} Mtok/hour -> ${usd_per_mtok:.4f} per output Mtok"
+      + ("  (an UPPER bound: the rate it divides is a lower bound)" if lower_bound else ""))
+PY
+  state_set probe_file "$WORK/probe.json"
+  state_set box_price_file "$WORK/box-price.json"
+}
+
+# --- the connection file --------------------------------------------------------------------------------------------
+#
+# ONE shape, written here and read by tools/verify_ops_live.py. It is a named contract rather than a pile of arguments
+# because two sides writing the same shape from memory is how a seam drifts; tests/test_infra_connection.py pins it.
+
+cmd_connect() {
+  local base key box_price
+  base="$(gateway_base_url || true)"
+  key=""
+  [ -f "$WORK/api-key.txt" ] && key="$WORK/api-key.txt"
+  box_price="$WORK/box-price.json"
+
+  [ -n "$API_PRICE_PER_MTOK" ] || refuse "TIERBOOK_API_PRICE_PER_MTOK is not set. The box's price is DERIVED from a
+  measurement; the metered arm's is a published list price and this script will not guess it. Supply it, and the two
+  kinds of number stay distinguishable in the record."
+
+  /usr/bin/python3 - "$CONNECTION" "$base" "$key" "$box_price" "$WORK/probe.json" \
+    "$BOX_MODEL" "$API_MODEL" "$API_PRICE_PER_MTOK" "$REQUIRED_PER_HOUR" "$CLUSTER_NAME" "$CLUSTER_REGION" \
+    "$(state_get gateway_commit)" "$(state_get cluster_commit)" "$GATEWAY_REF" "$CLUSTER_REF" <<'PY'
+import json, pathlib, sys
+(out, base, key, box_price_file, probe_file, box_model, api_model, api_price, required,
+ cluster, cluster_region, gateway_commit, cluster_commit, gateway_ref, cluster_ref) = sys.argv[1:16]
+
+def load(p):
+    try:
+        return json.load(open(p))
+    except Exception:
+        return None
+
+price = load(box_price_file)
+probe = load(probe_file)
+
+conn = {
+    "version": 1,
+    # The box is reached inside the cluster. A caller outside it has to say how it is bridging, and the field records
+    # which it is, because a measurement taken over a tunnel is the tunnel's.
+    "box": {
+        "model": box_model,
+        "in_cluster_url": "http://gpu-vllm:8000/v1/chat/completions",
+        "cluster": cluster,
+        "cluster_region": cluster_region,
+        "price_per_mtok": (price or {}).get("usd_per_output_mtok"),
+        "price_basis": ("derived: instance hourly price over a measured token rate"
+                        if price else "NOT DERIVED -- run `tierbook-up measure`"),
+        "price_is_upper_bound": (price or {}).get("price_is_upper_bound"),
+        "capacity": ({
+            "per_hour": probe["per_hour"],
+            "goodput_per_hour": probe["goodput_per_hour"],
+            "deadline_seconds": probe["deadline_seconds"],
+            "arrivals": probe["arrivals"],
+            "offered_concurrency": probe["offered"]["concurrency"],
+            "seats": probe["offered"]["seats"],
+            "understated_because": probe.get("understated_because", ""),
+        } if probe else None),
+    },
+    "api": {
+        "model": api_model or None,
+        "base_url": base or None,
+        "chat_completions_url": (base + "/v1/chat/completions") if base else None,
+        "api_key_file": key or None,
+        "price_per_mtok": float(api_price),
+        "price_basis": "supplied: a published list price, not derived",
+        # Left null on purpose. Nothing measured the metered endpoint's rate, and a null here becomes `unknown` rather
+        # than a claim -- which is what the mechanism does with absent capacity evidence.
+        "capacity": None,
+    },
+    "required_per_hour": float(required),
+    # Which commit of each side produced this. Neither repository cuts versions, so a commit id is the only thing that
+    # names a state of them -- and a measurement whose subject cannot be named again is a measurement nobody can repeat.
+    # `requested` and `at` are both here because they differ exactly when something went wrong: a pin that resolved to
+    # something else, or a checkout nobody pinned.
+    "sources": {
+        "gateway": {"repo": "stratoclave", "requested": gateway_ref or None, "at": gateway_commit or None},
+        "cluster": {"repo": "distributed-ai", "requested": cluster_ref or None, "at": cluster_commit or None},
+    },
+}
+pathlib.Path(out).write_text(json.dumps(conn, indent=1) + "\n")
+print(f"wrote {out}")
+for missing, what in (
+        (not conn["api"]["base_url"], "the gateway's base URL"),
+        (not conn["api"]["api_key_file"], "an API key"),
+        (conn["box"]["price_per_mtok"] is None, "a derived box price (run `measure`)"),
+        (conn["box"]["capacity"] is None, "capacity evidence for the box (run `measure`)")):
+    if missing:
+        print(f"  NOT USABLE YET: {what} is absent")
+for side, got in conn["sources"].items():
+    if got["requested"] and got["at"] and not got["at"].startswith(got["requested"][:7]):
+        print(f"  WARNING: the {side} pin asked for {got['requested'][:12]} and the checkout is at {got['at'][:12]}")
+    if not got["at"]:
+        print(f"  the {side} was not checked out by this script, so no commit is recorded for it")
+PY
+}
+
+# --- status and teardown --------------------------------------------------------------------------------------------
+
+cmd_status() {
+  step "pinned sources"
+  # First, because every other line below is only meaningful against a known version of the other two repositories.
+  for pair in "gateway $GATEWAY_REF $WORK/stratoclave" "cluster $CLUSTER_REF $WORK/distributed-ai"; do
+    set -- $pair
+    if [ -d "$3/.git" ]; then
+      local at; at="$(git -C "$3" rev-parse HEAD 2>/dev/null || echo unknown)"
+      if [ "$at" = "$2" ]; then info "$1: pinned at ${2:0:12}, checkout matches"
+      else warn "$1: pinned at ${2:0:12} but the checkout is at ${at:0:12}"; fi
+    else
+      info "$1: pinned at ${2:0:12}, not checked out yet"
+    fi
+  done
+
+  step "gateway (prefix '${GATEWAY_PREFIX:-unset}', $GATEWAY_REGION)"
+  if [ -z "$GATEWAY_PREFIX" ]; then warn "no prefix configured"
+  elif gateway_stacks_present; then
+    local owned; owned="$(state_get gateway_owned false)"
+    info "present. base URL: $(gateway_base_url || echo 'none yet')"
+    info "this script $([ "$owned" = true ] && echo 'CREATED it, so `down` will destroy it' || echo 'ADOPTED it, so `down` will NOT touch it')"
+  else warn "absent"; fi
+
+  step "cluster ('${CLUSTER_NAME:-unset}', $CLUSTER_REGION)"
+  if [ -z "$CLUSTER_NAME" ]; then warn "no cluster name configured"
+  elif cluster_present; then
+    local owned; owned="$(state_get cluster_owned false)"
+    info "present"
+    info "this script $([ "$owned" = true ] && echo 'CREATED it, so `down` will destroy it' || echo 'ADOPTED it, so `down` will NOT touch it')"
+    if box_present; then info "the box is deployed"; else warn "the box is not deployed"; fi
+  else warn "absent"; fi
+
+  step "connection"
+  if [ -f "$CONNECTION" ]; then
+    info "$CONNECTION"
+    /usr/bin/python3 -c "
+import json;c=json.load(open('$CONNECTION'))
+print('  box price per Mtok:', c['box']['price_per_mtok'], '|', c['box']['price_basis'])
+print('  box capacity:', 'measured' if c['box']['capacity'] else 'ABSENT')
+print('  api:', c['api']['model'], '| key file:', 'present' if c['api']['api_key_file'] else 'ABSENT')"
+  else warn "no connection file yet"; fi
+}
+
+cmd_down() {
+  local g c
+  g="$(state_get gateway_owned false)"; c="$(state_get cluster_owned false)"
+  step "teardown -- only what this script created"
+  info "gateway created by us: $g    cluster created by us: $c"
+  [ "$g" = true ] || [ "$c" = true ] || { info "nothing to destroy. Anything present was adopted, and adopted resources are never destroyed here."; return; }
+
+  if [ "$c" = true ]; then
+    local dir; dir="$(state_get cluster_dir)"
+    [ -n "$dir" ] && [ -d "$dir" ] || die "the cluster is marked as ours but its working directory is gone; destroy it by hand rather than letting this guess."
+    step "destroying the cluster (its own drain guard will hold this until no node is left billing)"
+    ( cd "$dir" && terraform destroy -input=false -auto-approve ) || die "cluster destroy failed; do not assume it is gone."
+    state_set cluster_owned false
+  fi
+  if [ "$g" = true ]; then
+    step "destroying the gateway stacks"
+    ( cd "$WORK/stratoclave/iac" && STRATOCLAVE_PREFIX="$GATEWAY_PREFIX" STRATOCLAVE_REGION="$GATEWAY_REGION" \
+        CDK_DEFAULT_REGION="$GATEWAY_REGION" npx cdk destroy --all --force ) || die "gateway destroy failed."
+    state_set gateway_owned false
+  fi
+  info "teardown finished. Verify independently before assuming nothing bills: the instance API, not Kubernetes, is"
+  info "  the only thing that can answer whether a node the cluster owned is still running."
+}
+
+# --- up ------------------------------------------------------------------------------------------------------------
+
+cmd_up() {
+  state_init
+  step "gateway: mode '$GATEWAY_MODE'"
+  case "$GATEWAY_MODE" in
+    skip) warn "skipped by configuration" ;;
+    existing)
+      gateway_stacks_present || die "TIERBOOK_GATEWAY=existing but no stacks found for prefix '$GATEWAY_PREFIX'."
+      info "adopted. This script will never destroy it."; state_set gateway_owned false ;;
+    create) gateway_create ;;
+    auto)
+      if gateway_stacks_present; then
+        info "found stacks for prefix '$GATEWAY_PREFIX' -- adopting rather than creating"
+        state_set gateway_owned false
+      else
+        gateway_create
+      fi ;;
+    *) die "TIERBOOK_GATEWAY must be auto, create, existing or skip" ;;
+  esac
+  if [ "$GATEWAY_MODE" != skip ]; then
+    state_set gateway_prefix "$GATEWAY_PREFIX"; state_set gateway_region "$GATEWAY_REGION"
+    step "issuing an API key"
+    gateway_issue_key
+  fi
+
+  step "cluster: mode '$CLUSTER_MODE'"
+  case "$CLUSTER_MODE" in
+    skip) warn "skipped by configuration" ;;
+    existing)
+      cluster_present || die "TIERBOOK_CLUSTER=existing but no active cluster named '$CLUSTER_NAME'."
+      info "adopted. This script will never destroy it."; state_set cluster_owned false ;;
+    create) cluster_create ;;
+    auto)
+      if cluster_present; then
+        info "found cluster '$CLUSTER_NAME' -- adopting rather than creating"
+        state_set cluster_owned false
+      else
+        cluster_create
+      fi ;;
+    *) die "TIERBOOK_CLUSTER must be auto, create, existing or skip" ;;
+  esac
+  if [ "$CLUSTER_MODE" != skip ]; then
+    state_set cluster_name "$CLUSTER_NAME"; state_set cluster_region "$CLUSTER_REGION"
+    if box_present; then
+      info "the box is already deployed; leaving it as it is"
+    else
+      box_deploy
+    fi
+    cmd_measure
+  fi
+
+  cmd_connect
+  step "done"
+  info "drive the loop with:"
+  info "  cd $ROOT && /usr/bin/python3 tools/verify_ops_live.py --from-connection $CONNECTION"
+  info "the box is reached inside the cluster, so bridge it first (or run the driver in the cluster):"
+  info "  kubectl --context $(cluster_context) port-forward svc/gpu-vllm 18000:8000"
+}
+
+# --- entry point ---------------------------------------------------------------------------------------------------
+
+state_init
+case "${1:-}" in
+  doctor)  cmd_doctor ;;
+  status)  cmd_status ;;
+  up)      cmd_up ;;
+  connect) cmd_connect ;;
+  patches) shift; cmd_patches "$@" ;;
+  measure) cmd_measure; cmd_connect ;;
+  down)    cmd_down ;;
+  *) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

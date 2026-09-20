@@ -1,0 +1,156 @@
+{
+ "what": "from-scratch verification of the standing order's item 3: both sides built from the repositories alone",
+ "gateway": {
+  "built": "a fresh shallow clone, a resource prefix never used before, nine CloudFormation stacks",
+  "stacks": [
+   "network",
+   "dynamodb",
+   "ecr",
+   "alb",
+   "frontend",
+   "cognito",
+   "ecs",
+   "config",
+   "waf"
+  ],
+  "image": "built on a remote builder via CONTAINER_CLI, pushed to the fresh ECR repository",
+  "inference": {
+   "route": "/v1/chat/completions",
+   "status": 200,
+   "usage_legs": [
+    "prompt_tokens",
+    "completion_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens"
+   ],
+   "note": "all four billed legs came back, which is what spend.Spend records"
+  }
+ },
+ "cluster": {
+  "built": "a new cluster name, a new VPC CIDR, its own terraform state key under the shared bucket",
+  "terraform": {
+   "plan": "153 to add, 0 to change, 0 to destroy",
+   "apply": "153 added, 0 changed, 0 destroyed",
+   "module_edits": 0
+  },
+  "nodes_ready": 3,
+  "system_pods_not_running": 0,
+  "serving": {
+   "chart": "infra/eks/charts/experiments, gpuServingVllm",
+   "instance": "g6e.xlarge on-demand, one node, provisioned by Karpenter on the pending pod",
+   "engine": "vllm/vllm-openai:v0.6.3.post1",
+   "model": "Qwen/Qwen2.5-1.5B-Instruct",
+   "max_num_seqs": 256,
+   "kv_derived_concurrency_at_4096_tokens": 302.06
+  }
+ },
+ "throughput_ladder": {
+  "8_per_second": {
+   "per_hour": 27736,
+   "goodput": 27736,
+   "offered": 463,
+   "completed": 463,
+   "inside": 463,
+   "p50": 0.185,
+   "p95": 0.228,
+   "peak": 7,
+   "late": 1,
+   "worst": 0.0001
+  },
+  "32_per_second": {
+   "per_hour": 112670,
+   "goodput": 112670,
+   "offered": 1883,
+   "completed": 1883,
+   "inside": 1883,
+   "p50": 0.282,
+   "p95": 0.402,
+   "peak": 28,
+   "late": 9,
+   "worst": 0.0002
+  },
+  "96_per_second": {
+   "per_hour": 339552,
+   "goodput": 339552,
+   "offered": 5680,
+   "completed": 5680,
+   "inside": 5680,
+   "p50": 1.34,
+   "p95": 2.086,
+   "peak": 252,
+   "late": 80,
+   "worst": 0.004
+  },
+  "200_per_second": {
+   "per_hour": 718410,
+   "goodput": 718410,
+   "offered": 12099,
+   "completed": 12099,
+   "inside": 12099,
+   "p50": 1.257,
+   "p95": 1.627,
+   "peak": 444,
+   "late": 465,
+   "worst": 0.0141
+  }
+ },
+ "throughput_as_recorded": {
+  "per_hour": 718410.0,
+  "goodput_per_hour": 718410.0,
+  "deadline_seconds": 8.0,
+  "arrivals": "open_loop",
+  "offered": {
+   "concurrency": 444,
+   "seats": 256
+  },
+  "understated_because": "load_fully_absorbed",
+  "is_lower_bound": true,
+  "why": "every request offered came back inside the deadline, so no queue formed and the ceiling was never reached. Neither generator_saturated nor offered_below_seats fits, which is why the vocabulary gained a fourth entry",
+  "deliverable_at_100_per_hour": "deliverable",
+  "deliverable_at_1e6_per_hour": "unknown"
+ },
+ "derived_box_price": {
+  "instance_usd_per_hour": 2.699,
+  "source": "AWS price list API, g6e.xlarge, Tokyo, shared tenancy, Linux",
+  "output_tokens_per_hour": 17779175,
+  "usd_per_output_mtok": 0.1518,
+  "note": "an UPPER bound on price, because the token rate it divides is a LOWER bound on throughput"
+ },
+ "loop_against_both": {
+  "turns": 14,
+  "box_spend_per_accepted_usd": 3.549e-05,
+  "api_spend_per_accepted_usd": 0.00077,
+  "ratio": 21.7,
+  "box_acceptance": 1.0,
+  "api_acceptance": 1.0,
+  "preferred": "box",
+  "preferred_basis": "measured spend per accepted answer, not a configured preference",
+  "capacity_box": "deliverable",
+  "capacity_api": "unknown",
+  "thresholds_derived": {
+   "quota_floor": 0.00077,
+   "price_cross": 5.0
+  },
+  "harness_identity_stable_across_turns": true
+ },
+ "findings": {
+  "documented_first_admin_path_is_a_no_op": {
+   "severity": "the documented path does not work",
+   "reproduce": "deploy the stacks, export STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL, redeploy the ecs stack as documented; the user pool has zero users",
+   "cause": "the variable appears nowhere in iac/lib, so it never reaches the task definition (66 env vars, not among them, and no ECS secrets)",
+   "verify": "register one task definition revision with that single variable added; the backend seeds the admin at startup, the user pool has one CONFIRMED user, and the temp password lands in the secret the stack pre-created for exactly that purpose",
+   "second_half": "the one-line installer instead calls scripts/bootstrap-admin.sh, which deploy-all.sh's own output labels stale, and which needs the unauthenticated admin-creation route open to work"
+  },
+  "serving_chart_cannot_pass_an_engine_flag": {
+   "severity": "the documented path does not work for an agent harness",
+   "observed": "the box returned 400 for every request carrying tool schemas: \"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set",
+   "cause": "the chart renders a fixed list of five engine args with no extraArgs escape hatch",
+   "consequence": "a chart that serves an OpenAI-compatible endpoint cannot serve what a coding agent sends"
+  },
+  "the_example_conflated_a_refusal_with_a_bad_answer": {
+   "severity": "silent corruption of a quality signal",
+   "observed": "fourteen turns of accepted=False that read as a model bad at the task and were a 400",
+   "fix": "the example now records the mechanism's own three states; a candidate that never served is not ranked"
+  }
+ }
+}

@@ -1,6 +1,16 @@
 # tierbook
 
-> **Scope, before anything else: [`SCOPE.md`](SCOPE.md).** This is a routing mechanism that collects its
+> **This is a META mechanism. Logic is injected; it is never built in.** No closed vocabulary may encode which
+> signals are worth using, no threshold may come from one corpus, and no refusal may derive from a finding rather
+> than from the record in front of it. A study that measured something not to help records that measurement; it does
+> not become a list the mechanism refuses against. The test for anything in `src/`: **could a different study with a
+> different conclusion express its answer through this?** See [`SCOPE.md`](SCOPE.md).
+>
+> **Standing order, before anything else: [`SCOPE.md`](SCOPE.md) opens with it.** Finish the framework, drive it
+> from an agent as a working example, then verify on machines built from scratch. `main` is closed; work on an
+> epic branch with feat branches into it.
+>
+> **Scope: [`SCOPE.md`](SCOPE.md).** This is a routing mechanism that collects its
 > own data and decides while its environment moves. The decision is a **function from observed state to an
 > assignment** — volume, prices, availability, capacity, request shape, floors and SLOs are all inputs, and
 > every threshold in it is **derived, never configured**. *"At this concurrency the next request belongs on
@@ -190,6 +200,30 @@ which is right, so labelling agreements buys nothing. `coverage()` reports what 
 admissible, because a measurement over the 12% of traffic that arrived with a test suite is a measurement of
 that 12%. If nothing is admissible, tierbook says **"not measurable for correctness from these logs"**, which
 is a real result: it names what you would have to start recording.
+
+## On a cluster you do not have yet
+
+`infra/tierbook-up` brings the candidates to a state this repository can drive, in one command: it adopts a gateway and a
+cluster that already exist, creates the ones that do not, serves a box from the cluster repository's own chart, measures
+its throughput from inside the cluster, derives the box's price from that measurement, and writes one connection file.
+
+```bash
+cp infra/config.example.env infra/config.env    # four required values
+./infra/tierbook-up doctor                      # creates nothing, charges nothing
+./infra/tierbook-up up
+```
+
+**It never destroys anything it did not create**, and when its record of what it created is missing it assumes it created
+nothing. Both directions are tested, because the first version of the state reader made `down` silently skip the very
+resources it owned. `infra/README.md` says which of the two prices is derived and which is refused rather than guessed.
+
+**Both sides are pinned to a commit.** Neither of the other two repositories cuts versions, so a commit id is the only
+thing that names a state of them, and the checkout fetches exactly that commit rather than a branch. The connection file
+records the pin and what the checkout resolved to, because the two differ exactly when something went wrong.
+
+The two gaps this wiring was built around — the gateway's first-admin variable never reaching its task definition, and
+the serving chart's closed list of engine arguments — are fixed upstream, and the pinned commits carry the fixes. The
+patch mechanism in `infra/patches/` stays for the next gap and currently holds nothing.
 
 ## On a cluster you already have
 

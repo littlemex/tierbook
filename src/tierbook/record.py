@@ -36,7 +36,7 @@ from pathlib import Path
 # vocabulary a re-issue line is written from and `plane` the grouping the mixture report uses, so neither fact has a
 # second implementation here.
 #
-# Checked for a cycle before writing each: `observe` imports only `decide.STATE_VARS`, and neither `decide` nor
+# Checked for a cycle before writing each: `observe` imports only `decide.DEFAULT_STATE_VARS`, and neither `decide` nor
 # `observe` imports `record`; `escalate` and `plane` import nothing from this package at all. No edge here closes a
 # loop.
 from . import escalate as es

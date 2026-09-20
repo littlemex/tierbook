@@ -255,10 +255,69 @@ def test_every_unevaluable_guard_is_collected_not_just_the_first():
 # --- the closed variable set, and what is still missing ------------------------------------------
 
 
-def test_a_guard_cannot_be_written_over_a_variable_this_does_not_evaluate():
-    with pytest.raises(ValueError) as e:
-        D.Guard("gpu_temperature", "<", 80, derived_from="a thermometer")
-    assert "does not name a state variable" in str(e.value)
+def test_a_guard_may_read_any_variable_its_policy_declares():
+    """**Rewritten deliberately.** The old version asserted that `gpu_temperature` could not be guarded on, because a
+    module-level tuple named the five variables this project happened to need. The governing document names price
+    revisions, quotas, degradation and the hour of the day as this same mechanism's business, and not one of them was in
+    that tuple -- so the mechanism was deciding which facts a policy could condition on.
+
+    A guard now validates its SHAPE, and the vocabulary is the policy's."""
+    g = D.Guard("gpu_temperature", "<", 80, derived_from="a thermometer")
+    assert D.var_name(g.var) == "gpu_temperature"
+
+
+def test_a_guard_still_has_to_have_a_readable_shape():
+    """What survives at the rule level: a name, and at most one candidate qualifier."""
+    with pytest.raises(ValueError, match="names no state variable"):
+        D.Guard("  ", "<", 1, derived_from="probe")
+    with pytest.raises(ValueError, match="more than one candidate qualifier"):
+        D.Guard("inflight:box:extra", "<", 1, derived_from="probe")
+    with pytest.raises(ValueError, match="not a comparison"):
+        D.Guard("inflight", "~=", 1, derived_from="probe")
+
+
+def test_a_policy_refuses_a_rule_reading_a_variable_it_never_declared():
+    """The guarantee that moved rather than disappeared: a guard cannot read a fact nobody supplies, because discovering
+    that at request time is worse than refusing to compile it. What changed is who decides which facts exist."""
+    def one(var, threshold, whence):
+        return (D.Rule((D.Guard(var, "<", threshold, derived_from=whence),), ("dear",), f"{var} says so"),)
+
+    declared = D.Policy("f", one("price_per_mtok", 3.0, "a price card"), ("cheap",),
+                        state_vars=("price_per_mtok",))
+    assert declared.undeclared_vars() == []
+    assert declared.vocabulary == ("price_per_mtok",)
+
+    undeclared = D.Policy("f", one("gpu_temperature", 80, "a thermometer"), ("cheap",),
+                          state_vars=("price_per_mtok",))
+    assert undeclared.undeclared_vars() == ["gpu_temperature"]
+
+
+def test_a_policy_that_declares_nothing_falls_back_to_the_defaults():
+    """Which keeps every existing caller working while making the default visibly a default."""
+    p = D.Policy("f", (D.Rule((D.Guard("inflight:box", "<", 4, derived_from="probe"),), ("dear",), "loaded"),),
+                 ("cheap",))
+    assert p.vocabulary == D.DEFAULT_STATE_VARS
+    assert p.undeclared_vars() == []
+    assert "inflight" in p.per_candidate_vars
+
+
+def test_a_bare_guard_where_a_rule_belongs_is_refused_at_construction():
+    """The shape of the object, closed rather than watched.
+
+    Every reader on `Policy` walks `rule.guards`, so a bare `Guard` in `rules` is wrong for all of them. It was
+    representable, and one reader -- `undeclared_vars` -- was written to match the malformed shape instead, which made it
+    raise on every real policy while its own test passed. Making the object unbuildable is what stops the next reader
+    being written against it too.
+    """
+    import pytest as _pytest
+    with _pytest.raises(TypeError) as e:
+        D.Policy("f", (D.Guard("inflight:box", "<", 4, derived_from="probe"),), ("cheap",))
+    assert "not a Rule" in str(e.value)
+
+
+def test_whether_a_variable_is_per_candidate_is_also_the_policys_to_declare():
+    p = D.Policy("f", (), ("cheap",), state_vars=("tenant_quota_left",), per_candidate=("tenant_quota_left",))
+    assert p.per_candidate_vars == ("tenant_quota_left",)
 
 
 def test_a_guard_may_be_qualified_by_candidate():

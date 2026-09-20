@@ -1,5 +1,15 @@
 # What the experiments have asked of the implementation
 
+> **What this file is for, and what it is not.** Every entry below is a measurement, and **a measurement is an input
+> to the question "what must a general mechanism be able to hold", never an answer shipped as code.** tierbook is a
+> META mechanism: logic is injected into it and is never built into it. So a finding here becomes a **recordable
+> field, a shape a claim must have, or a structural refusal** -- and never a closed list of which signals are worth
+> using or a threshold taken from this corpus. The next corpus may measure the opposite and has to be able to say so.
+>
+> Violations of this have all looked like good engineering. Read an entry asking *which of those three it became*; if
+> the answer is "a rule that decided for the caller", the entry was applied wrongly.
+
+
 This file exists because of a policy change made on 2026-09-12, after v0.3.0 shipped: **the mechanism is no
 longer built ahead of the research.** The optimisation study is the subject, and the implementation changes only
 when an experiment has been held up by something the implementation does or does not record.
@@ -6495,6 +6505,341 @@ derives from `EvidenceError` like the rest, so **`except EvidenceError` is alway
 which module refused. Four call sites named the judge class and all still work.
 
 Suite: **1,795 passing, 3 skipped.**
+
+## F138 — The third currency: what a served box delivers, and the four things a rate has to carry
+
+Item 1 of the standing order, the thin part. `spend` prices a request and `outcomes` scores it; **neither could say
+whether the box carries the traffic at all**, and throughput had never been measured here.
+
+`throughput.Throughput` carries the arrivals, the offered load beside the engine's own seat limit, the deadline and the
+goodput. Every refusal in it is a number this project produced and had to take back.
+
+| what was believed | what it was |
+|---|---|
+| 425,879 requests an hour | the **load generator's** limit. Two clients read 584,739 |
+| a surface peaking at 300-600 input tokens | an artefact of the generator. Once it was off the critical path the surface was monotone -- **shorter is better** -- and the admission rule changed |
+| 384 concurrent requests offered | **27 seats**. Raising to 256 moved value per box-hour **+33%** at 60 output tokens, +18% at 300, +5% at 600 |
+| "mixing is economically neutral" | measured between two **mixtures**. The arm with no long request read **225,730** an hour against 102,022 |
+| a closed-loop verdict | **reversed** when opened: -$8.63 against +$18.88 per box-hour |
+
+### The four things, and why each is a refusal rather than a field
+
+**A rate is a lower bound until somebody shows the generator was not the limit.** `is_lower_bound` is true by default
+whenever the offered load is below the seat count or the generator was never checked -- treating silence as a
+measurement is how a client's limit gets published as a box's capacity.
+
+**A closed loop cannot support a service level at any sample size.** It offers less when the server slows, so no queue
+forms and a deadline has nothing to be missed against. A capacity number from one is fine; `supports_a_service_level_claim`
+returns False and says which of the two conditions failed.
+
+**An unread seat count is not an unlimited one.** `comparable_load` refuses a comparison where either side never read
+`max_num_seqs`, because the gain being largest on the **short** side is the signature of a seat limit rather than a
+compute limit, and that signature is unreadable without the number.
+
+**A mean cannot answer the question co-residency asks.** Mean throughput and mean cost per box-second are both conserved
+when box-time moves between request families. So a goodput and a deadline travel together or neither does, and
+`refuse_coresidency_claim_without_a_zero_arm` refuses the claim outright unless the arm with **none** of the other family
+was measured -- which is the arm nobody had run when the wrong conclusion was drawn.
+
+Production caller `tierbook admit-throughput`, exit 2 when a rate cannot support what is asked of it.
+
+### Verified by breaking it
+
+Fifteen mutations, all caught -- including computing starvation the wrong way round, letting an unread seat count pass as
+unlimited, and dropping the zero arm. Suite: **1,822 passing, 3 skipped.**
+
+**What this does not do.** It records a throughput; it does not measure one. The measurement needs concurrent traffic
+against a real engine (T3), which is step 3 of the standing order, and this type is what that step will have to fill in.
+
+## F139 — Deliverability, and the two kinds of rate evidence that are one-sided in opposite directions
+
+The connecting piece item 1 was missing. The three currencies existed as types and **the optimiser could not see
+capacity at all**: `policy` admits an endpoint by comparing a required rate against a **declared**
+`max_requests_per_second`, and `optimise` has no notion of a rate. So a policy cheaper per request could be chosen while
+being undeliverable, and nothing in the mechanism would notice.
+
+### The asymmetry is the finding
+
+| evidence | can refuse | can prove it is met |
+|---|---|---|
+| **declared ceiling** | **yes** -- a contractual limit is a limit whatever the hardware would have managed | **no** -- nobody ran the box against it |
+| **measured goodput** | only when it is **not** a lower bound | **yes**, and **a lower bound suffices** -- the box did at least that much |
+
+So `deliverable()` has three outcomes, and `unknown` is what keeps the other two honest. A requirement exceeding a
+**lower bound** is `unknown`, not `refused`: **the shortfall may be our own load generator**, and a client's limit has
+been published here as a box's capacity twice. Without that outcome the mechanism would decline assignments on the
+strength of a Python process that could not keep up.
+
+The reverse direction is the one a naive "lower bounds are unusable" rule gets wrong: **a lower bound proves
+sufficiency.** If the box delivered at least 100,000 inside the deadline, a requirement of 50,000 is met, and the margin
+is at least as large as it looks.
+
+`Ceiling` is a separate type rather than a flag, because one field would let either be read as the other, and
+`refuse_a_ceiling_read_as_a_measurement` exists by name because the substitution is silent -- a configured
+`max_requests_per_second` is the only rate many records carry. The engine work's rule applies unchanged: **a configured
+value is a hypothesis and not a measurement.**
+
+`tierbook admit-throughput --required` is the caller. **`unknown` exits 0 rather than 2**: widening a verdict is not an
+error, and exiting non-zero for it would push a caller toward not recording the seat count -- which is the field that
+makes the distinction possible at all.
+
+### Verified by breaking it
+
+Six mutations, all caught, including both directions of the asymmetry and checking the ceiling after the measurement
+instead of before. Suite: **1,836 passing, 3 skipped.**
+
+**Two of my own verification commands were wrong in the same way this session**: `git diff --stat && echo OK` and
+`cmd | tail -1; echo $?` both report success unconditionally, because the exit code belongs to the last element of the
+pipeline. Both were fixed by checking the exit code of the thing being tested. The general form is the same defect this
+ledger records elsewhere -- **a check that cannot fail is not a check** -- and it is worth noting that it appeared in the
+verification rather than in the code twice.
+
+## F140 — `ESCALATION_SUBJECTS` is removed: the mechanism was deciding which signals are worth using
+
+**A violation of the rule this file now opens with, found by being told three times.** `evidence.py` carried
+`ESCALATION_SUBJECTS = ("own_competence", "item_difficulty")` and `quantity.py` returned `subject in
+ESCALATION_SUBJECTS`. `quorum.evaluate_signal` refused every other subject outright.
+
+It was **supported by a real measurement here** -- the same readout named an item's field at 0.7593 against a chance of
+0.1429 and predicted its own error at 0.4227, below what a coin gets -- and it was **still wrong**: a study measuring
+topic to predict competence **had no way to say so**, and the refusal was derived from one corpus rather than from the
+record it was refusing.
+
+### What replaced it, and the second attempt that was also wrong
+
+`Performance` gained `predicts` -- **free text, not a closed vocabulary**, because deciding which targets are legitimate
+is the study's job. `Quantity.shown_to_predict(target)` reads whether *this record* shows the signal beat a declared
+baseline against *that* target, and `why_not_shown_to_predict` distinguishes the four ways it can fail to: no
+performance at all, a performance that does not say what it predicts, a performance against a **different** target, and
+a performance that beat nothing.
+
+**The first replacement was also a violation** and is worth recording. `admissible_for_a_gate` was changed to require
+measured evidence against a caller-supplied target -- better, and still a policy: **exploring an unmeasured signal is a
+legitimate thing to do, and this package has a module for it.** So the filter is gone entirely. What remains is three
+filters that are properties of the record and hold whatever anybody studies: wrong model, wrong elicitation, not
+readable before the cost the gate exists to avoid.
+
+`quorum.evaluate_signal` still requires a signal to **name** what it is about -- that refusal survives, because a policy
+built on one thing and reported as built on another is a different defect -- and no longer judges which name is worth
+having.
+
+### What it cost, which is the evidence the change is real
+
+**Twenty tests failed**, and two of them asserted the removed rule directly. Those two are the strongest evidence
+available that this was a behaviour change rather than a tidy-up, and they were rewritten deliberately rather than
+adapted: `test_a_signal_policy_cannot_be_built_from_a_topic_signal` became `test_a_signal_has_to_say_what_it_is_about`,
+and the parametrised "both escalation subjects are admitted" became **all four subjects admitted**.
+
+A CLI door printed `not usable: field_name` for a topic signal, putting the same hardcoded judgement in an operator's
+face. Its test now turns on a record property -- a quantity readable only after generation -- rather than on a subject's
+name.
+
+Five mutations, all caught, **including re-adding the list**: a test asserts `ESCALATION_SUBJECTS` exists on neither
+module, because re-adding it is exactly how this regresses. Suite: **1,841 passing, 3 skipped.**
+
+## F141 — The state vocabulary moves from the module to the policy
+
+The second instance of F140's violation, found by sweeping **all 60 closed vocabularies** in the package and asking of
+each whether it enumerates *what a thing is* or *which things are worth using*.
+
+`decide.STATE_VARS` named five variables a guard was allowed to read: `inflight`, `available`,
+`metered_authorised`, `arrival_rate_per_hour`, `evidence_age_days`. `Rule.__post_init__` refused anything else.
+
+**The governing document names price revisions, rate limits, degradation, request shape, floors, SLOs, quotas and time
+of day as things this same mechanism must handle -- and not one of them was in that tuple.** A study conditioning on
+`price_per_mtok` or `hour_of_day` could not write a guard at all. The mechanism had decided which facts a policy may
+condition on, which is the opposite of a meta mechanism.
+
+### What moved, and the guarantee that survived
+
+`Policy` gained `state_vars` and `per_candidate`. A rule now validates its **shape** -- a non-empty name, at most one
+candidate qualifier, a comparison this evaluates -- and `Policy.undeclared_vars()` reports rules reading a name the
+policy never declared.
+
+**The guarantee is unchanged and only its owner moved**: a guard cannot read a fact nobody supplies, because
+discovering that at request time is worse than refusing to compile it. What changed is **who decides which facts
+exist**.
+
+`DEFAULT_STATE_VARS` keeps the five, as a default a caller may use rather than a gate, and an empty declaration falls
+back to it -- so every existing caller works and the default is visibly a default. `observe.Observation` gained
+`expected_for(vocabulary)` and `complete_for(...)`; its `expected` property stays and now means "what **this
+collector** scrapes from an engine", which is a question about the collector rather than a statement about what a
+policy may read.
+
+### The sweep's other candidates, recorded so they are judged rather than forgotten
+
+`judge.DIGEST_SUBJECTS` and `judge.REFUSED_KEYS` name what a digest can be **of**, and the refusal there is
+structural: a shape and a name genuinely cannot identify a model, and two models agreeing on every declarable field
+had probe amplitudes a factor of four apart. `quantity.GEOMETRIES` is the one still worth arguing about --
+`raw_residual` and `norm_scaled` are this architecture's two spaces, and another architecture has others. It is left
+for now and named here so the next reader does not have to rediscover it.
+
+Five mutations, all caught, **including re-adding the module-level gate**. Suite: **1,845 passing, 3 skipped.**
+
+## F142 — The loop that drives the mechanism, and the four defects it found by being the first real caller
+
+The standing order's second item: an Ops loop, driven from the agent side, **running** rather than drawn. It lives in
+`examples/opencode_ops/` and its README states the split in one line -- *this directory is the logic, `src/tierbook` is
+the mechanism* -- because the point of writing it was to find out whether that claim survives contact with a caller.
+
+It did not, in four places. Each is recorded here because each is the same species: a mechanism looks finished until
+something outside its own tests uses it.
+
+### 1. A reader written against an object that cannot exist
+
+`Policy.undeclared_vars` read `r.var` over `self.rules`. `rules` holds `Rule`s and a `Rule` has `guards`, so this raised
+`AttributeError` on every real policy and passed its own test only because that test built a `Policy` out of bare
+`Guard`s. Every other reader on the class -- `overlaps`, `can_ever_fire`, `gaps`, `guarded_candidates`, `in_domain` --
+walks `rule.guards` correctly, so the malformed tuple was wrong for all of them and one reader had been written to match
+it.
+
+Fixing the reader would leave the trap set for the next one, so **the malformed object stopped being constructible**:
+`Policy.__post_init__` refuses a `rules` entry that is not a `Rule`, and the three tests that built one now build real
+rules. This is the classification-over-registry move -- omission becomes a failure rather than an absence.
+
+### 2. The loop deadlocked at cold start, which is the example's defect and not the mechanism's
+
+Every threshold in the example is derived from what the loop recorded. The price threshold needs history on the dear
+candidate; escalation needs the price threshold; so nothing ever escalated, no dear history accrued, and the loop ran
+happily forever on one arm deriving `{'quota_floor': 0.016}` and nothing else. **`preferred()` correctly returned
+`None`** the whole time, which is the mechanism behaving properly and the example having no idea.
+
+The fix is the example's own: it explores, through `explore.draw`, at a rate **it** chooses -- 0.5 while either arm is
+unmeasured, 0.05 afterwards, never 0, because a loop that stops exploring cannot notice a price change. The propensity
+comes back from the mechanism and is recorded per turn, so traffic that arrived by exploration is not later averaged in
+as a decision the policy made.
+
+### 3. The example reported the silence instead of the statement
+
+`Turn.unobserved` was set from `Collection.unaccounted`, which is **always empty** for this collector -- it explains
+every part it cannot reach with an `Absence`. So the loop reported a complete harness on every turn while seven of the
+ten parts were absent with reasons attached. The two fields are not interchangeable and that is exactly why both exist:
+an absence is a statement, and `unaccounted` is the silence an absence was invented to replace. The turn now carries
+both, and a non-empty `unaccounted` reads as the collector regressing rather than as a property of the request.
+
+### 4. The fake's arithmetic was the thing under test
+
+`ScriptedAgent` accepted on call `n` when `(seen + 1) <= round((seen + 1) * rate)`, which gives **one acceptance in four
+at rate 0.5**. Every assertion about what the loop did would have been an assertion about the fake. The deterministic
+form is `floor((n) * rate) > floor((n - 1) * rate)`, and it is now pinned by a parametrised test over five rate/count
+pairs -- guarding the instrument, in the same way the load-generator lesson says to.
+
+### The third currency, wired in rather than described
+
+The example needs a rate (`required_per_hour`, its own number) and asks `throughput.deliverable` about each candidate
+with whatever evidence exists. The example's rule, stated in its own docstring: **`refused` is a veto and `unknown` is
+not.** A refusal comes from a declared ceiling or from a measurement that is not a lower bound; `unknown` means nobody
+measured well enough to say, and vetoing on it would let a weak load generator quietly shrink the pool -- which is this
+project's own twice-made mistake. What `unknown` costs is the *claim*: `shown_to_carry_the_traffic` is `deliverable` and
+nothing else, so routing there and reporting that it holds stay separate.
+
+A declared ceiling of 50/hour against a requirement of 100 takes the dear arm out of the eligible set entirely, and
+`explore.draw` then reports `no_eligible_arm` rather than paying for an answer already in hand.
+
+### The test that would fail if the loop did nothing
+
+`test_the_loop_spends_less_per_accepted_answer_than_always_escalating` runs the same 40 tasks through the loop and
+through a fixed always-escalate policy and compares spend per **accepted** answer. And the one that guards against the
+opposite failure -- a preference compiled in rather than derived --
+`test_the_preference_follows_the_measurement_and_flips_when_the_measurement_does` changes only the acceptance rates
+(0.5, then 0.2) and demands the answer flip from `box` to `api`. Same prices, same seed, same code.
+
+**14 mutations, 14 caught, no survivors**, including removing exploration, ignoring a refusal, treating `unknown` as a
+veto, reverting the harness field, and restoring the fake's `round`. The example's tests are in `testpaths`, because an
+example whose tests nobody runs is documentation that has stopped being true.
+
+Suite: **2,175 passing, 3 skipped** over all three test roots. That is not a jump of 330 from F141's figure -- F141
+counted `tests/` alone at 1,845. The same split now reads `tests/` 1,846 (the new construction refusal), `harness/tests`
+302, and the example 27. Recorded because a count whose denominator moved silently is the defect this ledger keeps
+catching in other people's numbers.
+
+## F143 — Real machines with nothing inherited, and the five things only a from-scratch build could find
+
+The standing order's third item, and its premise stated as a claim rather than a worry: *there is certainly some part
+that currently works only because of ad-hoc manual setup.* The premise was right, and the part it named turned out to be
+the one every deployment needs first.
+
+Both sides were built beside the running ones rather than over them -- a resource prefix never used before for the
+gateway, a new cluster name and its own terraform state key for the cluster. That choice is what makes the result mean
+anything: re-running a deploy over a working environment proves idempotence, and an object created once by hand goes on
+existing while the second run inherits it in silence.
+
+### What stood up cleanly, recorded as passes rather than assumed
+
+Nine CloudFormation stacks from a fresh shallow clone with one environment variable changed. `153 to add, 0 to change,
+0 to destroy` for the cluster, then `153 added, 0 changed, 0 destroyed`, with **no edit to the module** -- three nodes
+Ready, no system pod outside Running, and Karpenter launching exactly one GPU node for the pending pod rather than the
+eleven the chart's own comment warns about. A real call on `/v1/chat/completions` returned 200 with **all four billed
+legs** in `usage`, which is the first confirmation that `spend.Spend`'s four legs are the four legs that get billed.
+
+### The finding the item existed to find
+
+**The documented way to create the first administrator cannot work.** `docs/DEPLOYMENT.md` says to export
+`STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL` and redeploy the ECS stack; the stack pre-creates a secret for the password and
+grants the task `PutSecretValue` on exactly that ARN; the backend reads the variable at startup and writes there. And
+the variable appears **nowhere in `iac/lib`** -- 66 environment variables on the live task definition, no ECS secrets,
+and not that one. The procedure runs, reports success, and creates nothing: zero users in the pool afterwards.
+
+Registering one task definition revision whose only difference is that variable produced one CONFIRMED user and the
+password in the secret. One variable is the whole difference, which is what makes it a cause and not a symptom.
+
+The other documented path, the one-line installer, calls a script that `deploy-all.sh`'s own output labels stale, and
+which works by POSTing to a route the backend's own comment calls the biggest operational footgun in its threat model.
+So there are two documented paths and no working one -- while the existing deployment has an administrator that nothing
+in either repository explains.
+
+### Two corrections to this repository's own instruments
+
+**The probe's first output could not be constructed at all.** It reported offered concurrency as rate times mean latency
+-- 0.73 -- and `Offered` refuses anything below 1. The refusal was right: the field means the load that was offered, and
+a product of two averages is not something anybody offered. The probe now reports peak requests actually in flight.
+
+**`UNDERSTATED_BECAUSE` was missing the state the first real run was in**, and this is the more interesting one. The
+generator kept up (worst dispatch lateness 14 ms), the offer exceeded the seat count (444 concurrent against
+`max_num_seqs=256`), and the rate is still a lower bound -- because every one of 12,099 requests came back inside the 8
+second deadline. Nothing queued, so the ceiling was never reached. `generator_saturated` is wrong (the generator was
+fine), `offered_below_seats` is wrong (it was above), `generator_not_checked` is wrong (it was checked). The fourth
+entry, `load_fully_absorbed`, is a state of the world and not a judgement about a signal, which is why it belongs in a
+closed vocabulary at all. With it, a requirement of 100/hour is `deliverable` against this run and 1,000,000/hour is
+`unknown` rather than `refused`.
+
+**The performance currency's first real numbers**, from an in-cluster open-loop probe with Poisson arrivals at four
+rates: 27,736 / 112,670 / 339,552 / **718,410 per hour** at 8, 32, 96 and 200 arrivals a second, every request inside
+the deadline at every rung, p95 1.627 s at the top. The box was never saturated, which is why the top figure is a lower
+bound rather than a capacity.
+
+And the number the cost side has been missing since the throughput gap was named: at **$2.699/hour** for the instance
+(price list API, Tokyo, shared tenancy) and **17.78 Mtok/hour** measured, the box costs **$0.1518 per output Mtok** --
+an *upper* bound on price, because the rate it divides is a lower bound on throughput. Compare $5.00 per output Mtok
+list for the metered arm.
+
+### The loop, on billed traffic
+
+14 live turns through `examples/opencode_ops`, box against metered API: **$0.00003549** per accepted answer against
+**$0.00077000**, a factor of 21.7, both arms accepting everything, four legs on every turn with the cache legs present
+as zero rather than omitted, one stable harness identity across turns, and `preferred()` answering `box` **from the
+measurement**. Capacity read `deliverable` for the box (a real probe) and `unknown` for the API (no measurement exists),
+which is the third currency doing work inside a decision rather than sitting in a schema.
+
+### Two more findings, in opposite directions
+
+**The serving chart cannot pass an engine flag.** Every request the example sends carries tool schemas, because that is
+what a coding agent sends, and the box returned 400 to all of them: `"auto" tool choice requires
+--enable-auto-tool-choice and --tool-call-parser to be set`. The chart renders a closed list of five engine arguments
+with no escape hatch, so the flags cannot be set through it. The real finding is not the flag: it is that the two
+candidates a router chooses between **differ at the harness level and not only on price**, and a chart that cannot
+express an engine flag cannot serve an agent harness at all.
+
+**And the example was lying where the mechanism was not.** Those fourteen 400s came back as `accepted=False` and the
+loop reported acceptance 0.00 on the box -- a model that looks bad at the task and was never asked. The mechanism
+already had the distinction (`evidence.UNOBSERVED` with reason `unsupported`, and `Cell.attempted` excludes it), so the
+example was fixed against the mechanism's own vocabulary rather than the other way round: `Reply.unobserved_because` is
+validated against `UNOBSERVED_REASONS`, the loop records one of three states, `acceptance` divides by attempts, and
+`preferred()` refuses to rank a candidate that never served the request. Worth stating plainly because it is the
+opposite of the other findings: here the framework was right and its first real caller was wrong, which is what the
+example is for.
+
+Everything built was destroyed afterwards. Suite: **2,181 passing, 3 skipped.**
 
 ## Not requirements, deliberately
 

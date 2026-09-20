@@ -571,49 +571,93 @@ def test_the_subject_has_no_default():
                     price=price(), measured_on=DIG, elicitation=TERSE, validity=validity(), readout_version="r1")
 
 
-@pytest.mark.parametrize("subject,answers", [("own_competence", True), ("item_difficulty", True),
-                                             ("topic", False), ("resource_state", False)])
-def test_only_competence_and_difficulty_answer_an_escalation_question(subject, answers):
-    """A gate asks whether this should go somewhere better. A topic signal answers a different question well -- at five
-    times chance -- and says nothing about competence."""
-    assert q(subject=subject).answers_an_escalation_question() is answers
+@pytest.mark.parametrize("subject", ["own_competence", "item_difficulty", "topic", "resource_state"])
+def test_no_subject_is_privileged_and_an_unmeasured_signal_claims_nothing(subject):
+    """**Rewritten deliberately, and the old version is the evidence this change is real.** It asserted that only
+    competence and difficulty could answer a gate's question, from a list in the mechanism -- so a study measuring topic
+    to predict competence could not say so.
+
+    What holds now for every subject alike: a record with no measured performance shows nothing, and the mechanism says
+    which of "no evidence" and "measured and failed" applies rather than deciding by name."""
+    signal = q(subject=subject)
+    assert signal.shown_to_predict("own_competence") is False
+    assert "absence of evidence rather than evidence of absence" in signal.why_not_shown_to_predict("own_competence")
 
 
-def test_a_topic_signal_is_not_admissible_to_a_gate_however_strong_it_is():
-    """Admitting it would route by subject while reporting that it routes by difficulty. The strength is not the
-    question: this is the one that read at 0.7593."""
+def test_any_subject_can_be_shown_to_predict_anything_if_the_record_measures_it():
+    """The case the old list made unrepresentable: a topic signal that WAS measured against competence and beat its
+    declared baseline. Whether that is a good idea is the study's question; the mechanism's job is to let it be said."""
+    measured_topic = q(name="field_name", subject="topic",
+                       performance=qt.Performance(curve=((100.0, 0.72), (200.0, 0.76)),
+                                                  baselines=(qt.Baseline(kind="category_prior", value=0.66),),
+                                                  predicts="own_competence"))
+    assert measured_topic.shown_to_predict("own_competence") is True
+    assert "beat a declared baseline" in measured_topic.why_not_shown_to_predict("own_competence")
+
+
+def test_a_signal_measured_against_one_target_is_not_evidence_about_another():
+    """The refusal that survives, because it is about the record rather than about the subject's name."""
+    elsewhere = q(subject="own_competence",
+                  performance=qt.Performance(curve=((100.0, 0.85), (200.0, 0.9)),
+                                             baselines=(qt.Baseline(kind="constant_score", value=0.5),),
+                                             predicts="item_difficulty"))
+    assert elsewhere.shown_to_predict("own_competence") is False
+    assert "is not evidence about another" in elsewhere.why_not_shown_to_predict("own_competence")
+
+
+def test_a_measured_signal_that_beat_nothing_says_so_distinctly():
+    lost = q(performance=qt.Performance(curve=((100.0, 0.38), (200.0, 0.4)),
+                                        baselines=(qt.Baseline(kind="constant_score", value=0.5),),
+                                        predicts="own_competence"))
+    assert lost.shown_to_predict("own_competence") is False
+    assert "did not beat any of its declared baselines" in lost.why_not_shown_to_predict("own_competence")
+
+
+def test_a_gate_reads_what_the_record_is_about_and_not_whether_it_is_any_good():
+    """Three filters, all properties of the record. Requiring evidence would be a policy, and exploring an unmeasured
+    signal is a legitimate thing to do -- this package has a module for it."""
     topic = q(name="field_name", subject="topic")
     competence = q(name="entropy", subject="own_competence")
     usable = qt.admissible_for_a_gate([topic, competence], elicitation=TERSE, served=DIG)
-    assert [x.name for x in usable] == ["entropy"]
+    assert sorted(x.name for x in usable) == ["entropy", "field_name"]
 
 
-def test_competence_and_difficulty_are_still_kept_apart_as_subjects():
-    """One asks whether THIS candidate can answer and the other how hard the item is for anyone; a signal fitted to the
-    second has been measured not to predict the first's uplift, so they are two entries rather than one."""
-    assert "own_competence" in qt.SUBJECTS and "item_difficulty" in qt.SUBJECTS
-    assert set(qt.ESCALATION_SUBJECTS) == {"own_competence", "item_difficulty"}
+def test_there_is_no_list_of_privileged_subjects_anywhere():
+    """A guard on the removal itself: re-adding the list is how this regresses."""
+    assert not hasattr(qt, "ESCALATION_SUBJECTS")
+    from tierbook import evidence
+    assert not hasattr(evidence, "ESCALATION_SUBJECTS")
+    assert "own_competence" in qt.SUBJECTS and "topic" in qt.SUBJECTS
 
 
 def test_the_printed_form_says_what_it_is_about():
     assert "about topic" in str(q(subject="topic"))
 
 
-def test_the_door_marks_a_topic_quantity_as_not_usable(tmp_path, capsys):
+def test_the_door_admits_a_topic_quantity_like_any_other(tmp_path, capsys):
+    """Rewritten with the rule it encoded. The door used to print "not usable: field_name" for a topic signal, which put
+    the same hardcoded judgement in the operator's face."""
     code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:30:r1",
                                         "entropy:scalar:after_prefill:passive_observation:own_competence:1:30:r1"])
     assert code == 0
-    assert "not usable: field_name" in text
+    assert "usable: field_name" in text
     assert "usable: entropy" in text
-    assert "1 of 2 quantities are admissible" in text
+    assert "2 of 2 quantities are admissible" in text
 
 
-def test_the_door_exits_two_when_only_topic_signals_are_declared(tmp_path, capsys):
-    """A fleet of strong signals about the wrong thing leaves the gate with nothing to decide with, which is a finding
-    rather than an error."""
-    code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:30:r1"])
+def test_the_door_exits_two_when_nothing_is_readable_in_time(tmp_path, capsys):
+    """Rewritten with the rule it encoded: it used to exit 2 for a fleet of topic signals, which is the mechanism deciding
+    that topic is the wrong thing. What still leaves a gate with nothing is a quantity it cannot read before the cost it
+    exists to avoid has been paid -- a property of the record rather than a judgement about the subject."""
+    code, text = _run(tmp_path, capsys, ["late_score:scalar:after_generation:passive_observation:own_competence:1:30:r1"])
     assert code == 2
     assert "0 of 1" in text
+
+
+def test_the_door_admits_a_topic_signal_that_is_readable_in_time(tmp_path, capsys):
+    code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:30:r1"])
+    assert code == 0
+    assert "1 of 1" in text
 
 
 # --- a fitted quantity carries the knob and the space it was computed in ---------------------------------------------------

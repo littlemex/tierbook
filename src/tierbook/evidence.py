@@ -1,5 +1,15 @@
 """Per-item observations, checked on every read, so a paired comparison is drawn from something recoverable.
 
+**This file holds the closed vocabularies, which makes it where the META MECHANISM RULE is easiest to break.** Logic
+is injected into this package; it is never built in. So a vocabulary here may enumerate **what a thing is** -- the
+modes a fact can arrive by, the boundaries a digest can be over, the reasons a part can be absent -- and may never
+enumerate **which of them are worth using**. `ESCALATION_SUBJECTS` lived here and did the second: it named the two
+subjects a gate was permitted to read, on the strength of one corpus, and made a different study's conclusion
+unrepresentable. It has been removed.
+
+A closed vocabulary is right when a value outside it is **meaningless**. It is wrong when a value outside it is
+merely **unpromising in the data we happen to have.**
+
 Before this module, a record carried only the 2x2 that a comparison produced -- `paired_vs_reference`,
 hand-computed once and trusted forever. Two failure modes came from exactly that: a comparison that was
 never run cannot be recovered from a summary (there is nothing underneath it to re-derive), and a summary
@@ -452,10 +462,12 @@ def elicitation_from_template(name: str, template: str) -> Elicitation:
 #: (quantity imports judge imports reproduce imports quorum). One home, reachable from both.
 SUBJECTS = ("topic", "own_competence", "item_difficulty", "resource_state")
 
-#: What an escalation decision may condition on. A gate asks "should this go somewhere better", which is a question
-#: about competence or difficulty; `topic` answers a different question well and this one not at all, and
-#: `resource_state` says nothing about the item.
-ESCALATION_SUBJECTS = ("own_competence", "item_difficulty")
+#: There is deliberately NO `ESCALATION_SUBJECTS` here. One lived at this spot, naming `own_competence` and
+#: `item_difficulty` as the only subjects a gate could read, and it was removed as a violation of the rule at the top of
+#: this file: it enumerated which subjects are WORTH USING rather than what a subject IS. It was supported by a real
+#: measurement -- a topic signal reads at five times chance on this corpus and says nothing about competence -- and it
+#: still made a different study's conclusion unrepresentable. Whether a signal earns a gate is decided by what the record
+#: measures about it, through `Quantity.shown_to_predict`, with the target supplied by the caller.
 
 #: When a number a verdict depends on was fixed. Closed, and shared rather than restated: it was written first for a
 #: comparison's operating point, and a criterion's null needs the identical distinction. Two copies would be one edit
