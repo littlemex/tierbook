@@ -14,7 +14,15 @@ jobs:
       matrix:
         python: ["3.10", "3.11", "3.12"]
     steps:
+      # Full history, tags included. `tests/test_config_aggregation.py` reads the candidate file this project
+      # SHIPPED at v0.1.0 out of the tag, deliberately rather than out of the working tree: the point of that test
+      # is a record of what a real operator's file looked like, and a copy vendored into the tree would be editable
+      # in the same change it polices. actions/checkout defaults to depth 1 with no tags, so without this the tag
+      # is not an object in the checkout and the test fails with `invalid object name 'v0.1.0'` -- a failure that
+      # reads like a broken test and is a missing fetch.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}

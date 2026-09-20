@@ -64,7 +64,19 @@ def _v010_candidates_raw() -> dict:
     config_format-1 bare-string shape. Read from git rather than typed by hand, because a one-family
     reduction typed for this test would not exercise cross-family aggregation, which is the point of C8.
     """
-    text = subprocess.check_output(["git", "show", "v0.1.0:examples/ledger/candidates.json"], cwd=ROOT, text=True)
+    got = subprocess.run(["git", "show", "v0.1.0:examples/ledger/candidates.json"],
+                         cwd=ROOT, capture_output=True, text=True)
+    if got.returncode != 0:
+        # Said in one sentence rather than left as a subprocess traceback. This has exactly one cause in practice:
+        # a checkout without the tag. `actions/checkout` defaults to depth 1 with no tags, and the resulting
+        # `invalid object name` reads like a broken test rather than a missing fetch.
+        raise AssertionError(
+            "the v0.1.0 tag is not an object in this checkout, so the file this project shipped at v0.1.0 cannot be "
+            "read. This test reads it from the TAG on purpose -- a copy in the working tree would be editable in the "
+            "same change it polices. Fetch the tag: in CI, `actions/checkout` needs `fetch-depth: 0`; locally, "
+            "`git fetch --tags origin`.\n"
+            f"git said: {got.stderr.strip()}")
+    text = got.stdout
     return json.loads(text)
 
 
@@ -330,3 +342,44 @@ def test_a_valid_file_still_loads_with_no_error():
     assert set(cfg.families) == {"family-one", "family-two"}
     assert cfg.families["family-one"].floor == 0.8
     assert cfg.families["family-two"].floor == 0.9
+
+
+def test_every_ci_checkout_that_runs_the_suite_fetches_the_history_it_needs():
+    """The omission that broke CI, made into a failure here rather than there.
+
+    Two tests in this file read the candidate file this project shipped at `v0.1.0` out of the tag. That is
+    deliberate -- a copy vendored into the working tree would be editable in the same change it polices -- and it
+    means the checkout has to carry the tag. `actions/checkout` defaults to depth 1 with no tags, so a workflow
+    that forgets `fetch-depth: 0` fails with `invalid object name 'v0.1.0'`, which reads like a broken test and is
+    a missing fetch.
+
+    Read as text rather than parsed as YAML, because this package declares no runtime dependencies and a dev set of
+    two: pulling in a YAML parser so a test can read a workflow would cost more than the check is worth. The three
+    `assert`s on the counts are what keep a text reader from passing vacuously when the shape it looks for moves.
+    """
+    workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    assert workflows, "no workflows found, so this guard checked nothing"
+
+    files_running_pytest = 0
+    checkouts_seen = 0
+    for path in workflows:
+        lines = path.read_text().splitlines()
+        if not any("pytest" in l for l in lines):
+            continue
+        files_running_pytest += 1
+        for i, line in enumerate(lines):
+            if "uses: actions/checkout" not in line:
+                continue
+            checkouts_seen += 1
+            indent = len(line) - len(line.lstrip())
+            # The step's own block: everything more deeply indented, up to the next item at this level.
+            block = []
+            for follow in lines[i + 1:]:
+                if follow.strip() and (len(follow) - len(follow.lstrip())) <= indent:
+                    break
+                block.append(follow)
+            assert any("fetch-depth: 0" in b for b in block), (
+                f"{path.name} runs pytest and checks out without `fetch-depth: 0` (line {i + 1}). The tests in this "
+                f"file read the v0.1.0 tag, which a shallow checkout does not contain.")
+    assert files_running_pytest, "no workflow runs pytest, so this guard checked nothing"
+    assert checkouts_seen, "a workflow runs pytest with no checkout step, so this guard checked nothing"
