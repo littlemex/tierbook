@@ -72,21 +72,43 @@ What it carries, and what it deliberately leaves null:
 - `api.capacity: null`, because nothing measured the metered endpoint. Null becomes `unknown` downstream, which is a
   different thing from a claim, and the mechanism keeps them apart.
 
-## The two changes the other repositories need
+## Both sides are pinned to a commit
 
-They live in `infra/patches/` as **diffs**, applied to a fresh checkout before anything deploys, and the same diffs are
-what gets sent upstream. See `infra/patches/README.md` for both, and for why this is a patch directory rather than
-surgery on the deployed resources — the short version is that a change made to a live resource cannot be sent upstream,
-drifts silently when upstream moves, and cannot answer "is it fixed yet".
+Neither of the other two repositories cuts versions, so **a commit id is the only thing that names a state of them**.
+`GATEWAY_REF` and `CLUSTER_REF` carry the two commits this was verified against, and the checkout fetches exactly those:
+`git fetch --depth 1 origin <sha>` and a detached checkout, never a branch.
+
+"The tip of main" is not a state. Two runs a week apart would deploy different code while reporting the same thing, and a
+failure could not be attributed to either side's change. An existing checkout is moved onto the pin rather than left
+alone, because a stale working tree that happens to be sitting there is the quiet version of the same problem.
+
+The pin must be the **full 40 characters** — fetching a single commit with an abbreviated id is refused by the server,
+and the script says so rather than falling back to a branch. Override either with `TIERBOOK_GATEWAY_REF` /
+`TIERBOOK_CLUSTER_REF`.
+
+The connection file records both: `requested` (the pin) and `at` (what the checkout resolved to). They differ exactly
+when something went wrong, so `connect` prints a warning when they do.
+
+## The two changes the other repositories needed
+
+**Both are fixed upstream, and the pinned commits are the ones that carry the fixes.** There are no patches in
+`infra/patches/` any more.
+
+| gap | where it was | now |
+|---|---|---|
+| the gateway's documented first-admin procedure could not work: the variable the backend reads at startup never reached its task definition, so a clean deployment ended with zero users | `iac/bin/iac.ts` | fixed upstream; `GATEWAY_REF` points at the merge that carries it |
+| the serving chart rendered a closed list of engine arguments, so a request carrying tool schemas was rejected with 400 and no flag could be passed | `charts/experiments` | fixed upstream as `extraArgs`; `CLUSTER_REF` points at the merge that carries it |
+
+The patch mechanism is still here for the next gap, and `infra/patches/README.md` says how to add one. It reports three
+states — already upstream, applies, no longer matches — and refuses the third rather than applying half a fix:
 
 ```bash
-./infra/tierbook-up patches      # already upstream / applies / no longer matches, per patch
+./infra/tierbook-up patches            # what each patch would do; nothing to report while there are none
+./infra/tierbook-up patches --apply    # apply them to the checkouts in the work directory
 ```
 
-Three states, all handled. The first is the one that matters as the fixes land: a patch already in the checkout is
-detected by `git apply --reverse --check`, skipped, and reported as deletable — so the day upstream carries it, deploys
-keep working and the patch becomes visibly unnecessary instead of quietly redundant. A patch that no longer matches is
-**refused**, because applying part of it deploys half a fix.
+A pin and a patch answer different questions. A patch compensates for code that is wrong; a pin states which code was
+verified. With the fixes upstream, the pin is the one doing the work.
 
 **One case the patches cannot reach.** A gateway this script *adopted* was deployed by somebody else, and seeding its
 first administrator means redeploying their ECS stack. This script will not do that. If an adopted gateway has no

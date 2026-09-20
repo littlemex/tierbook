@@ -1,14 +1,22 @@
-# patches: the two changes the other repositories need, kept as diffs
+# patches: changes the other repositories need, kept as diffs
 
 **Each file here is a change to another project, held as a diff so that it can be sent there.** `infra/tierbook-up`
-applies them to a fresh checkout before deploying, and the same diffs are the contribution — nothing has to be
+applies them to a pinned checkout before deploying, and the same diffs are the contribution — nothing has to be
 re-derived to upstream them.
 
-```
-patches/
-  stratoclave/     0001-pass-the-bootstrap-admin-email-into-the-task-definition.patch
-  distributed-ai/  0001-gpu-serving-vllm-accepts-extra-engine-args.patch
-```
+## There are none right now
+
+Both gaps this mechanism was built for are fixed upstream, and `GATEWAY_REF` / `CLUSTER_REF` in `infra/tierbook-up` name
+the commits that carry the fixes:
+
+| gap | fixed as |
+|---|---|
+| the gateway's first-admin variable never reached its task definition | the variable is passed through beside `ALLOW_ADMIN_CREATION` |
+| the serving chart's engine arguments were a closed list, so a request carrying tool schemas was rejected with 400 | `extraArgs` on the three serving workloads |
+
+So this directory holds only this document. That is the intended end state for a patch, not a sign the mechanism went
+unused — and a patch directory that exists with nothing in it is a test failure, because scaffolding left behind makes
+`patches` report on a repository it carries nothing for.
 
 ## Why a diff rather than fixing the deployed resource
 
@@ -39,24 +47,18 @@ Read the state without deploying anything:
 ./infra/tierbook-up patches
 ```
 
-## What each patch is for
+## When a patch lands upstream
 
-**`stratoclave/0001`** — the gateway's documented first-admin procedure cannot work. The backend reads
-`STRATOCLAVE_BOOTSTRAP_ADMIN_EMAIL` at startup, the ECS stack pre-creates the secret for the password and grants the
-task write access to exactly its ARN, and the variable appears nowhere in the infrastructure code, so it never reaches
-the container. Observed on a clean deployment: the procedure reports success and the user pool has zero users. Without
-this patch there is no administrator, and without an administrator no API key, and without a key tierbook has no way in.
+Delete the file, and move the pin forward to the commit that carries the fix. Those two go together: without the pin
+moving, the next run checks out code that still needs the patch you just deleted.
 
-**`distributed-ai/0001`** — the serving chart renders a closed list of five engine arguments. A request carrying `tools`
-is rejected unless the engine was started with two more flags, and every request a coding agent sends carries tools. The
-patch appends a caller-supplied list; the default is empty, so the rendered Deployment is unchanged for anyone not using
-it (checked by rendering both ways).
+If a directory empties completely, delete it too — `tests/test_infra_connection.py` fails on a patch directory that
+exists with nothing in it.
 
-## When one of these lands upstream
+## Adding one
 
-Delete the file. Nothing else: the script finds the directory shorter and says so. If a directory empties completely,
-delete it too — `tests/test_infra_connection.py` fails on a patch directory that exists with nothing in it, which is the
-state that means "somebody upstreamed these and left the scaffolding behind".
+Write the diff against the **pinned** checkout in the work directory, not against the tip of the other project's main
+branch. A patch generated against a newer tree may refuse to apply to the pin, and the refusal arrives at deploy time.
 
 ## Regenerating a patch
 

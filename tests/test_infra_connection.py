@@ -188,10 +188,6 @@ def test_the_two_prices_say_where_they_came_from(tmp_path):
     assert "supplied" in payload["api"]["price_basis"]
 
 
-PATCH_DIRS = {"stratoclave": ROOT / "infra" / "patches" / "stratoclave",
-              "distributed-ai": ROOT / "infra" / "patches" / "distributed-ai"}
-
-
 def seed_repo(root: Path, content: str) -> Path:
     """A throwaway git repository, so the applier's three branches can be exercised on content this test controls."""
     root.mkdir(parents=True, exist_ok=True)
@@ -298,21 +294,166 @@ def test_applying_a_patch_already_upstream_is_a_no_op_rather_than_a_failure(tmp_
     assert (repo / "thing.txt").read_text() == "after\n"
 
 
-@pytest.mark.parametrize("name", sorted(PATCH_DIRS))
-def test_every_shipped_patch_is_a_real_diff_that_says_why_it_exists(name):
-    """A patch nobody can read is a patch nobody upstreams, and upstreaming is the point of keeping them as diffs."""
-    d = PATCH_DIRS[name]
-    patches = sorted(d.glob("*.patch"))
-    assert patches, f"no patches for {name}; if they were all upstreamed, delete the directory too"
-    for p in patches:
-        text = p.read_text()
-        assert "diff --git" in text, f"{p.name} is not a diff"
-        assert "---\n" in text.split("diff --git")[0], f"{p.name} has no header separated from its diff"
-        head = text.split("diff --git")[0]
-        assert "THE GAP" in head, f"{p.name} does not say what gap it closes"
-        assert "OBSERVED" in head, f"{p.name} does not say what was observed"
-        assert "THE FIX" in head, f"{p.name} does not say what it changes"
-        assert "Delete this patch once it is upstream" in head, f"{p.name} does not say when it can go"
+def test_every_shipped_patch_is_a_real_diff_that_says_why_it_exists():
+    """Whatever patches ship must be readable by the project they are aimed at, because upstreaming them is the point.
+
+    Zero patches is a valid state and is the current one: both gaps this mechanism was built for are fixed upstream, and
+    the pinned commits name the fixes. What is NOT valid is a patch directory that exists and is empty -- that is
+    scaffolding somebody left behind, and it makes `patches` report on a repository it carries nothing for.
+    """
+    root = ROOT / "infra" / "patches"
+    dirs = [d for d in root.iterdir() if d.is_dir()] if root.exists() else []
+    for d in dirs:
+        patches = sorted(d.glob("*.patch"))
+        assert patches, f"{d.name}/ exists with no patches in it; delete the directory too"
+        for p in patches:
+            text = p.read_text()
+            assert "diff --git" in text, f"{p.name} is not a diff"
+            assert "---\n" in text.split("diff --git")[0], f"{p.name} has no header separated from its diff"
+            head = text.split("diff --git")[0]
+            for needed in ("THE GAP", "OBSERVED", "THE FIX", "Delete this patch once it is upstream"):
+                assert needed in head, f"{p.name} does not say {needed!r}"
+
+
+# --- the pin, which is what replaces the patches now that both fixes are upstream ------------------------------------
+
+def pinned_refs() -> dict:
+    """The two commit ids the script defaults to, read out of the script rather than duplicated here."""
+    body = SCRIPT.read_text()
+    out = {}
+    for name, var in (("gateway", "TIERBOOK_GATEWAY_REF"), ("cluster", "TIERBOOK_CLUSTER_REF")):
+        line = next(l for l in body.splitlines() if l.startswith(f"{name.upper()}_REF="))
+        assert var in line, f"{name} pin does not read {var}"
+        out[name] = line.split(":-", 1)[1].rstrip('"}')
+    return out
+
+
+def test_both_sides_are_pinned_to_a_full_commit_id():
+    """Neither repository cuts versions, so a commit is the only thing that names a state of them.
+
+    Full 40 characters, not abbreviated: fetching a single commit needs the complete id -- an abbreviated one is refused
+    by the server, and the failure arrives at deploy time rather than here.
+    """
+    for name, ref in pinned_refs().items():
+        assert len(ref) == 40, f"the {name} pin is {len(ref)} characters; fetching one commit needs the full 40"
+        assert all(c in "0123456789abcdef" for c in ref), f"the {name} pin is not a hex commit id: {ref!r}"
+
+
+def run_checkout_pinned(tmp_path: Path, repo: str, ref: str) -> subprocess.CompletedProcess:
+    """Run the script's own `checkout_pinned` against a repository, with the smallest possible harness around it.
+
+    The function is sourced out of the real script rather than reimplemented, so what is under test is what ships. The
+    remote is a local bare repository, so this needs no network and no credentials.
+    """
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        'set -uo pipefail\n'
+        'info() { printf "[i] %s\\n" "$1"; }\n'
+        'warn() { printf "[w] %s\\n" "$1"; }\n'
+        'die() { printf "[die] %s\\n" "$1" >&2; exit 1; }\n'
+        'state_set() { :; }\n'
+        f'. <(sed -n "/^checkout_pinned() {{/,/^}}/p" "{SCRIPT}")\n'
+        f'checkout_pinned "{tmp_path}/co" "{repo}" "{ref}" cluster\n')
+    return subprocess.run(["bash", str(harness)], capture_output=True, text=True, cwd=str(ROOT))
+
+
+def a_bare_remote(tmp_path: Path) -> tuple[str, str]:
+    """A local bare repository with two commits, returning its path and the first commit's id."""
+    src = tmp_path / "src"; src.mkdir()
+    def git(*a, cwd=src):
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=cwd, check=True,
+                       capture_output=True)
+    git("init", "-q", "-b", "main")
+    (src / "a.txt").write_text("one\n"); git("add", "."); git("commit", "-qm", "one")
+    first = subprocess.run(["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True).stdout.strip()
+    (src / "a.txt").write_text("two\n"); git("add", "."); git("commit", "-qm", "two")
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(src), str(bare)], check=True, capture_output=True)
+    return str(bare), first
+
+
+def test_the_checkout_lands_on_the_pinned_commit_and_not_on_the_branch_tip(tmp_path):
+    """The pin has to win over the branch. Asking for the first of two commits must not produce the second."""
+    repo, first = a_bare_remote(tmp_path)
+    got = run_checkout_pinned(tmp_path, repo, first)
+    assert got.returncode == 0, got.stderr
+    at = subprocess.run(["git", "-C", str(tmp_path / "co"), "rev-parse", "HEAD"],
+                        capture_output=True, text=True).stdout.strip()
+    assert at == first, f"the checkout is at {at}, not at the pinned {first}"
+    assert (tmp_path / "co" / "a.txt").read_text() == "one\n", "the working tree is not the pinned commit's"
+
+
+def test_an_existing_checkout_is_moved_onto_the_pin(tmp_path):
+    """A stale tree that happens to be sitting there is the quiet form of deploying unpinned code."""
+    repo, first = a_bare_remote(tmp_path)
+    assert run_checkout_pinned(tmp_path, repo, first).returncode == 0
+    # Move it off the pin, the way a previous run with a different pin would have left it.
+    subprocess.run(["git", "-C", str(tmp_path / "co"), "fetch", "-q", "origin", "main"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path / "co"), "checkout", "-q", "--detach", "FETCH_HEAD"], check=True)
+    assert (tmp_path / "co" / "a.txt").read_text() == "two\n"
+    # And a second run must put it back.
+    assert run_checkout_pinned(tmp_path, repo, first).returncode == 0
+    assert (tmp_path / "co" / "a.txt").read_text() == "one\n", "the existing checkout was left off the pin"
+
+
+def test_an_unfetchable_pin_fails_instead_of_falling_back_to_a_branch(tmp_path):
+    """The refusal, exercised rather than read.
+
+    An earlier version of this test asserted that the words `die` and `FULL 40 character id` appeared in the function,
+    and a mutation that replaced the refusal with a fallback to `main` passed it -- the function has another `die` and
+    the phrase survived in the fallback's message. A refusal has to be checked by its exit code and by what it did NOT
+    leave behind.
+    """
+    repo, _ = a_bare_remote(tmp_path)
+    got = run_checkout_pinned(tmp_path, repo, "0" * 40)
+    assert got.returncode != 0, f"an unfetchable pin was tolerated: {got.stdout}"
+    assert "could not fetch" in got.stderr
+    # Nothing must be checked out: falling back to a branch would leave a usable tree at the wrong commit.
+    out = subprocess.run(["git", "-C", str(tmp_path / "co"), "rev-parse", "HEAD"], capture_output=True, text=True)
+    assert out.returncode != 0, f"a tree was left at {out.stdout.strip()} after the pin could not be fetched"
+
+
+def test_the_pinned_fetch_asks_for_one_commit(tmp_path):
+    """Depth one, because the history of another project is not something this needs a copy of."""
+    body = SCRIPT.read_text()
+    fn = body[body.index("checkout_pinned() {"):body.index("gateway_checkout() {")]
+    assert "--depth 1 origin" in fn
+    assert "clean -qfd" in fn, "a reused checkout is not cleaned, so a stale untracked file survives the pin"
+
+
+def test_the_connection_file_records_which_commit_produced_it(tmp_path):
+    """A measurement whose subject cannot be named again is a measurement nobody can repeat."""
+    got = run_connect(tmp_path, with_measurement=True)
+    assert got.returncode == 0, got.stderr
+    payload = json.loads((tmp_path / "connection.json").read_text())
+    assert "sources" in payload
+    for side in ("gateway", "cluster"):
+        entry = payload["sources"][side]
+        assert entry["repo"]
+        # `requested` is the pin and is always present; `at` is null here because this run checked nothing out.
+        assert entry["requested"] and len(entry["requested"]) == 40
+        assert entry["at"] is None
+    assert "not checked out by this script" in got.stdout
+
+
+def test_a_pin_that_resolved_elsewhere_is_reported(tmp_path):
+    """The two fields differ exactly when something went wrong, so the difference has to be said out loud."""
+    work = tmp_path / "work"; work.mkdir()
+    (work / "state.json").write_text(json.dumps({"gateway_commit": "0" * 40, "cluster_commit": "0" * 40}))
+    (work / "probe.json").write_text(json.dumps({
+        "per_hour": 1.0, "arrivals": "open_loop", "deadline_seconds": 8.0, "goodput_per_hour": 1.0,
+        "understated_because": "", "offered": {"concurrency": 1, "seats": 1, "generator": "x"},
+        "observed": {"wall_seconds": 1.0, "output_tokens": 1, "completed": 1}}))
+    (work / "box-price.json").write_text(json.dumps({"usd_per_output_mtok": 1.0, "price_is_upper_bound": False}))
+    (work / "api-key.txt").write_text("k")
+    env = dict(os.environ)
+    env.update({"TIERBOOK_WORK_DIR": str(work), "TIERBOOK_CONNECTION_FILE": str(tmp_path / "c.json"),
+                "TIERBOOK_INFRA_CONFIG": str(tmp_path / "absent.env"),
+                "TIERBOOK_API_PRICE_PER_MTOK": "5.0", "TIERBOOK_API_MODEL": "m",
+                "TIERBOOK_GATEWAY_PREFIX": "", "TIERBOOK_CLUSTER_NAME": "", "AWS_PROFILE": ""})
+    got = subprocess.run(["bash", str(SCRIPT), "connect"], capture_output=True, text=True, env=env, cwd=str(ROOT))
+    assert got.returncode == 0, got.stderr
+    assert "WARNING" in got.stdout and "pin asked for" in got.stdout
 
 
 def test_nothing_operates_on_another_projects_live_resources():

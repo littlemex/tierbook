@@ -217,9 +217,13 @@ cp infra/config.example.env infra/config.env    # four required values
 nothing. Both directions are tested, because the first version of the state reader made `down` silently skip the very
 resources it owned. `infra/README.md` says which of the two prices is derived and which is refused rather than guessed.
 
-The two changes the other repositories need are **diffs** in `infra/patches/`, applied to a fresh checkout before
-deploying and sent upstream unchanged. `./infra/tierbook-up patches` says which are already upstream, which still apply,
-and which stopped matching.
+**Both sides are pinned to a commit.** Neither of the other two repositories cuts versions, so a commit id is the only
+thing that names a state of them, and the checkout fetches exactly that commit rather than a branch. The connection file
+records the pin and what the checkout resolved to, because the two differ exactly when something went wrong.
+
+The two gaps this wiring was built around — the gateway's first-admin variable never reaching its task definition, and
+the serving chart's closed list of engine arguments — are fixed upstream, and the pinned commits carry the fixes. The
+patch mechanism in `infra/patches/` stays for the next gap and currently holds nothing.
 
 ## On a cluster you already have
 

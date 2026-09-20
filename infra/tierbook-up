@@ -48,12 +48,17 @@ CLUSTER_MODE="${TIERBOOK_CLUSTER:-auto}"          # auto | create | existing | s
 GATEWAY_PREFIX="${TIERBOOK_GATEWAY_PREFIX:-}"
 GATEWAY_REGION="${TIERBOOK_GATEWAY_REGION:-us-east-1}"
 GATEWAY_REPO="${TIERBOOK_GATEWAY_REPO:-https://github.com/littlemex/stratoclave.git}"
+#: The exact commit of the gateway this was verified against. Neither of the two repositories cuts versions, so a commit
+#: is the only thing that names a state of them -- and "the tip of main" is not a state, it is whatever main happens to
+#: be the day somebody runs this. Pinning is what makes a run reproducible and a failure attributable.
+GATEWAY_REF="${TIERBOOK_GATEWAY_REF:-db7760356d9f87a4a11ee3a3b01607fc397942af}"
 GATEWAY_ADMIN_EMAIL="${TIERBOOK_GATEWAY_ADMIN_EMAIL:-}"
 GATEWAY_CONTAINER_CLI="${TIERBOOK_CONTAINER_CLI:-docker}"
 
 CLUSTER_NAME="${TIERBOOK_CLUSTER_NAME:-}"
 CLUSTER_REGION="${TIERBOOK_CLUSTER_REGION:-ap-northeast-1}"
 CLUSTER_REPO="${TIERBOOK_CLUSTER_REPO:-git@github.com:littlemex/distributed-ai.git}"
+CLUSTER_REF="${TIERBOOK_CLUSTER_REF:-b16a7d36a39cd5a8127069cf8c6cba78f4b0ecce}"
 CLUSTER_STATE_BUCKET="${TIERBOOK_CLUSTER_STATE_BUCKET:-}"
 CLUSTER_LOCK_TABLE="${TIERBOOK_CLUSTER_LOCK_TABLE:-}"
 
@@ -188,13 +193,43 @@ gateway_base_url() {
   [ -n "$dom" ] && [ "$dom" != "None" ] && printf 'https://%s' "$dom"
 }
 
+# Fetch one commit and check it out, rather than cloning a branch. `--depth 1` of a SHA gets that commit's tree and no
+# history, which is all a deploy needs and is the only form that cannot drift: a shallow clone of `main` is a clone of
+# whatever main was at that minute, and two runs a week apart would deploy different code while reporting the same thing.
+#
+# An existing checkout is moved onto the pin rather than left alone. A stale working tree that happens to be there is the
+# quiet version of the same problem.
+checkout_pinned() {  # checkout_pinned <dir> <repo> <ref> <name>
+  local dir="$1" repo="$2" ref="$3" name="$4"
+  if [ ! -d "$dir/.git" ]; then
+    info "$name: cloning at $ref"
+    mkdir -p "$dir"
+    git -C "$dir" init -q
+    git -C "$dir" remote add origin "$repo"
+  fi
+  git -C "$dir" fetch -q --depth 1 origin "$ref" 2>/dev/null \
+    || git -C "$dir" fetch -q origin "$ref" \
+    || die "$name: could not fetch $ref from $repo. Fetching a single commit needs the FULL 40 character id -- most
+  servers refuse an abbreviated one -- so set TIERBOOK_GATEWAY_REF or TIERBOOK_CLUSTER_REF to the complete hash."
+  git -C "$dir" checkout -q --detach FETCH_HEAD || die "$name: could not check out $ref."
+  git -C "$dir" clean -qfd
+  local at; at="$(git -C "$dir" rev-parse HEAD)"
+  info "$name: at $at"
+  printf '%s' "$at"
+}
+
 gateway_checkout() {
   local dir="$WORK/stratoclave"
-  if [ ! -d "$dir/.git" ]; then
-    info "cloning the gateway into $dir"
-    git clone -q --depth 1 "$GATEWAY_REPO" "$dir" || die "gateway clone failed."
-  fi
+  GATEWAY_AT="$(checkout_pinned "$dir" "$GATEWAY_REPO" "$GATEWAY_REF" gateway)"
+  state_set gateway_commit "$GATEWAY_AT"
   ( cd "$dir/iac" && [ -d node_modules ] || npm install >/dev/null ) || die "gateway npm install failed."
+  printf '%s' "$dir"
+}
+
+cluster_checkout() {
+  local dir="$WORK/distributed-ai"
+  CLUSTER_AT="$(checkout_pinned "$dir" "$CLUSTER_REPO" "$CLUSTER_REF" cluster)"
+  state_set cluster_commit "$CLUSTER_AT"
   printf '%s' "$dir"
 }
 
@@ -305,11 +340,7 @@ cluster_create() {
   [ -n "$CLUSTER_STATE_BUCKET" ] || refuse "TIERBOOK_CLUSTER_STATE_BUCKET is required. Terraform state for a cluster
   must not live only on this laptop: losing it means the cluster cannot be destroyed, which is the expensive failure."
 
-  local dir="$WORK/distributed-ai"
-  if [ ! -d "$dir/.git" ]; then
-    info "cloning the cluster module into $dir"
-    git clone -q --depth 1 "$CLUSTER_REPO" "$dir" || die "cluster clone failed."
-  fi
+  local dir; dir="$(cluster_checkout)"
   local eks="$dir/infra/eks"
 
   step "writing the cluster's inputs"
@@ -370,8 +401,7 @@ TFVARS
 box_present() { kc get svc gpu-vllm >/dev/null 2>&1; }
 
 box_deploy() {
-  local dir="$WORK/distributed-ai"
-  [ -d "$dir/.git" ] || { info "cloning the cluster module for its charts"; git clone -q --depth 1 "$CLUSTER_REPO" "$dir"; }
+  local dir; dir="$(cluster_checkout)"
   step "applying patches to the cluster checkout"
   apply_patches distributed-ai "$dir"
   local charts="$dir/infra/eks/charts"
@@ -395,8 +425,9 @@ box_deploy() {
   # Checked here rather than trusted: if the patch did not take, the flags are absent from the rendered args and the box
   # will reject every request a coding agent sends -- with a 400 that reads like a bad answer rather than a refusal.
   grep -q -- "--enable-auto-tool-choice" "$WORK/box.yaml" \
-    || die "the rendered box carries no tool-choice flags, so it will reject every request carrying tool schemas. The
-  chart takes extraArgs only with the patch in infra/patches/distributed-ai applied; check `tierbook-up patches`."
+    || die "the rendered box carries no tool-choice flags, so it would reject every request carrying tool schemas. The
+  chart takes extraArgs from the commit CLUSTER_REF pins; a pin older than that change renders them away silently. Check
+  which commit was checked out: \`tierbook-up status\`."
 
   step "applying the box"
   kc apply -f "$WORK/box.yaml" || die "could not apply the box."
@@ -408,6 +439,12 @@ box_deploy() {
 }
 
 # --- patches against the other two repositories ---------------------------------------------------------------------
+#
+# THERE ARE NONE RIGHT NOW, and that is the point of the pin above rather than a reason to delete this. Both gaps this
+# mechanism was built for -- the gateway's first-admin variable never reaching its task definition, and the serving
+# chart's closed list of engine arguments -- are fixed upstream, and `GATEWAY_REF`/`CLUSTER_REF` name the commits that
+# carry the fixes. A pin is the stronger of the two mechanisms: a patch compensates for code that is wrong, a pin states
+# which code was verified. `infra/patches/README.md` says how to add one when the next gap turns up.
 #
 # WHY PATCHES RATHER THAN LIVE SURGERY. Two gaps upstream stop this wiring working, and there are two ways to deal with
 # them: reach into the deployed resources afterwards and fix them there, or patch the source before deploying. The first
@@ -698,10 +735,11 @@ cmd_connect() {
   kinds of number stay distinguishable in the record."
 
   /usr/bin/python3 - "$CONNECTION" "$base" "$key" "$box_price" "$WORK/probe.json" \
-    "$BOX_MODEL" "$API_MODEL" "$API_PRICE_PER_MTOK" "$REQUIRED_PER_HOUR" "$CLUSTER_NAME" "$CLUSTER_REGION" <<'PY'
+    "$BOX_MODEL" "$API_MODEL" "$API_PRICE_PER_MTOK" "$REQUIRED_PER_HOUR" "$CLUSTER_NAME" "$CLUSTER_REGION" \
+    "$(state_get gateway_commit)" "$(state_get cluster_commit)" "$GATEWAY_REF" "$CLUSTER_REF" <<'PY'
 import json, pathlib, sys
 (out, base, key, box_price_file, probe_file, box_model, api_model, api_price, required,
- cluster, cluster_region) = sys.argv[1:12]
+ cluster, cluster_region, gateway_commit, cluster_commit, gateway_ref, cluster_ref) = sys.argv[1:16]
 
 def load(p):
     try:
@@ -747,6 +785,14 @@ conn = {
         "capacity": None,
     },
     "required_per_hour": float(required),
+    # Which commit of each side produced this. Neither repository cuts versions, so a commit id is the only thing that
+    # names a state of them -- and a measurement whose subject cannot be named again is a measurement nobody can repeat.
+    # `requested` and `at` are both here because they differ exactly when something went wrong: a pin that resolved to
+    # something else, or a checkout nobody pinned.
+    "sources": {
+        "gateway": {"repo": "stratoclave", "requested": gateway_ref or None, "at": gateway_commit or None},
+        "cluster": {"repo": "distributed-ai", "requested": cluster_ref or None, "at": cluster_commit or None},
+    },
 }
 pathlib.Path(out).write_text(json.dumps(conn, indent=1) + "\n")
 print(f"wrote {out}")
@@ -757,12 +803,30 @@ for missing, what in (
         (conn["box"]["capacity"] is None, "capacity evidence for the box (run `measure`)")):
     if missing:
         print(f"  NOT USABLE YET: {what} is absent")
+for side, got in conn["sources"].items():
+    if got["requested"] and got["at"] and not got["at"].startswith(got["requested"][:7]):
+        print(f"  WARNING: the {side} pin asked for {got['requested'][:12]} and the checkout is at {got['at'][:12]}")
+    if not got["at"]:
+        print(f"  the {side} was not checked out by this script, so no commit is recorded for it")
 PY
 }
 
 # --- status and teardown --------------------------------------------------------------------------------------------
 
 cmd_status() {
+  step "pinned sources"
+  # First, because every other line below is only meaningful against a known version of the other two repositories.
+  for pair in "gateway $GATEWAY_REF $WORK/stratoclave" "cluster $CLUSTER_REF $WORK/distributed-ai"; do
+    set -- $pair
+    if [ -d "$3/.git" ]; then
+      local at; at="$(git -C "$3" rev-parse HEAD 2>/dev/null || echo unknown)"
+      if [ "$at" = "$2" ]; then info "$1: pinned at ${2:0:12}, checkout matches"
+      else warn "$1: pinned at ${2:0:12} but the checkout is at ${at:0:12}"; fi
+    else
+      info "$1: pinned at ${2:0:12}, not checked out yet"
+    fi
+  done
+
   step "gateway (prefix '${GATEWAY_PREFIX:-unset}', $GATEWAY_REGION)"
   if [ -z "$GATEWAY_PREFIX" ]; then warn "no prefix configured"
   elif gateway_stacks_present; then
