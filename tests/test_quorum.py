@@ -112,14 +112,15 @@ def _cell_answer(table, item, tier):
 
 
 def test_a_selected_answer_no_member_produced_is_refused_not_scored_wrong():
-    """Defaulting an unattested selection to 'wrong' would score a selection this table never measured -- the
-    ambiguity a reviewer found `_answer_is_correct` used to resolve silently."""
+    """Defaulting an unattested selection to 'wrong' would score a selection this table never measured. Round 6
+    moved this check earlier, into `check_selected_answer`, so both `evaluate` and `router.decide_from_score`
+    refuse an invented answer at the same point rather than one of them catching it later (or not at all)."""
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 
     def invents_an_answer(answers):
         return "Z"  # "Z" is nobody's answer
 
-    with pytest.raises(EvidenceError, match="no member's cell recorded"):
+    with pytest.raises(EvidenceError, match="not one of the members' own answers"):
         evaluate(t, ("a",), "dear", stop_rule=invents_an_answer)
 
 

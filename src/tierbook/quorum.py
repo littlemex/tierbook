@@ -137,21 +137,34 @@ def _cell(table: OutcomeTable, item: str, tier: str) -> Cell:
 #: Returns the SELECTED ANSWER to stop, or `None` to escalate. `agreement` below is the DEFAULT this project
 #: measured, not the only shape the signature can hold.
 #:
-#: **Round 5 narrowed this contract, and the narrowing is the whole fix.** Round 4's `decide_from_score` still
-#: let a rule read the WHOLE matrix (`table, members, items`), and two reviewers showed that a rule reading
-#: anything beyond this one item's member answers sees DIFFERENT input at fit time (the real table: real item
-#: ids, real cell status/cost, the escalation tier's own cell, every other item) than at runtime (a synthetic
-#: one-item table built from nothing but the answers heard so far). A rule that reads cell status, an item id,
-#: a batch-wide quantile, or the escalation tier's cell can therefore certify one accuracy and execute a
-#: different policy -- not because either call site has a bug, but because the CONTRACT let a rule depend on
-#: something the two call sites could not agree to supply identically.
+#: **Round 5 narrowed this contract, closing the gap round 4 left.** Round 4's `decide_from_score` still let a
+#: rule read the WHOLE matrix (`table, members, items`), and two reviewers showed that a rule reading anything
+#: beyond this one item's member answers sees DIFFERENT input at fit time (the real table: real item ids, real
+#: cell status/cost, the escalation tier's own cell, every other item) than at runtime (a synthetic one-item
+#: table built from nothing but the answers heard so far). A rule that reads cell status, an item id, a
+#: batch-wide quantile, or the escalation tier's cell can therefore certify one accuracy and execute a different
+#: policy -- not because either call site has a bug, but because the CONTRACT let a rule depend on something
+#: the two call sites could not agree to supply identically.
 #:
-#: Narrowing the signature to exactly `Mapping[member, answer] -> answer | None` removes that possibility
-#: structurally rather than testing for its absence: there is no batch, no item id, no escalation cell, no
-#: OTHER item for a rule to read even if it wanted to, so applying the SAME function to the SAME per-item
-#: answers dict *is* the same computation whether `evaluate` calls it while scoring the fitting table or
-#: `router.decide_from_score` calls it while deciding one live request. Equivalence is not verified after the
-#: fact; the type signature is what makes it true.
+#: Narrowing the signature to exactly `Mapping[member, answer] -> answer | None` removes THAT specific
+#: divergence -- there is no batch, no item id, no escalation cell, no OTHER item in the argument for a rule to
+#: read even if it wanted to, so `evaluate`'s call and `router.decide_from_score`'s call for the same member
+#: answers are the identical call on the identical shape of input.
+#:
+#: **What this narrowing does and does not guarantee (round 6, after a reviewer showed the difference matters).**
+#: It bounds what a rule's ARGUMENT can contain; it cannot bound what the rule's BODY reads. Python cannot stop
+#: a closure from reading a global counter, `random.random()`, or module state that changes between calls, and
+#: a rule that does will legitimately score one way during `evaluate`'s search (called many times per item) and
+#: decide another way at runtime (called once per live request) -- the earlier wording here ("structurally
+#: impossible", "provably the same computation") overstated what the type signature alone can promise. The
+#: actual guarantee is narrower and is a contract on the RULE, not a property the signature enforces on its
+#: own: **for any per-item stop rule that is a pure, deterministic function of its `Mapping[member, answer]`
+#: argument, `evaluate`'s batch scoring and `router.decide_from_score`'s runtime decision compute the same
+#: result for the same member answers.** Writing a rule that is pure and deterministic is the caller's promise
+#: to keep, the same way `evidence.py`'s closed vocabularies are a promise about what a value MEANS rather than
+#: something Python enforces. `Router.fit` adds one cheap, best-effort check for this (see its docstring): it
+#: cannot catch a rule that changes ITS OWN behaviour after `fit` returns (a global flipped later, an external
+#: clock), only a rule whose stopped-items-and-answers already disagree with itself within `fit`.
 #:
 #: **What this deliberately leaves out.** A rule that genuinely needs the whole batch -- a quantile over the
 #: corpus, a signal keyed by item id, anything that is a property of the CORPUS rather than of one question --
@@ -159,8 +172,8 @@ def _cell(table: OutcomeTable, item: str, tier: str) -> Cell:
 #: already has a place for it: `evaluate_signal`/`enumerate_signal_policies`, which take a `signal: dict[item,
 #: float]` computed once over the whole corpus ahead of time and read it per item. A caller whose rule needs
 #: batch context builds that signal separately and uses THAT mechanism; it does not belong behind
-#: `ItemStopRule`, which promises a per-item determinism this project can only actually enforce by refusing to
-#: let a rule see more than one item at a time.
+#: `ItemStopRule`, which promises a per-item determinism this project can check for, at best, by comparing two
+#: calls -- never guarantee for an arbitrary Python callable.
 #:
 #: Named `ItemStopRule` rather than the bare `StopRule` an earlier version used, because `router.py` used to
 #: declare a SECOND stop rule under that name with an incompatible signature; `router.py`'s runtime derivation
@@ -222,17 +235,24 @@ def rule_identity(rule: Callable) -> str:
     return getattr(rule, "__qualname__", repr(rule))
 
 
-def check_selected_answer(selected: object, stop_rule: Callable, *, item: str = "") -> None:
-    """Refuse a per-item stop rule's return value that is neither `None` (escalate) nor a genuine, non-empty
-    answer string (stop, and select this one).
+def check_selected_answer(selected: object, stop_rule: Callable, member_answers: Mapping[str, "str | None"],
+                          *, item: str = "") -> None:
+    """Refuse a per-item stop rule's return value that is not a genuine commitment to stop.
 
-    Trusting the rule's output unchecked is how a rule returning the OLD `(stopped, escalated)` two-list shape,
-    or one "stopping" on an empty answer, would corrupt `evaluate`'s bill and its accuracy silently. Round 5
-    narrowed `ItemStopRule` to one item at a time, so there is no longer an item id or a partition for a rule to
-    get wrong -- only the one value it returns for THIS item, which is what this checks.
+    Two things are checked, and both apply at the ONE place both `evaluate` and `router.decide_from_score` call
+    the rule, so there is one check rather than two drifting copies:
 
-    Public (not `_`-prefixed) because `router.decide_from_score` calls the same `stop_rule` on this project's
-    own live per-request answers and needs the identical check, rather than a second, drifting copy of it.
+    * the value itself must be `None` (escalate) or a non-empty answer string (stop, and select this one).
+      Trusting it unchecked is how a rule returning the OLD `(stopped, escalated)` two-list shape, or one
+      "stopping" on an empty string, would corrupt `evaluate`'s bill and its accuracy silently.
+    * a SELECTED answer must be one a member actually gave. A round-6 review showed `decide_from_score` would
+      otherwise accept an answer no member produced (a rule inventing `"C"` for member answers it had not seen
+      while fitting, say) at runtime, while `evaluate`'s own scoring only ever caught that indirectly, later,
+      through `_answer_is_correct`'s "no member's cell recorded" refusal -- a rule could clear `fit` on a
+      fitting table that never happened to trigger that later check, then invent an answer at runtime that
+      would have failed it. Checking membership HERE, at the point the rule's answer is first read, makes
+      `evaluate` and `decide_from_score` refuse identically rather than one of them refusing later or not at
+      all.
     """
     if selected is None:
         return
@@ -241,6 +261,31 @@ def check_selected_answer(selected: object, stop_rule: Callable, *, item: str = 
         raise EvidenceError(
             f"stop_rule {rule_identity(stop_rule)!r} returned {selected!r}{where}, which is neither None "
             f"(escalate) nor a non-empty answer string (stop, and select this one)")
+    attested = {v for v in member_answers.values() if v is not None}
+    if selected not in attested:
+        where = f" for item {item!r}" if item else ""
+        raise EvidenceError(
+            f"stop_rule {rule_identity(stop_rule)!r} selected {selected!r}{where}, which is not one of the "
+            f"members' own answers {sorted(attested)}. A rule may only select an answer a member actually "
+            f"gave -- inventing one is not a stop")
+
+
+def stopped_answers_for(table: OutcomeTable, members: tuple[str, ...], subject: list[str],
+                        stop_rule: ItemStopRule) -> dict[str, str]:
+    """Apply `stop_rule` to each item in `subject`, one at a time, returning `{item: selected_answer}` for the
+    ones it stops on -- the ONE per-item loop `evaluate` scores from and `Router.fit` re-runs once, at the end,
+    as a cheap check for a non-deterministic or stateful rule (see `Router.fit`'s docstring). Public, and kept
+    as the single place this loop is written, so the search and the check that follows it can never drift into
+    two different readings of "what did this rule do here".
+    """
+    stopped_answers: dict[str, str] = {}
+    for item in subject:
+        answers = {m: _cell(table, item, m).answer for m in members}
+        selected = stop_rule(answers)
+        check_selected_answer(selected, stop_rule, answers, item=item)
+        if selected is not None:
+            stopped_answers[item] = selected
+    return stopped_answers
 
 
 def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
@@ -254,13 +299,14 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
 
     `stop_rule` decides ONE item at a time (`quorum.ItemStopRule`: `{member: answer} -> answer | None`).
     `evaluate` calls it once per item, applying it to exactly this policy's members' answers for that item --
-    this is the BATCH half of the same per-item computation `router.decide_from_score` performs at runtime, so
-    a rule scored here and the identical rule executed there are provably the same function seeing the same
-    shape of input, item by item (see `ItemStopRule`'s docstring for why the signature stops there). Defaults to
-    `agreement` -- unanimity among `members` -- which is the shape this module's own docstring traces to one
-    fold's measurement (TB-034). A stopped item's correctness is read off the SELECTED ANSWER (below), not off
-    "did any member happen to solve it" -- the two coincide exactly when the rule is unanimous, which is why
-    `agreement`'s own numbers do not move, and diverge for a rule that is not, which is the gap round 2 left open.
+    the same call, on the same shape of input, that `router.decide_from_score` makes at runtime. For a rule
+    that is a PURE, DETERMINISTIC function of that input, this makes the two sides compute the same result; see
+    `ItemStopRule`'s docstring for what that promise does and does not cover, and why the signature stops there.
+    Defaults to `agreement` -- unanimity among `members` -- which is the shape this module's own docstring
+    traces to one fold's measurement (TB-034). A stopped item's correctness is read off the SELECTED ANSWER
+    (below), not off "did any member happen to solve it" -- the two coincide exactly when the rule is
+    unanimous, which is why `agreement`'s own numbers do not move, and diverge for a rule that is not, which is
+    the gap round 2 left open.
     """
     subject = list(items if items is not None else table.items)
     # The caller's own `items` can carry a duplicate; that is not the injected rule's doing, so it gets its own
@@ -269,13 +315,7 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
         dupes = sorted({i for i in subject if subject.count(i) > 1})
         raise EvidenceError(f"items contains duplicate id(s) {dupes}, so scoring it would count that item more "
                            f"than once regardless of what any stop_rule returns")
-    stopped_answers: dict[str, str] = {}
-    for item in subject:
-        answers = {m: _cell(table, item, m).answer for m in members}
-        selected = stop_rule(answers)
-        check_selected_answer(selected, stop_rule, item=item)
-        if selected is not None:
-            stopped_answers[item] = selected
+    stopped_answers = stopped_answers_for(table, members, subject, stop_rule)
     stopped = list(stopped_answers)
     escalated = [i for i in subject if i not in stopped_answers]
 
@@ -310,19 +350,15 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
         member solved it", unchanged from round 2) and for a rule that is NOT unanimous (a majority's answer is
         scored by whether THAT answer was right, not by whether some other, dissenting member happened to be).
 
-        **Two ambiguities are refused rather than guessed at.** A selected answer that matches NO member's cell
-        cannot be graded at all -- defaulting it to "wrong" would score a selection this table never measured,
-        which is the direction that flatters nothing but hides a rule inventing answers. And if two members
-        recorded the identical answer string with DIFFERENT `solved` verdicts, the table itself contradicts
-        itself about whether that string is correct, and picking one verdict via `any` would silently prefer
-        whichever member happened to be listed (or graded) as solved.
+        **One remaining ambiguity is refused rather than guessed at:** if two members recorded the identical
+        answer string with DIFFERENT `solved` verdicts, the table itself contradicts itself about whether that
+        string is correct, and picking one verdict via `any` would silently prefer whichever member happened to
+        be listed (or graded) as solved. The OTHER ambiguity this used to refuse here -- a selected answer no
+        member's cell recorded at all -- is now caught earlier, at `check_selected_answer` (round 6): that check
+        runs on every selection before it can ever reach `stopped_answers`, so by the time this function runs,
+        `answer` is already known to be one of the members' own non-`None` answers for this item.
         """
         verdicts = {_cell(table, item, m).solved for m in members if _cell(table, item, m).answer == answer}
-        if not verdicts:
-            raise EvidenceError(
-                f"stop_rule {rule_identity(stop_rule)!r} selected {answer!r} for item {item!r}, which no member's "
-                f"cell recorded as its own answer. There is nothing to grade this selection against -- scoring it "
-                f"'wrong' by default would score a selection this table never measured")
         if len(verdicts) > 1:
             raise EvidenceError(
                 f"item {item!r} has members recording {answer!r} with different solved verdicts ({verdicts}), so "

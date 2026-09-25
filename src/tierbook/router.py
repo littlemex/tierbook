@@ -220,14 +220,22 @@ def decide_from_score(score: ItemStopRule, certificate: Certificate, ladder: tup
     cell, the rest of the batch) that fit-time and runtime could not supply identically -- a rule reading beyond
     the member answers for this one item saw different input on the two sides even with a single callable.
 
-    Round 5 closes that at the type, not with another check: `score` is a `quorum.ItemStopRule`
+    Round 5 narrows `score`'s ARGUMENT rather than adding another check: `score` is a `quorum.ItemStopRule`
     (`Mapping[member, answer] -> answer | None`), and there is nothing else in that signature for a rule to
     read. Calling it here on `{m: answers[m] for m in members}` and calling it inside `quorum.evaluate` on
     `{m: cell(item, m).answer for m in members}` for the SAME item are the identical call on the identical
-    shape of input -- there is no batch, no item id, no other item, no escalation cell left to diverge on.
+    shape of input. **That bounds the argument, not the rule's body** -- a reviewer showed a rule reading a
+    global counter, `random.random()`, or mutable state changed between calls still computes different results
+    from the two call sites despite receiving identical arguments, because Python cannot stop a closure from
+    reading something outside its parameter. The guarantee this narrowing gives is a contract on the RULE, not
+    a property enforced on an arbitrary Python callable: for a rule that is a pure, deterministic function of
+    its argument, the two call sites compute the same result, because there is no OTHER input for them to
+    disagree about. See `quorum.ItemStopRule`'s docstring for the same point stated at the type, and
+    `Router.fit`'s docstring for the one cheap, best-effort check this project makes for it.
 
     **How.** Once every member has answered, `score` is called on exactly those members' answers. If it selects
-    an answer, that is the decision. If it returns `None` (does not stop), escalate along `ladder` in the
+    an answer, that is the decision -- refused if that answer is not one a member actually gave (see
+    `quorum.check_selected_answer`). If it returns `None` (does not stop), escalate along `ladder` in the
     declared order; once the ladder is exhausted with nothing parseable, abandon at the fixed depth
     `certificate.abandon_depth`.
 
@@ -243,7 +251,7 @@ def decide_from_score(score: ItemStopRule, certificate: Certificate, ladder: tup
 
     member_answers = {m: answers[m] for m in members}
     selected = score(member_answers)
-    check_selected_answer(selected, score)
+    check_selected_answer(selected, score, member_answers)
     if selected is not None:
         return Decision("answer", answer=selected, reason="the rule selected an answer")
 
@@ -339,13 +347,30 @@ class Router:
         reviews found still let the SAME object's two callables disagree, because each still read more than one
         item's member answers. Narrowing what a rule may read is what actually closes it. Declaring nothing
         reproduces today's behaviour exactly (`AGREEMENT` is `quorum.agreement` itself).
+
+        **What narrowing the argument does not, and cannot, guarantee.** A reviewer showed that a rule reading a
+        call counter, `random.random()`, or mutable state can still compute a different result from the same
+        argument on two different calls, because Python has no way to stop a closure from reading something
+        outside its parameter. The equivalence this project can actually offer is a CONTRACT on the rule, not a
+        property this signature enforces: it holds for any `stop_rule` that is a pure, deterministic function
+        of its `Mapping[member, answer]` argument, and it is the caller's responsibility to write one that is.
+        This method makes one cheap, best-effort check for exactly the failure a reviewer demonstrated: once the
+        winning policy is chosen, its per-item scoring is run ONE more time over the same table and items and
+        compared against what the search above already computed for it (`stopped`/`solved`/
+        `solved_when_stopped`) -- `fit` refuses to certify if they disagree. This catches a rule whose answer
+        depends on how many times it has been called, or on randomness, when that dependency is still moving
+        BETWEEN the search and this recheck. It cannot catch a rule that only changes AFTER this recheck runs --
+        a global flipped later, an external clock, a file re-read on the next request, or a call-count
+        threshold that happened to settle into a stable answer before the recheck ever ran -- because nothing
+        run during `fit` can observe a change that has not happened yet, or tell a rule that has already
+        settled from one that was always going to behave that way.
         """
         if not callable(stop_rule):
             raise EvidenceError(
-                f"stop_rule={stop_rule!r} is not callable. A stop rule is a `quorum.ItemStopRule`: given the "
-                f"matrix, the members and the items to decide over, it returns `{{item: selected_answer}}` for "
-                f"the items it stops on. Round 3's `Rule` wrapper (`score=`/`runtime=` on one object) no longer "
-                f"exists -- pass the scoring callable itself")
+                f"stop_rule={stop_rule!r} is not callable. A stop rule is a `quorum.ItemStopRule`: given ONE "
+                f"item's `{{member: answer}}`, it returns the answer to stop on or `None` to escalate. Round "
+                f"3's `Rule` wrapper (`score=`/`runtime=` on one object) no longer exists -- pass the scoring "
+                f"callable itself")
         policies = enumerate_policies(table, candidates=candidates, escalate_to=escalate_to,
                                       max_members=max_members, min_stopped=min_stopped,
                                       prices=prices, items=items, stop_rule=stop_rule)
@@ -371,6 +396,27 @@ class Router:
                 f"lowering the floor and retrying is itself a search this correction does not cover."
             )
         p = min(eligible, key=lambda q: (q.usd_per_item, q.members, q.escalate_to))
+        # The cheap, best-effort determinism guard described above: re-score the winning policy ONE more time
+        # and compare it against what the search ABOVE already computed for it (`p`, built from calls made
+        # while `enumerate_policies` searched every candidate combination). A rule whose behaviour already
+        # moved between "during the search" and "right after it" disagrees with itself here; one that only
+        # changes later has nothing to disagree with yet. See this method's own docstring for exactly what
+        # this does and does not catch.
+        from tierbook.quorum import evaluate as _evaluate
+
+        rows = list(items if items is not None else table.items)
+        recheck = _evaluate(table, p.members, p.escalate_to, prices=prices, items=rows, stop_rule=stop_rule)
+        if (recheck.stopped, recheck.solved, recheck.solved_when_stopped) != (p.stopped, p.solved,
+                                                                              p.solved_when_stopped):
+            raise EvidenceError(
+                f"stop_rule {rule_identity(stop_rule)!r} scored the winning policy differently just now "
+                f"(stopped={recheck.stopped}, solved={recheck.solved}, solved_when_stopped="
+                f"{recheck.solved_when_stopped}) than the search that chose it did (stopped={p.stopped}, "
+                f"solved={p.solved}, solved_when_stopped={p.solved_when_stopped}). It is not a deterministic "
+                f"function of its argument, which the certificate this fit is about to build depends on. This "
+                f"check cannot catch a rule that changes only AFTER this recheck runs (a global flipped later, "
+                f"an external clock) -- only a rule that already disagrees with itself between the search and "
+                f"this recheck.")
         depth = len(p.members) + 1 if abandon_depth is None else abandon_depth
         s_lo, s_hi = wilson(p.stopped, p.items)
         wrong_stopped = p.stopped - p.solved_when_stopped

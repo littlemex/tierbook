@@ -165,6 +165,15 @@ class PartVocabulary:
                         f"best_sourcing contains {entry!r}, which is not a (kind, mode) pair ({exc}). Every "
                         f"entry of a sequence-of-pairs best_sourcing must unpack to exactly two values") from None
                 pairs.append((k, v))
+        # Every key and value must be a `str` before anything downstream treats them as one -- checked here,
+        # uniformly, for BOTH the mapping and the sequence-of-pairs input. A reviewer found that an unhashable
+        # key (a `list`, say) unpacks into a pair just fine and then raises a raw `TypeError: unhashable type`
+        # from `set(keys)` two lines below, rather than this module's own `Unidentified`.
+        bad_pairs = [(k, v) for k, v in pairs if not isinstance(k, str) or not isinstance(v, str)]
+        if bad_pairs:
+            raise Unidentified(
+                f"best_sourcing contains {bad_pairs}, where the kind or the mode is not a `str`. Both halves of "
+                f"a (kind, mode) pair have to be strings before anything here can check membership or hash them")
         # `dict(pairs)` SILENTLY COLLAPSES a duplicate key, keeping only the last entry -- a reviewer found
         # `best_sourcing=(("instruction", "in_the_request"), ("instruction", "not_observable"))` passes with the
         # second value winning and no sign that two contradictory declarations were made for the same part.
@@ -452,22 +461,29 @@ class Harness:
         saying nothing about a part it claimed. The parts are not the problem. The identity is, and it is missing exactly
         where it is read.
 
-        **The vocabulary's CONTENT enters the hash for any vocabulary other than perigraph's own default.** A
-        reviewer found that two harnesses declared against DIFFERENT vocabularies, but built from identifying
-        parts of the same kind and digest, hash to the SAME identity -- `comparable_with`/`refuse_incomparable`
-        already catch that for a direct comparison, but any OTHER grouping keyed on `identity` alone (a set, a
-        dict key, a persisted identity) would still silently merge them. A second reviewer then found that
-        folding in `vocabulary.identity` (the SELF-DECLARED name/version string) does not fully close it either:
-        two vocabularies that both forgot to declare a name share `"custom/unversioned"` and would still
-        collide even though their actual `parts`/`best_sourcing` differ. Folding in `vocabulary.content_digest`
-        (a hash over the actual content, never the self-declared label) closes that too. NOT for the default
-        vocabulary, though: `identity`'s bytes for perigraph's own ten parts are pinned to a cross-language
-        digest algorithm a second, TypeScript implementation was built against (see the spec conformance test),
-        and changing those bytes for every perigraph-conforming harness would break interoperability with every
-        compliant consumer to fix a collision that, for the default vocabulary alone, `comparable_with` already
-        prevents from being misread. So: unchanged, byte-for-byte, when `self.vocabulary == DEFAULT_PART_VOCABULARY`
-        (value equality -- a caller's own default-shaped `PartVocabulary` counts, not only the literal module
-        object); prefixed with the vocabulary's own CONTENT digest for anything else.
+        **The vocabulary's CONTENT enters the hash for any vocabulary whose CONTENT differs from perigraph's
+        own default.** A reviewer found that two harnesses declared against DIFFERENT vocabularies, but built
+        from identifying parts of the same kind and digest, hash to the SAME identity --
+        `comparable_with`/`refuse_incomparable` already catch that for a direct comparison, but any OTHER
+        grouping keyed on `identity` alone (a set, a dict key, a persisted identity) would still silently merge
+        them. A second reviewer then found that folding in `vocabulary.identity` (the SELF-DECLARED name/version
+        string) does not fully close it either: two vocabularies that both forgot to declare a name share
+        `"custom/unversioned"` and would still collide even though their actual `parts`/`best_sourcing` differ.
+        Folding in `vocabulary.content_digest` (a hash over the actual content, never the self-declared label)
+        closed THAT, but a THIRD reviewer then found the branch deciding WHETHER to fold it in still compared
+        the whole vocabulary (name and version included), so a vocabulary with the DEFAULT content under a
+        custom name (`PartVocabulary(parts=DEFAULT_HARNESS_PARTS, best_sourcing=DEFAULT_BEST_AVAILABLE_SOURCING,
+        name="deployment-a")`) still got prefixed and so still differed from the true default's identity --
+        contradicting the very "content, not label" rule this fix exists to state. The branch now compares
+        `content_digest` to `content_digest`, so whether the LABEL matches the default is irrelevant to whether
+        this hash changes; only whether the CONTENT does. NOT for the default vocabulary's own bytes, though:
+        `identity`'s bytes for perigraph's own ten parts are pinned to a cross-language digest algorithm a
+        second, TypeScript implementation was built against (see the spec conformance test), and changing those
+        bytes for every perigraph-conforming harness would break interoperability with every compliant consumer
+        to fix a collision that, for the default vocabulary alone, `comparable_with` already prevents from
+        being misread. So: unchanged, byte-for-byte, whenever `self.vocabulary.content_digest ==
+        DEFAULT_PART_VOCABULARY.content_digest` (content equality, regardless of the label on either side);
+        prefixed with the vocabulary's own CONTENT digest whenever the content itself differs.
         """
         if not self.has_identity:
             raise Unidentified(
@@ -475,7 +491,7 @@ class Harness:
                 "would be constant across every possible harness. At minimum the instruction is in the request; a "
                 "record without it describes somebody's account of a run rather than the run")
         h = hashlib.sha256()
-        if self.vocabulary != DEFAULT_PART_VOCABULARY:
+        if self.vocabulary.content_digest != DEFAULT_PART_VOCABULARY.content_digest:
             h.update(f"vocabulary={self.vocabulary.content_digest};".encode())
         for p in sorted((p for p in self.parts if p.identifying), key=lambda p: p.kind):
             h.update(f"{p.kind}={p.digest};".encode())

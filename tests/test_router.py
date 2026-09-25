@@ -540,6 +540,90 @@ def test_fit_refuses_a_non_callable_stop_rule_with_a_readable_message():
                   stop_rule="agreement")
 
 
+def test_fit_refuses_a_call_counter_dependent_rule():
+    """Round 6: a reviewer showed the per-item argument narrowing bounds what a rule's ARGUMENT can contain, not
+    what its body reads -- Opus's own example was a rule that answers like `agreement` for its first N calls
+    and escalates everything after. On this fixture, `enumerate_policies`'s search alone makes 1,200 calls
+    (three single/pair-member candidate policies over 400 items each) before the winning policy is chosen, and
+    `Router.fit`'s recheck makes 400 more; a threshold comfortably inside that gap (900) is crossed AFTER the
+    winning policy was scored during the search but BEFORE the recheck runs, so the two disagree -- caught
+    empirically five runs out of five before being pinned here, not assumed."""
+    calls = {"n": 0}
+
+    def stops_for_the_first_900_calls_only(answers):
+        calls["n"] += 1
+        return agreement(answers) if calls["n"] <= 900 else None
+
+    t = _table()
+    with pytest.raises(EvidenceError, match="not a deterministic function"):
+        Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
+                  min_stopped=0, stop_rule=stops_for_the_first_900_calls_only)
+
+
+def test_fit_refuses_a_randomised_rule():
+    """The same guard catches the other example reviewers gave: a rule reading `random.random()`, which -- unlike
+    a one-way threshold -- never settles into a fixed behaviour, so the search and the recheck almost never
+    agree by chance over hundreds of items."""
+    import random
+
+    def coin_flip(answers):
+        return agreement(answers) if random.random() < 0.5 else None
+
+    t = _table()
+    with pytest.raises(EvidenceError, match="not a deterministic function"):
+        Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
+                  min_stopped=0, stop_rule=coin_flip)
+
+
+def test_fit_accepts_a_genuinely_deterministic_rule_without_the_guard_firing():
+    """The guard must not be a false-positive trap for ordinary, pure rules -- `agreement` itself, and the
+    majority rule used elsewhere in this file, both fit without tripping it."""
+    t = _table()
+    r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
+    assert r.certificate.certified
+
+
+def test_the_determinism_guard_cannot_catch_a_rule_that_changes_after_fit_returns():
+    """Documents the guard's honest limit rather than only asserting it in prose: a rule that reads a value at
+    call time and is deterministic WHILE `fit` runs, but is later mutated from outside, passes `fit` -- the
+    guard has no way to see a change that has not happened yet."""
+    switch = {"stop": True}
+
+    def switchable(answers):
+        return agreement(answers) if switch["stop"] else None
+
+    t = _table()
+    r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80,
+                   stop_rule=switchable)
+    assert r.certificate.certified
+    # Flip the switch AFTER fit: the certificate still claims the old accuracy, and nothing in this project
+    # detects the drift, because that is not a claim this check makes. The router now behaves differently
+    # from what it was certified for -- every request escalates instead of answering on agreement -- and
+    # `Router.fit`'s guard, which only ran BEFORE this mutation, had no way to see it coming.
+    switch["stop"] = False
+    members = r.certificate.members
+    d = r.decide({m: "B" for m in members})
+    assert d.action == "call", "the rule now never stops, so this must escalate rather than answer"
+
+
+def test_decide_from_score_refuses_a_selected_answer_no_member_gave():
+    """Mirrors `test_a_selected_answer_no_member_produced_is_refused_not_scored_wrong` in test_quorum.py, at the
+    runtime call site: a rule that returns an answer no member actually produced must be refused there too, not
+    only during batch scoring -- `check_selected_answer` is the one shared check both call sites use."""
+    from tierbook.router import Certificate
+
+    def invents_an_answer(answers):
+        return "Z"
+
+    synthetic = Certificate(
+        members=("a", "b"), escalate_to="dear", accuracy_floor=0.10, accuracy_point=1.0, accuracy_lower=1.0,
+        usd_per_item=0.0, usd_upper=0.0, stop_rate=1.0, stop_rate_interval=(1.0, 1.0), agreement_lift=0.0,
+        wrong_stop_rate=0.0, wrong_stop_interval=(0.0, 0.0), considered=1, items=1, suite="s", manifest_digest="d",
+        abandon_depth=1, stop_rule_id="invents_an_answer", stop_rule=invents_an_answer)
+    with pytest.raises(EvidenceError, match="not one of the members' own answers"):
+        decide_from_score(invents_an_answer, synthetic, (), {"a": "B", "b": "B"})
+
+
 def test_stoprule_is_a_deprecated_alias_for_runtimestoprule():
     """Round 2 renamed `router.StopRule` to `RuntimeStopRule` (to stop colliding with `quorum.StopRule`'s
     incompatible signature) with no alias, which breaks any importer who held the old bare name."""

@@ -401,22 +401,25 @@ def test_two_harnesses_under_different_vocabularies_are_never_comparable():
 
 
 def test_identity_is_unchanged_for_the_default_vocabulary_but_folds_in_any_other():
-    """Pins the round-4/5 fix precisely: perigraph's own cross-language digest bytes (the default vocabulary)
+    """Pins the round-4/5/6 fix precisely: perigraph's own cross-language digest bytes (the default vocabulary)
     are untouched -- `test_the_digest_rules_the_second_implementation_forced_into_the_spec` already pins that
-    exact byte sequence -- and any OTHER vocabulary's own CONTENT digest (round 5: not its self-declared
-    `identity` string, see the next two tests for why) is folded into the hash first."""
+    exact byte sequence -- and any vocabulary whose CONTENT differs (round 6: content, never the self-declared
+    `identity` string OR just "is this the default object" -- see the next tests) gets its own content digest
+    folded into the hash first."""
     default_h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64),))
     expected_default = hashlib.sha256(b"instruction=" + b"a" * 64 + b";").hexdigest()[:24]
     assert default_h.identity == expected_default
 
-    custom = hn.PartVocabulary(parts=hn.DEFAULT_HARNESS_PARTS, best_sourcing=hn.DEFAULT_BEST_AVAILABLE_SOURCING,
+    custom = hn.PartVocabulary(parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+                               best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING,
+                                            "context_window_policy": "pushed_by_owner"},
                                name="my-deployment", version="1")
     custom_h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
                                         vocabulary=custom),), vocabulary=custom)
     expected_custom = hashlib.sha256(
         f"vocabulary={custom.content_digest};".encode() + b"instruction=" + b"a" * 64 + b";").hexdigest()[:24]
     assert custom_h.identity == expected_custom
-    assert custom_h.identity != default_h.identity
+    assert custom_h.identity != default_h.identity, "this vocabulary's CONTENT genuinely differs from the default"
 
     # A caller's OWN value-equal reconstruction of the default vocabulary counts as "the default" too --
     # `!=`/`==` against `DEFAULT_PART_VOCABULARY` is by VALUE, not by object identity.
@@ -427,6 +430,23 @@ def test_identity_is_unchanged_for_the_default_vocabulary_but_folds_in_any_other
     rebuilt_h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
                                          vocabulary=rebuilt_default),), vocabulary=rebuilt_default)
     assert rebuilt_h.identity == expected_default
+
+
+def test_a_custom_named_vocabulary_with_default_content_matches_the_default_identity():
+    """The exact case a reviewer found still broken: a vocabulary with the DEFAULT `parts`/`best_sourcing` but a
+    custom `name` used to still get the non-default prefix, because the branch compared the WHOLE vocabulary
+    (name included) rather than `content_digest`. Since this vocabulary's content is identical to the default,
+    its harness identity must be too -- contradicting anything else would mean the label decided whether the
+    hash changed, which is exactly the "content, not label" rule this fix exists to enforce."""
+    named_but_default_content = hn.PartVocabulary(
+        parts=hn.DEFAULT_HARNESS_PARTS, best_sourcing=hn.DEFAULT_BEST_AVAILABLE_SOURCING, name="deployment-a")
+    assert named_but_default_content.content_digest == hn.DEFAULT_PART_VOCABULARY.content_digest
+    assert named_but_default_content != hn.DEFAULT_PART_VOCABULARY, "the LABEL differs (name), just not the content"
+
+    h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
+                                 vocabulary=named_but_default_content),), vocabulary=named_but_default_content)
+    default_h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64),))
+    assert h.identity == default_h.identity
 
 
 def test_the_vocabulary_identity_is_always_printed_not_only_on_non_conformance():
