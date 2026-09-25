@@ -367,7 +367,7 @@ def test_a_chain_is_not_exported_as_its_head(tmp_path):
     assert entry["kind"] == "chain"                     # otherwise this test is not testing anything
     with pytest.raises(ExportError, match="chain"):
         export(table, cfg, signal_for_family={"agentic-coding": "computer_science"},
-               default_model="api-strong-a", request_can_reject=True, allow_provisional=True)
+               default_model="api-strong-a", target="v0.3.0", request_can_reject=True, allow_provisional=True)
 
 
 def test_a_family_with_no_classifier_label_is_refused_rather_than_guessed(tmp_path):
@@ -379,7 +379,7 @@ def test_a_family_with_no_classifier_label_is_refused_rather_than_guessed(tmp_pa
                             tmp_path / "t.json", margin=0.25, today="2026-08-30",
                             validations=VALIDATION)
     with pytest.raises(ExportError, match="no classifier label"):
-        export(table, cfg, signal_for_family={}, default_model="api-strong-a")
+        export(table, cfg, signal_for_family={}, default_model="api-strong-a", target="v0.3.0")
 
 
 def test_a_provisional_entry_is_not_exported_without_the_flag(tmp_path):
@@ -390,7 +390,8 @@ def test_a_provisional_entry_is_not_exported_without_the_flag(tmp_path):
     table = compile_to_file(load_registry(LEDGER), {"agentic-coding": "api-strong-a"},
                             tmp_path / "t.json", margin=0.25, today="2026-08-30")
     with pytest.raises(ExportError, match="provisional"):
-        export(table, cfg, signal_for_family={"agentic-coding": "cs"}, default_model="api-strong-a")
+        export(table, cfg, signal_for_family={"agentic-coding": "cs"}, default_model="api-strong-a",
+               target="v0.3.0")
 
 
 def test_the_exported_config_names_the_tier_the_holdout_supported(tmp_path):
@@ -402,7 +403,7 @@ def test_the_exported_config_names_the_tier_the_holdout_supported(tmp_path):
                             tmp_path / "t.json", margin=0.25, today="2026-08-30",
                             validations=VALIDATION)
     conf, prov = export(table, cfg, signal_for_family={"tool-agent-user-retail": "retail"},
-                        default_model="api-strong-a")
+                        default_model="api-strong-a", target="v0.3.0")
     decisions = conf["routing"]["decisions"]
     assert len(decisions) == 1
     # The reserved candidate, because using capacity already paid for costs nothing more at the margin. This
@@ -500,7 +501,7 @@ def test_a_reserved_entrypoint_name_is_refused_at_export_time(tmp_path):
                             tmp_path / "t.json", margin=0.25, today="2026-08-30", validations=VALIDATION)
     with pytest.raises(ExportError, match="reserves"):
         export(table, cfg, signal_for_family={"tool-agent-user-retail": "retail"},
-               default_model="api-strong-a", entrypoint="auto")
+               default_model="api-strong-a", target="v0.3.0", entrypoint="auto")
 
 
 def test_the_thing_in_front_is_pinned_and_a_missing_pin_is_reported_not_passed():
@@ -554,7 +555,7 @@ def test_the_exported_config_does_not_name_a_candidate_the_policy_cannot_route_t
     from tierbook.export_vsr import ExportError
     with pytest.raises(ExportError) as e:
         export(table, cfg, signal_for_family={"tool-agent-user-retail": "retail"},
-               default_model="api-strong-a")
+               default_model="api-strong-a", target="v0.3.0")
     msg = str(e.value)
     assert "no rule can fire" in msg and "inflight:self-hosted-a" in msg
     # And the remedy named is the one that applies. Telling an operator to pass allow_provisional when the

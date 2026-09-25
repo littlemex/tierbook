@@ -446,7 +446,7 @@ def cmd_export_vsr(args) -> int:
         cats[label] = [c for c in joined.split(",") if c]
     try:
         conf, prov = export(table, cfg, signal_for_family=signals, default_model=args.default_model,
-                            listener_port=args.port, entrypoint=args.entrypoint,
+                            target=args.target, listener_port=args.port, entrypoint=args.entrypoint,
                             request_can_reject=args.can_reject,
                             allow_provisional=args.allow_provisional, signal_kind=args.signal_kind,
                             signal_categories=cats)
@@ -458,7 +458,7 @@ def cmd_export_vsr(args) -> int:
     # start, and a config that warns every time is a config whose warnings stop being read.
     prov_path = write(prov, f"{args.out}.provenance.json")
     print(f"wrote {args.out}: {len(conf['routing']['decisions'])} decision(s) from registry "
-          f"{prov['compiled_from_registry']}")
+          f"{prov['compiled_from_registry']}, for target {args.target!r}")
     print(f"wrote {prov_path}: what this config was compiled from")
     if args.envoy_out:
         try:
@@ -1415,6 +1415,10 @@ def main(argv: list[str] | None = None) -> int:
     x.add_argument("--default-model", required=True,
                    help="where traffic no decision matched goes. Not the cheapest tier: an unclassified "
                         "request is one there is no evidence about")
+    x.add_argument("--target", required=True,
+                   help="which router contract to write for (TB-107: the router's own version string cannot "
+                        "say). One of the keys in tierbook.export_vsr.SR_TARGETS, each pinned to the "
+                        "semantic-router commit it was read back against; e.g. 'v0.3.0' or 'main-867155c9'")
     x.add_argument("--entrypoint", default="tierbook/routed",
                    help="the virtual model name a client asks for. Not 'auto', which the "
                         "router reserves")

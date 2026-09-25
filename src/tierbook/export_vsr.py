@@ -34,10 +34,36 @@ carrying `backend_refs` rather than a bare address, `decisions[].rules.condition
 block per decision, and `signals.domains[]` as objects rather than bare strings. An earlier version of this
 exporter guessed those three and produced a file no router would load -- which is the exact failure mode this
 module exists to prevent one layer up, so it is worth naming here rather than quietly fixing.
+
+## TB-107: the top-level `version` string cannot tell two contracts apart
+
+The router's own `version` field is pinned to the literal `"v0.3"` by the router itself -- both the release
+this project first targeted and the router's `main` after PR #3489 (commit `867155c9`, "Add unified model
+catalog and model hub") reject anything else there. So `version` is not a place this exporter can record which
+contract it wrote *for*, and it is not read back to decide compatibility either: the router's own loader
+never inspects it once `routing`/`global` are present.
+
+Before that PR, `providers.defaults.default_model`, `providers.models[].backend_refs[].type` and
+`routing.modelCards[].quality_score` were the router's own field names -- confirmed by reading the checkout at
+commit `43446e8` (`config/config.yaml`, `pkg/config/canonical_providers.go`). After it, the router's loader
+(`pkg/config/loader.go`, `rejectDeprecatedUserConfigFields`) refuses a config file at start-up if any of those
+three keys are present, and the replacement names are `providers.defaults.model` and
+`providers.models[].backend_refs[].provider`, with `quality_score` dropped rather than renamed. Both checkouts
+were read with the router's own Go `config` package, not guessed from a diff: the pre-PR shape parses on
+`43446e8` and is refused on `867155c9`+; the post-PR shape parses on both, but on `43446e8` the renamed key
+`model` matches nothing the old struct declares, so `providers.defaults.default_model` in the parsed config
+comes back **empty** -- exactly the silent loss TB-107 named, reproduced rather than assumed.
+
+So the exporter needs to know, as an input rather than a guess, which of these two contracts it is writing
+for. `SR_TARGETS` below is that input: a small declared table, keyed by an identity string a caller names
+explicitly, each entry pinned to the commit it was actually read back against. Adding a third contract some
+future router version requires means adding a row and reading it back with that version's own parser -- not
+branching on a version number this module would otherwise have to guess.
 """
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from tierbook.config import Candidate, Config
@@ -50,6 +76,58 @@ CONFIG_VERSION = "v0.3"
 #: cluster. The distinction exists in the router because the two need different upstream handling, and it
 #: happens to line up with the one distinction tierbook's cost model already makes.
 _BACKEND_TYPE = {"api": "openai", "self_hosted": "vllm"}
+
+
+@dataclass(frozen=True)
+class SRTargetShape:
+    """One router contract this exporter knows how to write for, pinned to the commit it was read back against.
+
+    This is declared data, not a branch in this module's logic: every field here is a key name or a boolean
+    about whether a key is emitted at all, never a rule about what the router does with the value. The three
+    fields below are exactly the three TB-107 found disagreeing between the router's pre- and post-PR#3489
+    contracts; a fourth disagreement would be a fourth field here, not a new code path.
+    """
+
+    #: What this target actually is, for a human reading provenance rather than for the router.
+    identity: str
+    #: The commit of the `vllm-project/semantic-router` checkout this shape was verified against by parsing an
+    #: export with that commit's own Go `config` package. Not a guarantee that a later commit at the same
+    #: shape still parses -- only that this commit, read directly, does.
+    sr_commit: str
+    #: The key under `providers.defaults` that carries the default model name.
+    default_model_key: str
+    #: The key under `providers.models[].backend_refs[]` that carries `openai`/`vllm`. The value is unchanged
+    #: across every known target; only the router's name for the key moved.
+    backend_ref_type_key: str
+    #: Whether `routing.modelCards[].quality_score` is safe to emit for this target. `False` means the router
+    #: refuses the whole file if the key is present at all -- there is no degraded form to fall back to.
+    emit_quality_score: bool
+
+
+#: Declared, not inferred: every row was produced by exporting a config and reading it back with that
+#: commit's own `vllm-project/semantic-router` Go `config` package (`tools/sr_readback/` in this repo), not by
+#: reading a diff and assuming the parser agrees with it. A target this table does not name is refused by
+#: `export()` rather than guessed at the nearest neighbour, because a guess here fails exactly the way TB-107
+#: did: silently, and only inside the router's own loader.
+SR_TARGETS: dict[str, SRTargetShape] = {
+    "v0.3.0": SRTargetShape(
+        identity=("vLLM Semantic Router before PR #3489 (\"Add unified model catalog and model hub\"): "
+                  "providers.defaults.default_model, backend_refs[].type, modelCards[].quality_score."),
+        sr_commit="43446e8680d0f80f8d8acd7dc23381e487b258b4",
+        default_model_key="default_model",
+        backend_ref_type_key="type",
+        emit_quality_score=True,
+    ),
+    "main-867155c9": SRTargetShape(
+        identity=("vLLM Semantic Router main at or after PR #3489 (commit 867155c9, \"Add unified model "
+                  "catalog and model hub\"): providers.defaults.model, backend_refs[].provider, no "
+                  "quality_score -- the prior three keys are refused at start-up if present at all."),
+        sr_commit="867155c924b6527d6a412e1412ce712a9e5cc9b8",
+        default_model_key="model",
+        backend_ref_type_key="provider",
+        emit_quality_score=False,
+    ),
+}
 
 
 class ExportError(RuntimeError):
@@ -75,11 +153,13 @@ def _endpoint_of(cand: Candidate) -> tuple[str, str]:
     return f"{u.hostname}:{port}", u.scheme
 
 
-def _provider_model(cand: Candidate) -> dict:
+def _provider_model(cand: Candidate, shape: SRTargetShape) -> dict:
     """One entry in `providers.models[]`, in the shape the router actually reads.
 
     `backend_refs` is the part an earlier version of this exporter omitted, and omitting it is not a cosmetic
-    difference: without it the router has a model name and no way to reach anything.
+    difference: without it the router has a model name and no way to reach anything. Which *key* carries the
+    backend kind (`type` or `provider`) is the target's business, not this function's -- the value is the same
+    `openai`/`vllm` string either way.
     """
     endpoint, protocol = _endpoint_of(cand)
     backend_type = _BACKEND_TYPE[cand.deployment]
@@ -87,7 +167,7 @@ def _provider_model(cand: Candidate) -> dict:
         "name": f"{cand.id}-primary",
         "endpoint": endpoint,
         "protocol": protocol,
-        "type": backend_type,
+        shape.backend_ref_type_key: backend_type,
         "weight": 1,
     }
     if cand.endpoint.api_key_env:
@@ -117,17 +197,19 @@ def _provider_model(cand: Candidate) -> dict:
     return entry
 
 
-def _model_card(cand: Candidate, *, description: str, quality: float | None) -> dict:
+def _model_card(cand: Candidate, *, description: str, quality: float | None, shape: SRTargetShape) -> dict:
     card: dict = {
         "name": cand.id,
         "description": description,
         "modality": "ar",
         "tags": [f"deployment:{cand.deployment}", f"wire:{cand.endpoint.wire}", "selector:unused"],
     }
-    if quality is not None:
+    if quality is not None and shape.emit_quality_score:
         # Recorded, not used. The decisions below name one model each, so nothing here is scored against
         # anything -- and a reader who sees a quality figure in a router config would reasonably assume the
-        # router is choosing on it, which is why the tag above says it is not.
+        # router is choosing on it, which is why the tag above says it is not. Omitted entirely for a target
+        # whose loader refuses the whole file if the key is present (TB-107): there is no degraded form of
+        # "recorded, not used" that survives a start-up refusal.
         card["quality_score"] = round(quality, 4)
     return card
 
@@ -138,6 +220,7 @@ def export(
     *,
     signal_for_family: dict[str, str],
     default_model: str,
+    target: str,
     listener_port: int = 8801,
     entrypoint: str = "tierbook/routed",
     request_can_reject: bool = False,
@@ -155,7 +238,20 @@ def export(
     classifier that is a list of categories. Left empty, a label is declared by name alone, which is correct
     for a classifier that needs no further configuration and wrong for one that does. This exporter cannot
     tell which, so it passes the caller's answer through instead of inventing one.
+
+    `target` names which router contract to write for -- a key into `SR_TARGETS` -- and has no default. TB-107
+    was a silent failure precisely because nothing forced a choice: the same `"v0.3"` version string described
+    two contracts that disagree on three field names, so the caller has to say which one they are deploying
+    against rather than this module guessing from a string that cannot carry the answer.
     """
+    if target not in SR_TARGETS:
+        raise ExportError(
+            f"target {target!r} is not a router contract this exporter knows how to write for. Known targets "
+            f"(each read back against the router's own commit before being declared): "
+            + "; ".join(f"{name!r} ({shape.identity})" for name, shape in sorted(SR_TARGETS.items()))
+        )
+    shape = SR_TARGETS[target]
+
     families = table.get("families") or {}
     if not families:
         raise ExportError("the compiled table has no families, so there is nothing to configure")
@@ -242,7 +338,7 @@ def export(
 
     quality = _quality_scores(table)
     members = [cfg.candidates[cid] for cid in sorted(used)]
-    cards = [_model_card(c, description=used[c.id], quality=quality.get(c.id)) for c in members]
+    cards = [_model_card(c, description=used[c.id], quality=quality.get(c.id), shape=shape) for c in members]
     labels = sorted(set(signal_for_family.values()))
     cats = signal_categories or {}
     signals = {"domains": [
@@ -266,13 +362,20 @@ def export(
             "note": ("Decisions here are lookups, not a live selector: each names exactly one model. "
                      "Recompile the table and re-export when the ledger changes; the registry hash above is "
                      "how a reviewer checks that this file still matches the evidence."),
+            # Beside the config, not inside it -- same reason the registry hash lives here rather than in an
+            # unknown top-level key: the router's `version` string cannot carry this (TB-107, both known
+            # contracts declare it "v0.3"). A reviewer or a deploy pipeline checks this file, not the router
+            # config, to know which contract the config beside it was written for.
+            "export_target": target,
+            "export_target_identity": shape.identity,
+            "export_target_sr_commit": shape.sr_commit,
     }
     config = {
         "version": CONFIG_VERSION,
         "listeners": [{"name": f"http-{listener_port}", "address": "0.0.0.0", "port": listener_port,
                        "timeout": "1200s"}],
-        "providers": {"defaults": {"default_model": default_model},
-                      "models": [_provider_model(c) for c in members]},
+        "providers": {"defaults": {shape.default_model_key: default_model},
+                      "models": [_provider_model(c, shape) for c in members]},
         "routing": routing,
         "entrypoints": [{"model_names": [entrypoint], "recipe": recipe}],
         "recipes": [{"name": recipe,

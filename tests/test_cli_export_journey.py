@@ -80,7 +80,7 @@ def test_exporting_refuses_while_the_policy_has_a_guard_nobody_measured(tmp_path
     out = tmp_path / "router.json"
     got = subprocess.run([sys.executable, "-m", "tierbook.cli", "export-vsr", "--table", str(table),
                           "--config", str(CANDIDATES), "--signal", f"{FAMILY}=retail",
-                          "--default-model", "api-strong-a", "--out", str(out)],
+                          "--default-model", "api-strong-a", "--target", "v0.3.0", "--out", str(out)],
                          cwd=ROOT, capture_output=True, text=True,
                          env={"PYTHONPATH": str(ROOT / "src"), "PATH": "/usr/bin:/bin:/usr/local/bin"})
     assert got.returncode != 0, got.stdout
@@ -105,7 +105,8 @@ def test_the_refusal_advises_a_probe_when_a_measurement_is_the_only_obstacle(tmp
         "--family", f"{FAMILY}=api-strong-a", "--margin", "0.25", "--out", str(table), "--today", "2026-08-30")
     got = subprocess.run([sys.executable, "-m", "tierbook.cli", "export-vsr", "--table", str(table),
                           "--config", str(CANDIDATES), "--signal", f"{FAMILY}=retail",
-                          "--default-model", "api-strong-a", "--out", str(tmp_path / "r.json")],
+                          "--default-model", "api-strong-a", "--target", "v0.3.0",
+                          "--out", str(tmp_path / "r.json")],
                          cwd=ROOT, capture_output=True, text=True,
                          env={"PYTHONPATH": str(ROOT / "src"), "PATH": "/usr/bin:/bin:/usr/local/bin"})
     assert got.returncode != 0, got.stdout
