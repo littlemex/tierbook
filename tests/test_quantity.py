@@ -698,6 +698,27 @@ def test_the_printed_form_says_what_it_is_about():
     assert "about topic" in str(q(subject="topic"))
 
 
+def test_signal_kwargs_carries_the_declared_vocabulary_to_evaluate_signal():
+    """Round 1 finding 12, still partial after round 2: `evaluate_signal(about=q.subject)` alone drops
+    `q.subjects`, so a quantity that needed a widened vocabulary just to be constructible would be refused again
+    at the re-check unless the caller remembered to separately pass `subjects=q.subjects`. `signal_kwargs` is
+    that pass-through."""
+    from tierbook.outcomes import Cell, OutcomeTable
+    from tierbook.quorum import evaluate_signal
+
+    widened = q(subject="latency_bucket", declared_subjects=("latency_bucket", *qt.DEFAULT_SUBJECTS))
+    assert widened.signal_kwargs == {"about": "latency_bucket", "subjects": widened.subjects}
+
+    t = OutcomeTable(suite="s", manifest_digest="d")
+    t.cells["i1"] = {"a": Cell("solved", usd=1.0, answer="B"), "dear": Cell("solved", usd=5.0, answer="B")}
+    # Without signal_kwargs, the default vocabulary refuses "latency_bucket" outright.
+    with pytest.raises(Exception, match="is not one of"):
+        evaluate_signal(t, "a", "dear", signal={"i1": 0.1}, about=widened.subject, threshold=0.5)
+    # With it, the same call succeeds and uses the SAME subject the Quantity declared.
+    policy = evaluate_signal(t, "a", "dear", signal={"i1": 0.1}, threshold=0.5, **widened.signal_kwargs)
+    assert policy is not None
+
+
 def test_the_door_admits_a_topic_quantity_like_any_other(tmp_path, capsys):
     """Rewritten with the rule it encoded. The door used to print "not usable: field_name" for a topic signal, which put
     the same hardcoded judgement in the operator's face."""

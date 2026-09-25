@@ -80,7 +80,7 @@ from typing import Callable, Literal, Sequence
 
 from tierbook.evidence import EvidenceError
 from tierbook.outcomes import OutcomeTable
-from tierbook.quorum import ItemStopRule, QuorumPolicy, agreement, canonical, enumerate_policies, rule_identity
+from tierbook.quorum import ItemStopRule, QuorumPolicy, agreement, canonical, enumerate_policies
 from tierbook.reproduce import simultaneous_wilson, wilson
 
 Action = Literal["answer", "call", "abandon"]
@@ -134,13 +134,15 @@ class Certificate:
     #: Whether items with known-broken answer keys were removed before fitting. Undefined treatment makes
     #: the floor meaningless: one measured fold was 3.85% broken, larger than the differences in dispute.
     broken_keys_removed: bool | None = None
-    #: Which stop rule `accuracy_lower`/`stop_rate`/every other scored figure above was computed under --
-    #: `quorum.rule_identity` of the `stop_rule` passed to `Router.fit`. Existing so `Router.__post_init__` can
-    #: refuse a `Router` whose RUNTIME rule does not match: a certificate scored under `agreement` and then executed
-    #: under an injected rule that abandons everything would still assert the accuracy `agreement` earned (TB-034,
-    #: found again by the reviewers of the fix). Defaults to `"agreement"`, the identity `quorum.agreement` and
-    #: `default_stop_rule` both declare -- the batch and the streaming expression of the one rule this project
-    #: actually measured.
+    #: `rule.name` (see `Rule` below) of the stop rule `accuracy_lower`/`stop_rate`/every other scored figure above
+    #: was computed under. Display and provenance ONLY -- round 2 tried to use a matching name as PROOF that a
+    #: separately-declared runtime callable behaved like the one that was scored, and a reviewer found that two
+    #: unrelated callables can simply agree to share a string. Round 3 removed the thing this field used to guard:
+    #: `Router.fit` now takes one `Rule` object and stores it (see `Router.rule`), so the certificate and the
+    #: runtime are two views of the SAME object rather than two independently-injectable callables to reconcile.
+    #: `Router.__post_init__` still checks this against `self.rule.name`, which catches `dataclasses.replace(...,
+    #: rule=other)` swapping the rule while leaving a stale certificate in place; it is a name-consistency check on
+    #: top of the structural fix, not instead of it.
     stop_rule_id: str = "agreement"
 
     @property
@@ -203,8 +205,34 @@ class Outcome:
 #: Named `RuntimeStopRule` rather than the bare `StopRule` an earlier version used, because `quorum.py` declares a
 #: SECOND stop rule under that name with an incompatible signature -- that one partitions a whole item set at once
 #: for scoring; this one decides one streaming request's next action given partial answers. One name for two shapes
-#: is how the wrong one gets imported.
+#: is how the wrong one gets imported. `StopRule` below is a deprecated alias for any importer who held that name.
 RuntimeStopRule = Callable[[Certificate, "tuple[str, ...]", "dict[str, str | None]"], Decision]
+#: Deprecated alias, kept for any importer who held `router.StopRule` before round 2 renamed it to
+#: `RuntimeStopRule` to stop colliding with `quorum.StopRule`'s (also renamed) incompatible signature.
+StopRule = RuntimeStopRule
+
+
+@dataclass(frozen=True)
+class Rule:
+    """One injectable stop rule, expressed exactly once.
+
+    Round 2 let `Router.fit` take a batch scorer (`quorum.ItemStopRule`) and a runtime decider
+    (`RuntimeStopRule`) as two SEPARATE parameters, and cross-checked them by a `rule_id` string each side had to
+    be told to set to the same value. A reviewer found that this proves nothing: two callables that behave
+    nothing alike can simply agree to share a string, and the review's own test did exactly that (`never_stop`
+    paired with `always_abandon`, both hand-labelled `"never_stop"`).
+
+    This object removes the thing that needed cross-checking: there is one callable for scoring (`score`) and one
+    for the runtime (`runtime`), bundled onto one immutable object, and `Router.fit` takes ONE `Rule`. A `Router`
+    built from it stores that same object and calls `.score` (via `verify`) and `.runtime` (via `decide`) off of
+    it -- so there is no second, independently-injectable callable left to diverge from the first. `name` is
+    display and certificate provenance only (`Certificate.stop_rule_id`); it proves nothing on its own, which is
+    exactly the property round 2's `rule_id` scheme did not have.
+    """
+
+    name: str
+    score: ItemStopRule
+    runtime: RuntimeStopRule
 
 
 def default_stop_rule(certificate: Certificate, ladder: tuple[str, ...],
@@ -214,7 +242,7 @@ def default_stop_rule(certificate: Certificate, ladder: tuple[str, ...],
     **This is the rule the module docstring traces to one fold's measurement, extracted rather than rewritten.**
     "Escalation does not branch" came from a fitted one-dimensional model reproducing the direction-stability of a
     fold's first three components; `Certificate.rules_are_fold_derived=True` discloses that, and disclosure is not
-    the same as making the rule injectable -- TB-034 named the gap between the two. `Router.stop_rule` is where a
+    the same as making the rule injectable -- TB-034 named the gap between the two. `Rule.runtime` is where a
     different study's rule (escalate to a signal-chosen tier on disagreement, a different abandonment test) can be
     expressed without editing this function, and this function stays as the default a caller who declares nothing
     still gets.
@@ -245,40 +273,40 @@ def default_stop_rule(certificate: Certificate, ladder: tuple[str, ...],
                             f"depth of {certificate.abandon_depth}"))
 
 
-#: `default_stop_rule` is the streaming expression of the same fold-derived rule `quorum.agreement` scores in
-#: batch, so they share one identity: see `Certificate.stop_rule_id` and `Router.__post_init__`.
-default_stop_rule.rule_id = "agreement"
+#: The DEFAULT a caller who declares nothing still gets: `quorum.agreement`'s batch scoring paired with
+#: `default_stop_rule`'s streaming runtime -- the two halves of the ONE rule this project actually measured,
+#: bundled once here rather than left as two callables a caller has to keep in sync.
+AGREEMENT = Rule(name="agreement", score=agreement, runtime=default_stop_rule)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Router:
-    """A fitted policy plus the runtime that executes it."""
+    """A fitted policy plus the runtime that executes it.
+
+    **Frozen.** Round 2's `Router` was a plain mutable dataclass, so `r.stop_rule = something_else` bypassed
+    `__post_init__` entirely -- the exact TB-034 failure with one extra step. Freezing means the only way to get a
+    different `rule` on a `Router` is through `__init__`/`dataclasses.replace`, both of which run `__post_init__`.
+    """
 
     certificate: Certificate
     ladder: tuple[str, ...] = ()
     _policy: QuorumPolicy | None = field(default=None, repr=False)
-    #: What to do next, given what has been heard so far. **Declared here rather than fixed in `decide`'s body**, so
-    #: a study whose own measurement supports a different stop rule can express it without editing this class.
-    #: Defaults to `default_stop_rule` -- agreement stops, `ladder` is walked in order, abandonment is at
-    #: `certificate.abandon_depth` -- which keeps every existing caller working while making the default visibly a
-    #: default (the same move F141 made for `decide.STATE_VARS`, applied to the rule TB-034 named).
-    stop_rule: RuntimeStopRule = field(default=default_stop_rule, repr=False, compare=False)
-    #: The BATCH rule `certificate`'s figures were scored under -- see `Router.fit`'s `stop_rule` argument. Kept so
-    #: `verify()` re-scores a second collection under the SAME rule the certificate claims, rather than silently
-    #: falling back to `agreement` for a router that was fitted under something else.
-    _item_stop_rule: ItemStopRule = field(default=agreement, repr=False, compare=False)
+    #: The ONE object `certificate` was scored under and `decide()` executes. **Declared here rather than fixed in
+    #: `decide`'s body**, so a study whose own measurement supports a different stop rule can express it without
+    #: editing this class. Defaults to `AGREEMENT`, which keeps every existing caller working while making the
+    #: default visibly a default (the same move F141 made for `decide.STATE_VARS`, applied to the rule TB-034
+    #: named).
+    rule: Rule = field(default=AGREEMENT, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        got = rule_identity(self.stop_rule)
-        if got != self.certificate.stop_rule_id:
+        if self.rule.name != self.certificate.stop_rule_id:
             raise EvidenceError(
-                f"this router's stop_rule identifies as {got!r}, but its certificate was fitted and scored under "
+                f"this router's rule is named {self.rule.name!r}, but its certificate was fitted and scored under "
                 f"{self.certificate.stop_rule_id!r} (accuracy_lower={self.certificate.accuracy_lower:.1%} and every "
-                f"other scored figure in it describe THAT rule's behaviour, not this one's). Swapping the runtime "
-                f"rule without refitting is how a certificate ends up asserting an accuracy the rule that actually "
-                f"runs was never measured against (TB-034). Refit with `Router.fit(..., stop_rule=..., "
-                f"runtime_stop_rule=...)` naming a matching pair, or set `runtime_stop_rule.rule_id` to "
-                f"{self.certificate.stop_rule_id!r} if it is in fact the same rule under a new name")
+                f"other scored figure in it describe THAT rule's behaviour, not this one's). Swapping `rule` "
+                f"without refitting is how a certificate ends up asserting an accuracy the rule that actually runs "
+                f"was never measured against (TB-034). Refit with `Router.fit(..., stop_rule=your_rule)` instead of "
+                f"constructing or replacing a Router with a different `rule` in place")
 
     # ---------------------------------------------------------------- fitting
 
@@ -288,30 +316,21 @@ class Router:
             min_stopped: int = 30, abandon_depth: int | None = None,
             prices: dict[str, float] | None = None, items: list[str] | None = None,
             floors_attempted: int = 1, broken_keys_removed: bool | None = None,
-            stop_rule: ItemStopRule = agreement, runtime_stop_rule: RuntimeStopRule | None = None) -> "Router":
+            stop_rule: Rule = AGREEMENT) -> "Router":
         """Keep only policies whose adjusted bound clears the floor, then take the cheapest, or raise.
 
-        `stop_rule` is the BATCH rule `enumerate_policies`/`quorum.evaluate` score the fitting table under --
-        defaults to `agreement`, the shape this module's docstring traces to one fold's measurement. `runtime_stop_rule`
-        is what the returned `Router.decide` executes per request; it must agree with `stop_rule` in identity
-        (`quorum.rule_identity`), because the certificate's every scored figure describes `stop_rule`'s behaviour and
-        a runtime that disagreed with it would be presented under a claim it never earned (TB-034). Declaring
-        neither reproduces today's behaviour exactly: `agreement` scores, `default_stop_rule` runs, both share the
-        identity `"agreement"`. Declaring a custom `stop_rule` without a matching `runtime_stop_rule` refuses,
-        because this function has no general way to turn a batch partition rule into a streaming one.
+        `stop_rule` is the ONE `Rule` object both this fit and the returned `Router.decide` use: `stop_rule.score`
+        is what `enumerate_policies`/`quorum.evaluate` score the fitting table with, and `stop_rule.runtime` is
+        what the returned router's `decide()` executes per request. Round 2 took a batch callable and a runtime
+        callable as two SEPARATE arguments and cross-checked them by a `rule_id` string; a reviewer found that
+        proves nothing, since two unrelated callables can simply agree to share a string. Bundling both facets
+        onto one object removes the thing that needed cross-checking -- there is nothing left to reconcile,
+        because `fit` and `decide` both read off the same `Rule` instance. Declaring nothing reproduces today's
+        behaviour exactly (`AGREEMENT`: `agreement` scores, `default_stop_rule` runs).
         """
-        runtime_rule = runtime_stop_rule
-        if runtime_rule is None:
-            if rule_identity(stop_rule) != "agreement":
-                raise EvidenceError(
-                    f"stop_rule {rule_identity(stop_rule)!r} has no runtime counterpart. `Router.decide` executes a "
-                    f"per-request rule with a different shape than the batch partition `stop_rule` scores with, and "
-                    f"there is no general way to derive one from the other -- pass `runtime_stop_rule` naming the "
-                    f"per-request rule this fit's accuracy is meant to certify")
-            runtime_rule = default_stop_rule
         policies = enumerate_policies(table, candidates=candidates, escalate_to=escalate_to,
                                       max_members=max_members, min_stopped=min_stopped,
-                                      prices=prices, items=items, stop_rule=stop_rule)
+                                      prices=prices, items=items, stop_rule=stop_rule.score)
         ranked = [q for q in canonical(policies) if q.priced]
         considered = max(1, len(ranked))
         # Filter on the bound, then choose on cost. The reverse order -- cheapest by point estimate, then
@@ -353,10 +372,14 @@ class Router:
             wrong_stop_interval=(w_lo, w_hi), considered=considered, items=p.items,
             suite=table.suite, manifest_digest=table.manifest_digest, abandon_depth=depth,
             floors_attempted=floors_attempted, broken_keys_removed=broken_keys_removed,
-            stop_rule_id=rule_identity(stop_rule),
+            stop_rule_id=stop_rule.name,
+            # The rules were chosen by reading this project's own fold ONLY when the rule IS the one this
+            # project measured. A caller injecting their own rule brought it from their own study, not from
+            # reading this fold, so the adaptive-data-analysis warning does not apply to it -- the same
+            # reasoning `_best_single` already applies for "a single candidate is the absence of a rule".
+            rules_are_fold_derived=(stop_rule.name == "agreement"),
         )
-        return cls(certificate=cert, ladder=(p.escalate_to,), _policy=p,
-                  stop_rule=runtime_rule, _item_stop_rule=stop_rule)
+        return cls(certificate=cert, ladder=(p.escalate_to,), _policy=p, rule=stop_rule)
 
     def verify(self, other: OutcomeTable, *, items: list[str] | None = None,
                alpha: float = 0.05) -> tuple[bool, float, float]:
@@ -366,9 +389,9 @@ class Router:
         twice would make the repeat look worse than it is; charging for it not at all would make a policy
         selected on run 1 look freshly measured.
 
-        Re-scores under `self._item_stop_rule` -- the SAME batch rule the certificate was fitted under -- rather
-        than the module's `agreement` default, so a router fitted with an injected rule is re-checked against the
-        rule its certificate actually describes.
+        Re-scores under `self.rule.score` -- the SAME batch rule the certificate was fitted under -- rather than
+        the module's `agreement` default, so a router fitted with an injected rule is re-checked against the rule
+        its certificate actually describes.
         """
         from tierbook.quorum import evaluate
 
@@ -376,7 +399,7 @@ class Router:
             raise EvidenceError(
                 f"cannot verify a router fitted on {self.certificate.suite!r} against {other.suite!r}")
         p = evaluate(other, self.certificate.members, self.certificate.escalate_to,
-                     prices=None, items=items, stop_rule=self._item_stop_rule)
+                     prices=None, items=items, stop_rule=self.rule.score)
         low, _ = simultaneous_wilson(p.solved, p.items, alpha=alpha,
                                      considered=self.certificate.considered)
         return (low >= self.certificate.accuracy_floor, p.accuracy, low)
@@ -502,10 +525,10 @@ class Router:
     def decide(self, answers: dict[str, str | None]) -> Decision:
         """Given what has been heard, say what to do next. Pure, so a log can be replayed through it.
 
-        Delegates to `self.stop_rule`, which defaults to `default_stop_rule` -- see that function and the
-        `stop_rule` field for what changed and why.
+        Delegates to `self.rule.runtime`, which defaults to `default_stop_rule` -- see that function and `Rule`
+        for what changed and why.
         """
-        return self.stop_rule(self.certificate, self.ladder, answers)
+        return self.rule.runtime(self.certificate, self.ladder, answers)
 
     def run(self, call: Callable[[str], str | None], *,
             cost: Callable[[str], float] | None = None,

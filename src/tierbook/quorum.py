@@ -132,29 +132,34 @@ def _cell(table: OutcomeTable, item: str, tier: str) -> Cell:
 
 
 #: The signature every stop rule `evaluate` accepts must have: given the matrix, the member set and the items to
-#: decide over, return `(stopped, escalated)`. `agreement` below is the DEFAULT this project measured, not the only
-#: shape the signature can hold.
+#: decide over, return a mapping from each item this rule decides to STOP on to the ANSWER it selects for that
+#: item. An item absent from the returned mapping escalates. `agreement` below is the DEFAULT this project
+#: measured, not the only shape the signature can hold.
+#:
+#: **Round 3 changed what this returns.** It used to be `(stopped, escalated)` -- two lists, membership only. That
+#: was enough to bill a policy but not to SCORE one honestly: `evaluate` read a stopped item's correctness as "did
+#: any member solve it", which is only a safe reading when the stoppers are unanimous, as `agreement`'s stop set
+#: always is by construction. A rule that stops on some OTHER agreement notion (a majority, say) could report an
+#: item as stopped without the members agreeing, and the old signature gave `evaluate` no way to know WHICH answer
+#: the rule actually meant to return -- so it kept reading "any member correct", scoring "did the majority side
+#: happen to include a correct member" where it meant to score "was the majority's own answer correct". Returning
+#: the selected answer closes that gap: `evaluate` now scores the answer itself, and `agreement`'s own behaviour
+#: (below) is unchanged by the wider signature -- unanimity means the "selected answer" IS the one answer all
+#: members gave, so today's accuracy comes out identical.
 #:
 #: Named `ItemStopRule` rather than the bare `StopRule` an earlier version used, because `router.py` declares a
 #: SECOND stop rule under that name with an incompatible signature -- one partitions a whole item set at once for
 #: scoring, the other decides one streaming request's next action given partial answers -- and one name for two
-#: shapes is how the wrong one gets imported.
-ItemStopRule = Callable[[OutcomeTable, tuple[str, ...], list[str]], tuple[list[str], list[str]]]
+#: shapes is how the wrong one gets imported. `StopRule` below is a deprecated alias for any importer who held
+#: that name.
+ItemStopRule = Callable[[OutcomeTable, tuple[str, ...], list[str]], dict[str, str]]
+#: Deprecated alias, kept for any importer who held `quorum.StopRule` before round 2 renamed it to `ItemStopRule`
+#: to stop colliding with `router.StopRule`'s (also renamed) incompatible signature.
+StopRule = ItemStopRule
 
 
-def rule_identity(rule: Callable) -> str:
-    """A name for an injected rule, stable enough to compare across a fit and the runtime that executes it.
-
-    `rule_id`, when a rule declares one, else the function's own qualified name. A caller who wants a certificate
-    to describe their own rule under a chosen name sets `my_rule.rule_id = "..."` before fitting; `agreement` and
-    `router.default_stop_rule` both set theirs to `"agreement"`, because they are the streaming and the batch
-    expression of the SAME fold-derived rule and a certificate should read that as one identity, not two.
-    """
-    return getattr(rule, "rule_id", getattr(rule, "__qualname__", repr(rule)))
-
-
-def agreement(table: OutcomeTable, members: tuple[str, ...], items: list[str]) -> tuple[list[str], list[str]]:
-    """Split `items` into the ones the members agree on and the ones they do not.
+def agreement(table: OutcomeTable, members: tuple[str, ...], items: list[str]) -> dict[str, str]:
+    """Map each item the members agree on to the answer they agree on; leave the rest out (they escalate).
 
     Agreement requires every member to have produced an answer AND all answers to be identical. See
     the module docstring for why an absent answer escalates rather than being filled in.
@@ -165,20 +170,12 @@ def agreement(table: OutcomeTable, members: tuple[str, ...], items: list[str]) -
     the gap. `evaluate`'s `stop_rule` parameter is where a different study's stop rule (escalate on a signal instead
     of on disagreement, stop on a majority rather than on unanimity) can be expressed without editing this function.
     """
-    stopped, escalated = [], []
+    out: dict[str, str] = {}
     for item in items:
         answers = [_cell(table, item, m).answer for m in members]
         if all(a is not None for a in answers) and len(set(answers)) == 1:
-            stopped.append(item)
-        else:
-            escalated.append(item)
-    return stopped, escalated
-
-
-#: `agreement` and `router.default_stop_rule` are the batch and the streaming expression of one fold-derived rule;
-#: giving them the same `rule_id` is what lets `router.Router` check that a runtime rule matches the rule a
-#: certificate was fitted under (see `router.Router.__post_init__`).
-agreement.rule_id = "agreement"
+            out[item] = answers[0]
+    return out
 
 
 def joint_failure(table: OutcomeTable, a: str, b: str, items: list[str]) -> float | None:
@@ -203,32 +200,32 @@ def joint_failure(table: OutcomeTable, a: str, b: str, items: list[str]) -> floa
     return both / either if either else None
 
 
-def _check_partition(stopped: list[str], escalated: list[str], subject: list[str], stop_rule: Callable) -> None:
-    """Refuse an injected rule whose output is not an exact, disjoint partition of `subject`.
+def _identity_of(rule: Callable) -> str:
+    """A name for an injected rule to put in a refusal message. Not a proof of anything about the rule -- see
+    `router.Rule` for why this project no longer treats a shared name as evidence that two callables behave
+    alike. This is display only."""
+    return getattr(rule, "__qualname__", repr(rule))
 
-    Trusting the rule's output unchecked is what lets `(items, items)` -- everything both stopped AND escalated --
-    or a rule inventing an id nobody asked about corrupt `evaluate`'s bill and `enumerate_policies`'s `min_stopped`
-    logic silently. The check is purely structural: it says nothing about whether the PARTITION is a good one, only
-    that it accounts for exactly the items asked for, exactly once each.
+
+def _check_stopped_answers(stopped_answers: dict[str, str], subject: list[str], stop_rule: Callable) -> None:
+    """Refuse an injected rule whose output cannot be scored honestly.
+
+    Trusting the rule's output unchecked is how a rule inventing an id nobody asked about, or "stopping" on an
+    empty answer, would corrupt `evaluate`'s bill, its accuracy, and `enumerate_policies`'s `min_stopped` logic
+    silently. The check is purely structural: it says nothing about whether the PARTITION or the ANSWERS are good,
+    only that every key is one of the items asked for and every value is an answer the rule is actually selecting.
     """
-    stopped_set, escalated_set = set(stopped), set(escalated)
-    if len(stopped) != len(stopped_set) or len(escalated) != len(escalated_set):
+    invalid_keys = sorted(set(stopped_answers) - set(subject))
+    if invalid_keys:
         raise EvidenceError(
-            f"stop_rule {rule_identity(stop_rule)!r} returned a duplicate item id within stopped or escalated, so "
-            f"scoring it would count that item more than once")
-    overlap = sorted(stopped_set & escalated_set)
-    if overlap:
+            f"stop_rule {_identity_of(stop_rule)!r} returned {invalid_keys} as stopped, which were not among the "
+            f"{len(subject)} items asked for")
+    empty = sorted(k for k, v in stopped_answers.items() if not v)
+    if empty:
         raise EvidenceError(
-            f"stop_rule {rule_identity(stop_rule)!r} returned {overlap} as both stopped and escalated. An item is "
-            f"either agreed on or it is not; counting it as both would double it in the bill and in the accuracy")
-    subject_set = set(subject)
-    missing = subject_set - (stopped_set | escalated_set)
-    extra = (stopped_set | escalated_set) - subject_set
-    if missing or extra:
-        raise EvidenceError(
-            f"stop_rule {rule_identity(stop_rule)!r} did not return an exact partition of the {len(subject)} items "
-            f"asked for" + (f"; missing {sorted(missing)}" if missing else "")
-            + (f"; returned {sorted(extra)} that were not asked for" if extra else ""))
+            f"stop_rule {_identity_of(stop_rule)!r} returned {empty} as stopped with no answer (falsy). Stopping "
+            f"on an item means committing to an answer for it; a rule with nothing to commit should leave that "
+            f"item out of the mapping so it escalates instead")
 
 
 def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
@@ -240,26 +237,25 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
     the whole point of the separation: re-pricing a policy must not require re-running it, so a new
     rate card is an argument here and not a new measurement.
 
-    `stop_rule` decides which items stop and which escalate. Defaults to `agreement` -- unanimity among
-    `members` -- which is the shape this module's own docstring traces to one fold's measurement (TB-034).
-    **Declared here rather than fixed in the function**, so a study whose stop rule is not unanimity (a
-    majority, a signal-gated escalation) can be scored on the same frontier without editing this function.
-
-    **What an injected rule may decide, and what it may not.** It may only say WHICH items stop; it has no way to
-    say WHICH ANSWER the policy returns for them, because this function still reads a stopped item's correctness as
-    "did any member solve it" (below), which is a safe reading only when the members that stopped it are actually
-    unanimous -- as `agreement`'s stop set always is by construction. A `stop_rule` that stops on some OTHER
-    agreement notion (a majority of three, say) can report an item as stopped without its members agreeing, and this
-    function will still read "solved" off ANY member rather than off the answer the rule actually selected. The
-    scored accuracy would then describe "did the majority side happen to include a correct member", not "was the
-    majority's own answer correct" -- the two coincide only when the disagreement is one correct member against a
-    unanimous wrong side, and diverge as soon as three-plus distinct wrong answers appear among the stoppers.
-    Expressing a majority rule's SELECTED ANSWER needs a wider signature than `(stopped, escalated)`; this one
-    cannot hold it, and widening it is future work rather than something this change makes.
+    `stop_rule` maps each item it stops on to the answer it selects; an item it leaves out escalates. Defaults to
+    `agreement` -- unanimity among `members` -- which is the shape this module's own docstring traces to one
+    fold's measurement (TB-034). **Declared here rather than fixed in the function**, so a study whose stop rule
+    is not unanimity (a majority, a signal-gated escalation) can be scored on the same frontier without editing
+    this function, and scored HONESTLY: a stopped item's correctness is read off the SELECTED ANSWER (below), not
+    off "did any member happen to solve it" -- the two coincide exactly when the rule is unanimous, which is why
+    `agreement`'s own numbers do not move, and diverge for a rule that is not, which is the gap round 2 left open.
     """
     subject = list(items if items is not None else table.items)
-    stopped, escalated = stop_rule(table, members, subject)
-    _check_partition(stopped, escalated, subject, stop_rule)
+    # The caller's own `items` can carry a duplicate; that is not the injected rule's doing, so it gets its own
+    # message rather than being blamed on `stop_rule` when the duplicate resurfaces in its output.
+    if len(subject) != len(set(subject)):
+        dupes = sorted({i for i in subject if subject.count(i) > 1})
+        raise EvidenceError(f"items contains duplicate id(s) {dupes}, so scoring it would count that item more "
+                           f"than once regardless of what any stop_rule returns")
+    stopped_answers = stop_rule(table, members, subject)
+    _check_stopped_answers(stopped_answers, subject, stop_rule)
+    stopped = list(stopped_answers)
+    escalated = [i for i in subject if i not in stopped_answers]
 
     def cost_of(item: str, tier: str) -> float | None:
         if prices is not None:
@@ -282,10 +278,19 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
         else:
             total += usd
 
-    # A stopped item is right when the answer the members agreed on is right. Because they all gave the
-    # same answer, any member's own verdict settles it -- but reading it off one member would be a
-    # coincidence of that encoding, so it is read as "some member solved it", which is the same set.
-    right_stopped = sum(1 for i in stopped if any(_cell(table, i, m).solved for m in members))
+    def _answer_is_correct(item: str, answer: str) -> bool:
+        """Whether the rule's SELECTED answer for `item` is the correct one.
+
+        Read off whichever member's cell carries that exact answer and was itself marked solved -- correctness is
+        a property of the answer matching the item's own ground truth, not of which member said it, so any member
+        recording that string as solved settles it for every other member who gave the same string. This is what
+        makes the check correct for `agreement` (every stopper gave the identical answer, so this is exactly "any
+        member solved it", unchanged from round 2) and for a rule that is NOT unanimous (a majority's answer is
+        scored by whether THAT answer was right, not by whether some other, dissenting member happened to be).
+        """
+        return any(_cell(table, item, m).answer == answer and _cell(table, item, m).solved for m in members)
+
+    right_stopped = sum(1 for i in stopped if _answer_is_correct(i, stopped_answers[i]))
     right_escalated = sum(1 for i in escalated if _cell(table, i, escalate_to).solved)
 
     best_member = max((sum(1 for i in subject if _cell(table, i, m).solved) for m in members),

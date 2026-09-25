@@ -342,6 +342,19 @@ class Quantity:
         """
         return AVAILABILITY.index(self.availability) < AVAILABILITY.index("after_generation")
 
+    @property
+    def signal_kwargs(self) -> dict[str, object]:
+        """`about`/`subjects`, ready to splat into `quorum.evaluate_signal`/`enumerate_signal_policies`.
+
+        Round 1 found this quantity's own subject vocabulary (`declared_subjects`/`self.subjects`) does not
+        travel automatically to a re-check elsewhere: `evaluate_signal(about=q.subject)` alone drops
+        `q.subjects`, so a quantity that needed a WIDENED vocabulary to be constructible at all is then refused
+        by `evaluate_signal` unless the caller remembers to separately pass `subjects=q.subjects` too. This
+        property is that pass-through, so a caller who has the `Quantity` does not have to reconstruct its
+        vocabulary by hand: `evaluate_signal(table, member, escalate_to, signal=..., threshold=..., **q.signal_kwargs)`.
+        """
+        return {"about": self.subject, "subjects": self.subjects}
+
     def __str__(self) -> str:
         return (f"{self.name}/{self.readout_version} (about {self.subject}, {self.kind}, {self.availability}, "
                 f"{self.register}, "

@@ -203,10 +203,7 @@ def cmd_compile(args) -> int:
         floors = {}
         staleness_limits = {}
         exploration_rates = {}
-    # `Config` carries no `throughput_per_family` (TB-044): a per-family realised rate is a measurement, not a
-    # policy input, so the only way to supply one is at this compile invocation -- measured moments before it
-    # is used -- rather than from a committed file nothing re-checks against a fresh measurement.
-    tp = {}
+    tp = dict(cfg.throughput_per_family) if cfg else {}
     tp.update((k, float(v)) for k, v in (p.split("=", 1) for p in args.throughput_per_family or []))
     o = cfg.objective if cfg else None
     table = compile_to_file(tiers, families, args.out, margin=args.margin, alpha=args.alpha,
@@ -1012,12 +1009,15 @@ def cmd_collect_harness(args) -> int:
     if coll.our_failures:
         print(f"ours to fix: {list(coll.our_failures)}")
     print(f"unaccounted: {list(coll.unaccounted) or 'none'}")
+    # Printed unconditionally, not only on non-conformance: a round-3 review found the identity absent from every
+    # CONFORMING record too, and a consumer of this print stream cannot tell "perigraph, checked" from "nobody
+    # checked" without it. This door builds every Part/Absence/Manifest against the default vocabulary, so the
+    # non-conforming branch below is currently unreachable from the CLI -- there is no `--vocabulary` flag here
+    # (see harness.py's `collect_from_request` docstring for why that stays a separate collector rather than a
+    # vocabulary argument on this one). It stays anyway: the point where perigraph-shaped output is produced is
+    # the right place for both lines, not the place that happens to be the only caller today.
+    print(f"vocabulary: {manifest.vocabulary.identity}")
     if not coll.conforms_to_perigraph:
-        # This door builds every Part/Absence/Manifest against the default vocabulary, so this line is currently
-        # unreachable from the CLI -- there is no `--vocabulary` flag here (see harness.py's `collect_from_request`
-        # docstring for why that stays a separate collector rather than a vocabulary argument on this one). It stays
-        # here anyway: the point where perigraph-shaped output is produced is the right place to mark it, not the
-        # place that happens to be the only caller today.
         print(f"NOT perigraph-conforming: {manifest.vocabulary.non_conformance_reason}")
     print(coll.why_not())
     return 0 if coll.admissible_to_a_verdict() else 2
@@ -1388,11 +1388,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--margin", type=float, default=None,
                    help="non-inferiority margin in solve-rate points, fixed BEFORE looking at outcomes")
     c.add_argument("--alpha", type=float, default=0.05)
-    c.add_argument("--throughput-per-family", action="append", metavar="FAMILY=TASKS_PER_HOUR",
-                   help="a realised rate you measured for this family, moments before this compile. Not a "
-                        "config key any more (TB-044): a rate that observation can supply is a derived "
-                        "quantity wherever it is written, and a committed file never re-checks it against a "
-                        "fresh measurement")
+    c.add_argument("--throughput-per-family", action="append", metavar="FAMILY=TASKS_PER_HOUR")
     c.add_argument("--max-age-days", type=int, default=90)
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")

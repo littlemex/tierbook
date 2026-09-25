@@ -26,6 +26,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -279,3 +281,73 @@ def test_a_parsed_digest_being_collector_local_is_stated_and_this_package_holds_
     boundaries = {p.boundary for p in (
         hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64),)}
     assert boundaries == {"model_visible"}
+
+
+# --- round 3: normalisation regression, immutable snapshot, cross-vocabulary refusal --------------------------
+
+def test_replace_and_reconstruction_from_another_vocabularys_fields_round_trip():
+    """A reviewer found that once `best_sourcing` is canonicalised into a tuple of pairs, feeding that tuple BACK
+    into the constructor broke: `dataclasses.replace(some_vocabulary, name="x")` and
+    `PartVocabulary(parts=v.parts, best_sourcing=v.best_sourcing)` both do exactly that, and both are ordinary
+    ways to build one `PartVocabulary` from another's own fields."""
+    import dataclasses
+
+    replaced = dataclasses.replace(hn.DEFAULT_PART_VOCABULARY, name="renamed")
+    assert replaced.name == "renamed"
+    assert replaced.conforms_to_perigraph is True
+    assert replaced.sourcing_of("instruction") == "in_the_request"
+
+    rebuilt = hn.PartVocabulary(parts=hn.DEFAULT_PART_VOCABULARY.parts,
+                                best_sourcing=hn.DEFAULT_PART_VOCABULARY.best_sourcing)
+    assert rebuilt.conforms_to_perigraph is True
+    assert rebuilt.sourcing_of("tool_extension") == "not_observable"
+
+    widened = hn.PartVocabulary(
+        parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"})
+    # Now replace() THAT one, which feeds its own tuple-of-pairs `best_sourcing` back in too.
+    widened_renamed = dataclasses.replace(widened, version="2")
+    assert widened_renamed.conforms_to_perigraph is True
+    assert widened_renamed.sourcing_of("context_window_policy") == "pushed_by_owner"
+
+
+def test_the_module_sourcing_table_is_immutable():
+    """Round 2 fixed `DEFAULT_PART_VOCABULARY` aliasing the module dict; a reviewer found `conforms_to_perigraph`
+    still read that same module "constant" LIVE, so mutating it from outside this module would have flipped which
+    vocabularies conform. `DEFAULT_BEST_AVAILABLE_SOURCING` is a `MappingProxyType` now, so the mutation this test
+    tries cannot even be performed -- stronger than merely not mattering."""
+    with pytest.raises(TypeError):
+        hn.DEFAULT_BEST_AVAILABLE_SOURCING["tool_extension"] = "in_the_request"
+    assert hn.BEST_AVAILABLE_SOURCING is hn.DEFAULT_BEST_AVAILABLE_SOURCING
+
+
+def test_conforms_to_perigraph_reads_the_vocabularys_own_snapshot_not_the_module_dict():
+    """Belt and suspenders: even if the module dict were somehow replaced with a fresh mutable one, conformance
+    would still be read off `DEFAULT_PART_VOCABULARY`'s own construction-time snapshot."""
+    assert hn.DEFAULT_PART_VOCABULARY.conforms_to_perigraph is True
+    for kind in hn.DEFAULT_HARNESS_PARTS:
+        assert hn.DEFAULT_PART_VOCABULARY.sourcing_of(kind) == hn.DEFAULT_BEST_AVAILABLE_SOURCING[kind]
+
+
+def test_two_harnesses_under_different_vocabularies_are_never_comparable():
+    """Comparing identities across two DIFFERENT vocabularies would read `missing` and a part's own admissibility
+    against two different definitions of what a part IS, attributing a declaration difference to the arms."""
+    widened = hn.PartVocabulary(
+        parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"})
+    a = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64),))
+    b = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
+                                 vocabulary=widened),), vocabulary=widened)
+    assert a.identity == b.identity, "the fixture needs identical bytes so only the vocabulary differs"
+    assert a.comparable_with(b) is False
+    with pytest.raises(hn.Unidentified, match="different vocabularies"):
+        hn.refuse_incomparable(a, b)
+
+
+def test_the_vocabulary_identity_is_always_printed_not_only_on_non_conformance():
+    """A reviewer found the identity absent from a CONFORMING record's own printed form -- a reader could not tell
+    'perigraph, checked' from 'nobody checked' without it."""
+    h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64),))
+    assert "vocabulary perigraph/1" in str(h)
+    coll = hn.Collection(manifest=hn.Manifest(collector="c", version="1", reaches=("instruction",)), harness=h)
+    assert "vocabulary perigraph/1" in str(coll)

@@ -43,9 +43,8 @@ def test_agreement_is_not_derivable_from_correctness():
         "same-wrong": {"a": (INCORRECT, "B", 1.0), "b": (INCORRECT, "B", 1.0)},
         "diff-wrong": {"a": (INCORRECT, "B", 1.0), "b": (INCORRECT, "C", 1.0)},
     })
-    stopped, escalated = agreement(t, ("a", "b"), ["same-wrong", "diff-wrong"])
-    assert stopped == ["same-wrong"]
-    assert escalated == ["diff-wrong"]
+    stopped = agreement(t, ("a", "b"), ["same-wrong", "diff-wrong"])
+    assert stopped == {"same-wrong": "B"}, "the selected answer travels with the stopped item now (round 3)"
 
 
 def test_an_absent_answer_escalates_and_is_never_recovered():
@@ -59,9 +58,8 @@ def test_an_absent_answer_escalates_and_is_never_recovered():
         "one-silent": {"a": (SOLVED, "B", 1.0), "b": (INCORRECT, None, 1.0)},
         "both-spoke": {"a": (SOLVED, "B", 1.0), "b": (SOLVED, "B", 1.0)},
     })
-    stopped, escalated = agreement(t, ("a", "b"), ["one-silent", "both-spoke"])
-    assert stopped == ["both-spoke"]
-    assert escalated == ["one-silent"], "two answers of which one is missing is not agreement"
+    stopped = agreement(t, ("a", "b"), ["one-silent", "both-spoke"])
+    assert stopped == {"both-spoke": "B"}, "two answers of which one is missing is not agreement"
 
 
 def test_the_stop_rule_defaults_to_agreement_and_a_declared_rule_is_carried():
@@ -75,53 +73,87 @@ def test_the_stop_rule_defaults_to_agreement_and_a_declared_rule_is_carried():
     assert (default.stopped, default.items) == (1, 2), "unchanged: unanimity stops on the agreeing item only"
 
     def never_stop(table, members, items):
-        return [], list(items)
+        return {}
 
     everything_escalates = evaluate(t, ("a", "b"), "dear", stop_rule=never_stop)
     assert everything_escalates.stopped == 0, "a declared rule overrides agreement entirely"
 
 
-def test_an_injected_rule_that_double_counts_an_item_is_refused():
-    """The interface was trusted unchecked: `(items, items)` -- everything both stopped AND escalated -- would
-    double an item in the bill and in the accuracy with nothing here to catch it."""
-    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+def test_evaluate_scores_the_rules_selected_answer_not_any_member_solved():
+    """Round 3's fix: three members answer wrong "W", wrong "W", correct "C" on one item. A majority rule stops
+    on "W" (two of three), which is WRONG -- but the old scoring read "did any member solve it", which is TRUE
+    here because the third member (who did not even agree) happened to be right. `evaluate` must read the
+    correctness of the SELECTED answer, not of the membership."""
+    t = _table({"x": {"a": (INCORRECT, "W", 1.0), "b": (INCORRECT, "W", 1.0), "c": (SOLVED, "C", 1.0),
+                     "dear": (SOLVED, "C", 5.0)}})
 
-    def both(table, members, items):
-        return list(items), list(items)
+    def majority_of_three(table, members, items):
+        out = {}
+        for item in items:
+            answers = [_cell_answer(table, item, m) for m in members]
+            majority = max(set(answers), key=answers.count)
+            out[item] = majority
+        return out
 
-    with pytest.raises(EvidenceError, match="both stopped and escalated"):
-        evaluate(t, ("a",), "dear", stop_rule=both)
+    p = evaluate(t, ("a", "b", "c"), "dear", stop_rule=majority_of_three)
+    assert p.stopped == 1, "the item stopped (a majority was reached)"
+    assert p.solved == 0, "the SELECTED answer ('W') was wrong, so the item must not be scored as solved"
+
+
+def test_evaluate_scores_a_majority_rule_correctly_when_the_majority_is_right():
+    """The mirror of the case above: the majority's answer IS correct, and must score as solved even though one
+    member (a minority) disagreed -- unlike `agreement`, which would have escalated this item entirely."""
+    t = _table({"x": {"a": (SOLVED, "C", 1.0), "b": (SOLVED, "C", 1.0), "c": (INCORRECT, "W", 1.0),
+                     "dear": (INCORRECT, "W", 5.0)}})
+
+    def majority_of_three(table, members, items):
+        out = {}
+        for item in items:
+            answers = [_cell_answer(table, item, m) for m in members]
+            majority = max(set(answers), key=answers.count)
+            out[item] = majority
+        return out
+
+    p = evaluate(t, ("a", "b", "c"), "dear", stop_rule=majority_of_three)
+    assert p.stopped == 1
+    assert p.solved == 1, "the majority's own answer ('C') was correct"
+
+
+def _cell_answer(table, item, tier):
+    return table.cells.get(item, {}).get(tier).answer
 
 
 def test_an_injected_rule_that_invents_an_item_id_is_refused():
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 
     def invents(table, members, items):
-        return list(items) + ["nonexistent"], []
+        return {i: "B" for i in items} | {"nonexistent": "B"}
 
-    with pytest.raises(EvidenceError, match="not asked for"):
+    with pytest.raises(EvidenceError, match="not among the"):
         evaluate(t, ("a",), "dear", stop_rule=invents)
 
 
-def test_an_injected_rule_that_drops_an_item_id_is_refused():
-    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)},
-               "y": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
-
-    def drops(table, members, items):
-        return list(items)[:-1], []
-
-    with pytest.raises(EvidenceError, match="missing"):
-        evaluate(t, ("a",), "dear", stop_rule=drops)
-
-
-def test_an_injected_rule_that_duplicates_an_item_id_is_refused():
+def test_an_injected_rule_that_stops_with_no_answer_is_refused():
+    """Stopping on an item means committing to an answer for it; a falsy answer (empty string, None) is not a
+    commitment, and letting it through would make `_answer_is_correct` silently read as 'wrong' for a reason
+    that has nothing to do with correctness."""
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 
-    def duplicates(table, members, items):
-        return list(items) * 2, []
+    def stops_with_nothing(table, members, items):
+        return {i: "" for i in items}
 
-    with pytest.raises(EvidenceError, match="duplicate item id"):
-        evaluate(t, ("a",), "dear", stop_rule=duplicates)
+    with pytest.raises(EvidenceError, match="no answer"):
+        evaluate(t, ("a",), "dear", stop_rule=stops_with_nothing)
+
+
+def test_a_duplicate_item_in_the_callers_own_items_is_refused_before_the_rule_runs():
+    """A reviewer found the earlier version of this check blamed the STOP RULE for a duplicate the CALLER
+    supplied in `items` -- `agreement` just reflects whatever duplicate it is handed. The message must name the
+    caller's own input, not the rule."""
+    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+
+    with pytest.raises(EvidenceError, match="items contains duplicate"):
+        evaluate(t, ("a",), "dear", items=["x", "x"])
 
 
 def test_a_single_member_policy_stops_on_everything():
@@ -293,9 +325,8 @@ def test_cheapest_meeting_returns_none_when_the_floor_is_unreachable():
 def test_an_unobserved_cell_is_an_absent_answer():
     """A tier that was never run on an item has no answer, so it cannot complete a quorum."""
     t = _table({"i1": {"a": (SOLVED, "B", 1.0)}})
-    stopped, escalated = agreement(t, ("a", "missing"), ["i1"])
-    assert stopped == []
-    assert escalated == ["i1"]
+    stopped = agreement(t, ("a", "missing"), ["i1"])
+    assert stopped == {}
     assert Cell(UNOBSERVED, None).answer is None
 
 
@@ -612,6 +643,25 @@ def test_every_named_subject_is_admitted_and_the_policy_records_which(about):
     assert evaluate_signal(t, "a", "dear", signal=signal, about=about, threshold=0.5) is not None
 
 
+def test_the_refusal_message_names_the_declared_vocabulary_without_a_nameerror():
+    """A round-3 review flagged that the refusal message interpolates `{vocabulary}` and asked whether that name is
+    actually bound -- if it were not, this would raise `NameError` instead of `EvidenceError`, and no test read the
+    message closely enough to notice. It IS bound (`vocabulary = subjects or DEFAULT_SUBJECTS`, just above the
+    raise); this test pins that down for both the default and a declared vocabulary."""
+    from tierbook.quorum import evaluate_signal
+    t, signal = _small_signal_table()
+    with pytest.raises(EvidenceError) as exc:
+        evaluate_signal(t, "a", "dear", signal=signal, about="vibes", threshold=0.5)
+    assert type(exc.value) is EvidenceError
+    assert "('topic', 'own_competence', 'item_difficulty', 'resource_state')" in str(exc.value)
+
+    with pytest.raises(EvidenceError) as exc2:
+        evaluate_signal(t, "a", "dear", signal=signal, about="vibes", threshold=0.5,
+                        subjects=("own_competence",))
+    assert type(exc2.value) is EvidenceError
+    assert "('own_competence',)" in str(exc2.value)
+
+
 def test_the_subject_vocabulary_is_declarable_and_the_default_reproduces_todays_refusal():
     """F141's move applied to the one closed vocabulary this module still checks membership against: a caller who
     declares nothing gets exactly today's refusal, and a caller whose signal is about something the default does not
@@ -635,3 +685,11 @@ def test_the_word_subject_no_longer_has_three_meanings_in_this_module():
     src = inspect.getsource(evaluate_signal)
     assert "item_ids" in src
     assert "subject = " not in src
+
+
+def test_stoprule_is_a_deprecated_alias_for_itemstoprule():
+    """Round 2 renamed `quorum.StopRule` to `ItemStopRule` (to stop colliding with `router.StopRule`'s
+    incompatible signature) with no alias, which breaks any importer who held the old bare name -- the same
+    import break round 1's fix for finding 8 was written to prevent."""
+    import tierbook.quorum as quorum_mod
+    assert quorum_mod.StopRule is quorum_mod.ItemStopRule

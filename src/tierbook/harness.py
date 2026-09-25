@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, DIGEST_BOUNDARIES, HARNESS_SOURCING,
                               IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING, EvidenceError)
@@ -79,7 +80,13 @@ DEFAULT_HARNESS_PARTS = (
 #: `tool_extension` is the entry that forced this table to exist. Its schema is in the request and its behaviour is not,
 #: so a change to what a tool does behind an unchanged schema is invisible from the request -- and a record that did not
 #: say so would group two different harnesses under one identity.
-DEFAULT_BEST_AVAILABLE_SOURCING = {
+#: A `MappingProxyType`, not a plain `dict`, because a round-3 review found `conforms_to_perigraph` (below) read
+#: this "constant" live: `hn.BEST_AVAILABLE_SOURCING["tool_extension"] = "in_the_request"` would have flipped
+#: which vocabularies conform, silently, from outside this module. `conforms_to_perigraph` reads
+#: `DEFAULT_PART_VOCABULARY`'s own canonicalised snapshot instead (see `PartVocabulary.__post_init__`), which this
+#: proxy cannot reach even if a caller somehow bypassed the proxy -- two independent reasons the same mutation
+#: cannot land, not one.
+DEFAULT_BEST_AVAILABLE_SOURCING = MappingProxyType({
     "instruction": "in_the_request",
     "tool_schemas": "in_the_request",
     "tool_extension": "not_observable",
@@ -96,7 +103,7 @@ DEFAULT_BEST_AVAILABLE_SOURCING = {
     # between them is a property of their scaffold, not of any request we hold. We see one request at a time and cannot
     # tell a second context from a second conversation in the first.
     "context_partitioning": "pushed_by_owner",
-}
+})
 
 
 class Unidentified(EvidenceError):
@@ -127,24 +134,35 @@ class PartVocabulary:
     """
 
     parts: tuple[str, ...]
-    best_sourcing: dict[str, str]
+    #: Accepts a mapping OR a sequence of `(kind, mode)` pairs -- what this field itself holds after construction
+    #: (see below). Typed as a mapping because that is the common case for a caller writing a new declaration.
+    best_sourcing: dict[str, str] | tuple[tuple[str, str], ...]
     name: str = "custom"
     version: str = "unversioned"
 
     def __post_init__(self) -> None:
+        # Normalise FIRST, before any check reads `best_sourcing`. A round-3 review found the check order the
+        # other way around: once this constructor canonicalises `best_sourcing` into a tuple of pairs (below),
+        # `dataclasses.replace(some_vocabulary, name="x")` and `PartVocabulary(parts=v.parts,
+        # best_sourcing=v.best_sourcing)` -- both ordinary ways to build one `PartVocabulary` from another's own
+        # fields -- fed that tuple BACK into this same constructor, where `set(self.best_sourcing)` yields pairs
+        # rather than part names and the totality check breaks. `dict(...)` accepts a mapping or a sequence of
+        # pairs identically, so normalising through it first makes every check below correct for either input,
+        # and makes `replace`/reconstruction-from-fields round-trip.
+        sourcing = dict(self.best_sourcing)
         if not self.parts:
             raise Unidentified("a vocabulary with no parts names nothing a harness could be built from")
         if len(set(self.parts)) != len(self.parts):
             raise Unidentified(f"a part is named twice in {self.parts}")
-        missing = sorted(set(self.parts) - set(self.best_sourcing))
+        missing = sorted(set(self.parts) - set(sourcing))
         if missing:
             raise Unidentified(
                 f"{missing} have no best_sourcing entry. Total on purpose: a part without a decided sourcing mode "
                 f"would default to observable rather than fail a test the moment it is used")
-        extra = sorted(set(self.best_sourcing) - set(self.parts))
+        extra = sorted(set(sourcing) - set(self.parts))
         if extra:
             raise Unidentified(f"best_sourcing names {extra}, which {self.parts} does not declare as a part")
-        bad_modes = sorted(set(self.best_sourcing.values()) - set(HARNESS_SOURCING))
+        bad_modes = sorted(set(sourcing.values()) - set(HARNESS_SOURCING))
         if bad_modes:
             raise Unidentified(
                 f"best_sourcing names sourcing mode(s) {bad_modes}, not one of {HARNESS_SOURCING}. A typo here (a "
@@ -156,7 +174,7 @@ class PartVocabulary:
         # caller that put one in a set or a dict key; and `DEFAULT_PART_VOCABULARY` aliasing the module-level
         # `DEFAULT_BEST_AVAILABLE_SOURCING` dict would let a later mutation of that module dict change this
         # vocabulary's answers silently, after the totality check above had already run against the un-mutated copy.
-        object.__setattr__(self, "best_sourcing", tuple(sorted(self.best_sourcing.items())))
+        object.__setattr__(self, "best_sourcing", tuple(sorted(sourcing.items())))
 
     def sourcing_of(self, kind: str) -> str:
         """The best sourcing mode for one part -- the lookup `best_sourcing` offered before it became a hashable
@@ -188,10 +206,17 @@ class PartVocabulary:
           whatever a caller declares -- not a caller's choice, so a declaration that widened it (claimed
           `in_the_request` where perigraph says `not_observable`, say) would let a `Manifest` admit as reachable
           something no mode actually reaches.
+
+        Read against `DEFAULT_PART_VOCABULARY`'s own canonicalised snapshot, not the module-level
+        `DEFAULT_BEST_AVAILABLE_SOURCING` "constant" directly -- a round-3 review found this property reading that
+        mutable dict live, so `hn.BEST_AVAILABLE_SOURCING["tool_extension"] = "in_the_request"` from OUTSIDE this
+        module would have flipped which vocabularies conform. `DEFAULT_PART_VOCABULARY.best_sourcing` was already
+        copied into an immutable tuple at construction time (above), so this reads a value nothing outside this
+        module can reach, on top of the module constant now being a read-only `MappingProxyType`.
         """
         if not set(DEFAULT_HARNESS_PARTS) <= set(self.parts):
             return False
-        return all(self.sourcing_of(k) == DEFAULT_BEST_AVAILABLE_SOURCING[k] for k in DEFAULT_HARNESS_PARTS)
+        return all(self.sourcing_of(k) == DEFAULT_PART_VOCABULARY.sourcing_of(k) for k in DEFAULT_HARNESS_PARTS)
 
     @property
     def non_conformance_reason(self) -> str:
@@ -201,7 +226,7 @@ class PartVocabulary:
             raise Unidentified(f"{self.identity} conforms to perigraph; there is no non-conformance to explain")
         dropped = sorted(set(DEFAULT_HARNESS_PARTS) - set(self.parts))
         redefined = sorted(k for k in DEFAULT_HARNESS_PARTS
-                           if k in self.parts and self.sourcing_of(k) != DEFAULT_BEST_AVAILABLE_SOURCING[k])
+                           if k in self.parts and self.sourcing_of(k) != DEFAULT_PART_VOCABULARY.sourcing_of(k))
         reasons = []
         if dropped:
             reasons.append(f"drops perigraph part(s) {dropped}")
@@ -409,12 +434,20 @@ class Harness:
         Only the identifying parts decide it, and that is deliberate: a difference in what the owner *says* about their
         loop is not evidence that the loop differed, and treating it as such would refuse comparisons that are fine
         while still missing the ones that are not.
+
+        A prerequisite comes first, though: two harnesses declared against DIFFERENT vocabularies are never
+        comparable, whatever their identities say. `missing` and a part's own admissibility check read the
+        vocabulary they were each built against, so two harnesses under different vocabularies are reading two
+        different definitions of what a part IS for a same-shaped record -- comparing their identities would
+        attribute that difference to the arms instead of to the declaration.
         """
+        if self.vocabulary != other.vocabulary:
+            return False
         return self.identity == other.identity
 
     def __str__(self) -> str:
         who = self.identity if self.has_identity else "no identity"
-        head = (f"harness {who} from {len(self.parts)} part(s); "
+        head = (f"harness {who} from {len(self.parts)} part(s); vocabulary {self.vocabulary.identity}; "
                 f"unobserved {list(self.unobserved) or 'none'}; unrecorded {list(self.missing) or 'none'}")
         if self.conforms_to_perigraph:
             return head
@@ -430,6 +463,11 @@ def refuse_incomparable(a: Harness, b: Harness) -> None:
     """
     if a.comparable_with(b):
         return
+    if a.vocabulary != b.vocabulary:
+        raise Unidentified(
+            f"these runs declared different vocabularies ({a.vocabulary.identity} against {b.vocabulary.identity}); "
+            f"comparing them would read `missing` and a part's own admissibility against two different definitions "
+            f"of what a part IS for a same-shaped record, which is a difference in declaration, not in the arms")
     ka = {p.kind: p.digest for p in a.parts if p.identifying}
     kb = {p.kind: p.digest for p in b.parts if p.identifying}
     differ = sorted(k for k in set(ka) | set(kb) if ka.get(k) != kb.get(k))
@@ -679,7 +717,7 @@ class Collection:
 
     def __str__(self) -> str:
         who = self.harness.identity if (self.harness and self.harness.has_identity) else "no identity"
-        head = (f"collection {who} ({self.status}); held "
+        head = (f"collection {who} ({self.status}); vocabulary {self.manifest.vocabulary.identity}; held "
                 f"{len(self.harness.parts) if self.harness else 0}; absent {len(self.absences)}; "
                 f"unaccounted {list(self.unaccounted) or 'none'}; contradictions {list(self.contradictions) or 'none'}")
         if self.conforms_to_perigraph:
