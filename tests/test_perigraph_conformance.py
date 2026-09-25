@@ -52,6 +52,104 @@ def test_the_parts_match():
     assert hn.DEFAULT_HARNESS_PARTS == tuple(SPEC["parts"]["values"])
 
 
+def test_the_best_sourcing_table_is_pinned():
+    """`test_the_parts_match` pins only the part NAMES against the vendored spec -- the spec names which parts exist,
+    not which sourcing mode is best for each, so there is nothing in `SPEC` to compare `DEFAULT_BEST_AVAILABLE_SOURCING`
+    against. A reviewer found that gap: a caller-declared vocabulary could be checked against `DEFAULT_HARNESS_PARTS`
+    alone and still silently redefine what `tool_extension`'s best sourcing is (see
+    `test_a_vocabulary_that_redefines_or_drops_a_spec_part_does_not_conform` below). Pinned here as a literal instead,
+    so a value drifting in `harness.py` fails a test rather than only a review."""
+    assert hn.DEFAULT_BEST_AVAILABLE_SOURCING == {
+        "instruction": "in_the_request",
+        "tool_schemas": "in_the_request",
+        "tool_extension": "not_observable",
+        "tool_trace": "in_the_request",
+        "loop": "pushed_by_owner",
+        "turn_budget": "pushed_by_owner",
+        "retry_policy": "pushed_by_owner",
+        "readout": "in_the_request",
+        "decoding": "in_the_request",
+        "context_partitioning": "pushed_by_owner",
+    }
+
+
+def test_the_default_vocabulary_identifies_as_perigraph_and_conforms():
+    assert hn.DEFAULT_PART_VOCABULARY.identity == "perigraph/1"
+    assert hn.DEFAULT_PART_VOCABULARY.conforms_to_perigraph is True
+
+
+def test_a_vocabulary_that_redefines_or_drops_a_spec_part_does_not_conform():
+    """The finding: a caller-declared `PartVocabulary` could drop one of perigraph's parts, or redefine what
+    perigraph says a spec part's best sourcing is, with nothing marking the record built from it as anything but
+    perigraph-conforming. `conforms_to_perigraph` and the `NOT perigraph-conforming` marker in `Harness.__str__`/
+    `Collection.__str__` are what a perigraph consumer now has to see this by."""
+    dropped = hn.PartVocabulary(parts=("instruction",), best_sourcing={"instruction": "in_the_request"})
+    assert dropped.conforms_to_perigraph is False
+    assert "drops perigraph part" in dropped.non_conformance_reason
+
+    redefined = hn.PartVocabulary(
+        parts=hn.DEFAULT_HARNESS_PARTS,
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "tool_extension": "in_the_request"})
+    assert redefined.conforms_to_perigraph is False
+    assert "redefines perigraph part" in redefined.non_conformance_reason
+
+    # Additions alone -- TB-045's whole point -- must NOT break conformance.
+    additions_only = hn.PartVocabulary(
+        parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"})
+    assert additions_only.conforms_to_perigraph is True
+
+    h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
+                                  vocabulary=redefined),),
+                  vocabulary=redefined)
+    assert h.conforms_to_perigraph is False
+    assert "NOT perigraph-conforming" in str(h)
+    assert "NOT perigraph-conforming" not in str(hn.Harness(parts=(hn.Part(kind="instruction",
+                                                                            sourcing="in_the_request",
+                                                                            digest="a" * 64),)))
+
+    coll = hn.Collection(manifest=hn.Manifest(collector="c", version="1", reaches=(), vocabulary=redefined))
+    assert coll.conforms_to_perigraph is False
+    assert "NOT perigraph-conforming" in str(coll)
+
+
+def test_a_vocabulary_conforming_by_luck_rather_than_by_name_still_conforms():
+    """Conformance is structural, not by self-declared name: a vocabulary that never claims to be perigraph, but
+    happens to be an additions-only superset with an identical sourcing table, does conform."""
+    happens_to_conform = hn.PartVocabulary(
+        parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"},
+        name="some-other-project")
+    assert happens_to_conform.conforms_to_perigraph is True
+    assert happens_to_conform.identity != hn.DEFAULT_PART_VOCABULARY.identity
+
+
+def test_a_part_vocabulary_stays_hashable_so_frozen_records_stay_hashable():
+    """A `dict` field on a frozen dataclass makes it unhashable, which breaks every existing caller that puts a
+    `Part`/`Harness`/`Manifest`/`Absence` in a set or a dict key -- the regression a reviewer found in the same
+    change that added `PartVocabulary`."""
+    hash(hn.DEFAULT_PART_VOCABULARY)
+    p = hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64)
+    hash(p)
+    h = hn.Harness(parts=(p,))
+    hash(h)
+    m = hn.Manifest(collector="c", version="1", reaches=("instruction",))
+    hash(m)
+    a = hn.Absence(kind="decoding", reason="not_provided")
+    hash(a)
+    {p, h, m, a}  # must not raise
+
+
+def test_mutating_the_module_dict_after_construction_does_not_change_the_vocabulary():
+    """The second half of the same regression: `DEFAULT_PART_VOCABULARY` used to alias
+    `DEFAULT_BEST_AVAILABLE_SOURCING` directly, so mutating that module dict after construction silently changed
+    what the vocabulary's totality check had already validated against."""
+    sourcing_copy = dict(hn.DEFAULT_BEST_AVAILABLE_SOURCING)
+    v = hn.PartVocabulary(parts=hn.DEFAULT_HARNESS_PARTS, best_sourcing=sourcing_copy)
+    sourcing_copy["instruction"] = "pushed_by_owner"
+    assert v.sourcing_of("instruction") == "in_the_request", "mutating the caller's own dict must not reach through"
+
+
 def test_the_sourcing_modes_and_which_may_identify_match():
     assert HARNESS_SOURCING == tuple(SPEC["sourcing"]["values"])
     assert IDENTIFYING_SOURCING == tuple(SPEC["sourcing"]["may_key_identity"])

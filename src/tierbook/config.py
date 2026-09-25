@@ -357,11 +357,17 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
     problems: list[str] = []
     if raw_format != CONFIG_FORMAT:
         problems.append(f"{p}: config_format must be {CONFIG_FORMAT}, found {raw_format!r}")
-    if raw.get("throughput_per_family"):
-        # TB-044: this key let a JSON literal stand in for a measurement. Refused rather than silently
-        # ignored or accepted, so a config carried over from before this change fails to load instead of
-        # having its declared figures quietly dropped -- `Config` has no field to drop them into any more.
-        raise ConfigError(
+    if "throughput_per_family" in raw:
+        # TB-044: this key let a JSON literal stand in for a measurement. Refused rather than silently ignored or
+        # accepted, so a config carried over from before this change fails to load instead of having its declared
+        # figures quietly dropped -- `Config` has no field to drop them into any more.
+        #
+        # Checked by KEY PRESENCE, not by truthiness: `raw.get("throughput_per_family")` treated
+        # `{"throughput_per_family": {}}` as absent (an empty dict is falsy), which is the same silent-drop this
+        # refusal exists to prevent, just for one particular value of the key rather than for its absence. And
+        # collected into `problems` like every other check in this function, rather than raised immediately: C8
+        # exists so an operator meets every wrong thing about a file in one refusal, not one field at a time.
+        problems.append(
             f"{p}: throughput_per_family is refused here. A per-family realised rate is exactly what "
             "SCOPE section 5 lists as 'derived continuously' -- seats, KV capacity and saturation "
             "throughput -- and 'a constant that observation could supply is a derived quantity regardless "

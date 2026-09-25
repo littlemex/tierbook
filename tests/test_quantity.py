@@ -187,7 +187,7 @@ def _snapshot(d):
     return d
 
 
-def _run(tmp_path, capsys, quantities):
+def _run(tmp_path, capsys, quantities, subjects=()):
     from tierbook import cli
     served = _snapshot(tmp_path / "m")
     tmpl = tmp_path / "t.txt"
@@ -196,6 +196,8 @@ def _run(tmp_path, capsys, quantities):
             "--elicitation-template", str(tmpl)]
     for spec in quantities:
         argv += ["--quantity", spec]
+    for subject in subjects:
+        argv += ["--subject", subject]
     code = cli.main(argv)
     cap = capsys.readouterr()
     return code, cap.out + cap.err
@@ -245,6 +247,26 @@ def test_an_empty_price_field_is_refused_rather_than_defaulted(tmp_path, capsys)
                       ["prefill_entropy:scalar:after_prefill:passive_observation:own_competence:1::30:r1"])
     assert code == 1, text
     assert "no default" in text
+
+
+@pytest.mark.parametrize("bad_price", ["nan", "inf", "-inf", "-0.5"])
+def test_a_non_finite_or_negative_price_is_refused(tmp_path, capsys, bad_price):
+    """`Spend.__post_init__` refuses a negative leg, but `nan < 0` is False in Python, so a NaN price passed that
+    check and every frontier comparison it entered was poisoned silently. Refused at this door instead, with the
+    same sentence an empty price gets."""
+    code, text = _run(tmp_path, capsys,
+                      [f"prefill_entropy:scalar:after_prefill:passive_observation:own_competence:1:{bad_price}:30:r1"])
+    assert code == 1, text
+    assert "not a measured price" in text
+
+
+def test_a_zero_price_is_explicitly_admissible():
+    """Decided explicitly, rather than left to fall out of whichever comparison happened to run first: a signal read
+    at genuinely no extra compute is a real measurement, distinct from the empty string above ('nobody said')."""
+    from tierbook.cli import _quantity_from_spec
+    q_free = _quantity_from_spec(
+        "a:scalar:after_prefill:passive_observation:own_competence:1:0:30:r1", served=DIG, elicitation=TERSE)
+    assert q_free.price.per_pass.prefill == 0.0
 
 
 def test_a_declared_price_is_carried_rather_than_the_old_hardcoded_0_109():
@@ -685,6 +707,20 @@ def test_the_door_admits_a_topic_quantity_like_any_other(tmp_path, capsys):
     assert "usable: field_name" in text
     assert "usable: entropy" in text
     assert "2 of 2 quantities are admissible" in text
+
+
+def test_the_door_can_declare_a_wider_subject_vocabulary(tmp_path, capsys):
+    """`Quantity.declared_subjects` already let the Python API register a quantity about a subject the default
+    tuple does not name; the CLI door had no way to say so at all, so `--quantity` was refused no matter what the
+    caller passed. `--subject`, repeatable, closes that gap."""
+    spec = "latency_signal:scalar:after_prefill:passive_observation:latency_bucket:1:0.109:30:r1"
+    code, text = _run(tmp_path, capsys, [spec])
+    assert code == 1, text
+    assert "latency_bucket" in text and "is not one of" in text
+
+    code, text = _run(tmp_path, capsys, [spec], subjects=("latency_bucket",))
+    assert code == 0, text
+    assert "usable: latency_signal" in text
 
 
 def test_the_door_exits_two_when_nothing_is_readable_in_time(tmp_path, capsys):

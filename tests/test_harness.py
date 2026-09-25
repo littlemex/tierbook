@@ -87,6 +87,14 @@ def test_a_harness_and_its_parts_must_agree_on_the_declared_vocabulary():
     assert "context_window_policy" not in h.missing
 
 
+def test_a_part_vocabulary_validates_its_sourcing_modes():
+    """The totality check above verifies `best_sourcing` names exactly `parts` -- it never checked that the VALUES
+    it names are real sourcing modes. A typo (`not_observable` misspelled) would then compare unequal to the string
+    `Manifest`/`Absence` check it against and count as reachable instead of refusing."""
+    with pytest.raises(hn.Unidentified, match="not one of"):
+        hn.PartVocabulary(parts=("instruction",), best_sourcing={"instruction": "not_observeable"})
+
+
 def test_a_manifest_can_declare_a_vocabulary_wider_than_the_default():
     declared = hn.PartVocabulary(
         parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
@@ -352,6 +360,22 @@ def test_a_bad_status_is_refused():
     with pytest.raises(hn.Unidentified, match="is not one of"):
         hn.Collection(manifest=manifest(), status="probably_fine",
                       harness=hn.Harness(parts=(part(),)))
+
+
+def test_an_absence_and_the_manifest_must_agree_on_the_declared_vocabulary():
+    """The harness/manifest agreement check above was found not to have a twin for absences: an `Absence` built
+    against a WIDER vocabulary than the manifest's could be attached with no harness at all, and `unaccounted` --
+    read against the manifest's own (narrower) vocabulary -- would then silently fail to see that a recorded
+    absence explains one of its parts."""
+    declared = hn.PartVocabulary(
+        parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"})
+    wide_absence = hn.Absence(kind="context_window_policy", reason="not_provided", vocabulary=declared)
+    with pytest.raises(hn.Unidentified, match="different vocabulary than the manifest"):
+        hn.Collection(manifest=manifest(), harness=None, absences=(wide_absence,))
+    # Declaring the SAME wider vocabulary on the manifest fixes it.
+    coll = hn.Collection(manifest=manifest(vocabulary=declared), harness=None, absences=(wide_absence,))
+    assert "context_window_policy" not in coll.unaccounted
 
 
 # --- a digest says which of three things it is a digest of ----------------------------------------------------------------

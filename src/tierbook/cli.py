@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -1011,6 +1012,13 @@ def cmd_collect_harness(args) -> int:
     if coll.our_failures:
         print(f"ours to fix: {list(coll.our_failures)}")
     print(f"unaccounted: {list(coll.unaccounted) or 'none'}")
+    if not coll.conforms_to_perigraph:
+        # This door builds every Part/Absence/Manifest against the default vocabulary, so this line is currently
+        # unreachable from the CLI -- there is no `--vocabulary` flag here (see harness.py's `collect_from_request`
+        # docstring for why that stays a separate collector rather than a vocabulary argument on this one). It stays
+        # here anyway: the point where perigraph-shaped output is produced is the right place to mark it, not the
+        # place that happens to be the only caller today.
+        print(f"NOT perigraph-conforming: {manifest.vocabulary.non_conformance_reason}")
     print(coll.why_not())
     return 0 if coll.admissible_to_a_verdict() else 2
 
@@ -1123,8 +1131,10 @@ def cmd_admissible_quantities(args) -> int:
                                    (pair.split("=") for pair in points.split(",")))),
                 baselines=tuple(qt.Baseline(kind=k, value=float(v), note="from --performance" if k == "declared" else "")
                                 for k, v in (pair.split("=") for pair in bases.split(","))))
+        declared_subjects = tuple(args.subject)
         declared = [_quantity_from_spec(spec, served=served, elicitation=elicitation,
-                                        performance=curves.get(spec.split(":")[0]))
+                                        performance=curves.get(spec.split(":")[0]),
+                                        declared_subjects=declared_subjects)
                     for spec in args.quantity]
     except (jd.Inadmissible, EvidenceError) as e:
         print(f"refused: {e}", file=sys.stderr)
@@ -1174,7 +1184,7 @@ def cmd_admissible_quantities(args) -> int:
     return 0 if usable else 2
 
 
-def _quantity_from_spec(spec: str, *, served, elicitation, performance=None):
+def _quantity_from_spec(spec: str, *, served, elicitation, performance=None, declared_subjects: tuple[str, ...] = ()):
     """NAME:KIND:AVAILABILITY:REGISTER:SUBJECT:PASSES:PRICE_PER_PASS_GPU_SECONDS:FRESH_DAYS:READOUT_VERSION.
 
     The digest and the elicitation are not in the spec on purpose: they are what the SERVED model and the declared
@@ -1186,6 +1196,10 @@ def _quantity_from_spec(spec: str, *, served, elicitation, performance=None):
     (TB-026). A pass measured on one box is not a pass measured on another, so there is no environment-independent
     number to default to; the caller states what they measured, or the door refuses rather than guessing on their
     behalf.
+
+    `declared_subjects` widens the vocabulary SUBJECT is checked against, the same way `--subject` (repeatable) lets
+    a caller of `admissible-quantities` do without editing this module: the CLI door used to be default-vocabulary
+    only even though `Quantity.declared_subjects` already existed on the Python side.
     """
     name, kind, availability, register, subject, passes, price_per_pass, fresh, version = _fields(
         spec, ("name", "kind", "availability", "register", "subject", "passes",
@@ -1196,14 +1210,27 @@ def _quantity_from_spec(spec: str, *, served, elicitation, performance=None):
             f"--quantity {spec!r} has an empty PRICE_PER_PASS_GPU_SECONDS. There is no default: 0.109 GPU-seconds was "
             f"this project's own box, hardcoded once and then recorded for every environment regardless of what it "
             f"actually measured (TB-026). State what a pass costs on the box this quantity was measured against.")
+    price_value = float(price_per_pass)
+    # `Spend.__post_init__` refuses a negative leg, but `nan < 0` is False in Python, so a NaN price passes that
+    # check and then poisons every frontier comparison it enters silently. Refused here rather than left to `Spend`,
+    # with the same sentence a missing price gets: both are "this door was handed something it cannot use as a
+    # measured price". Zero IS admissible -- a signal read at genuinely no extra compute is a real measurement, and
+    # this is the only value this door refuses to guess on `price_per_pass`'s behalf; the empty-string case above
+    # already covers "nobody said".
+    if not math.isfinite(price_value) or price_value < 0:
+        raise EvidenceError(
+            f"--quantity {spec!r} has PRICE_PER_PASS_GPU_SECONDS={price_per_pass!r}, which is not a measured price: "
+            f"a pass costs a finite, non-negative amount of compute. There is no default here either -- state what a "
+            f"pass measured on the box this quantity was measured against actually cost.")
     price = sp_mod.SignalPrice(passes=int(passes),
-                               per_pass=sp_mod.Spend(prefill=float(price_per_pass), generation=0.0,
+                               per_pass=sp_mod.Spend(prefill=price_value, generation=0.0,
                                                      unit="gpu_seconds"))
     return qt.Quantity(name=name, kind=kind, availability=availability, register=register, subject=subject,
                        price=price,
                        measured_on=served, elicitation=elicitation,
                        validity=qt.Validity(calibrated_for=elicitation, fresh_for_days=float(fresh)),
-                       readout_version=version, performance=performance)
+                       readout_version=version, performance=performance,
+                       declared_subjects=declared_subjects)
 
 
 @_refuses
@@ -1614,6 +1641,12 @@ def main(argv: list[str] | None = None) -> int:
                          "from --served and --elicitation-template, so a manifest line cannot assert a match. "
                          "PRICE_PER_PASS_GPU_SECONDS has no default -- state what a pass measured on this box, not "
                          "this project's own 0.109 GPU-seconds (TB-026)")
+    aq.add_argument("--subject", action="append", default=[],
+                    metavar="NAME",
+                    help="widen the subject vocabulary --quantity's SUBJECT field is checked against, repeatable. "
+                         "Empty keeps evidence.DEFAULT_SUBJECTS (topic, own_competence, item_difficulty, "
+                         "resource_state); a study whose signal is about something that tuple does not name declares "
+                         "it here instead of being unable to register a Quantity about it at all")
     aq.add_argument("--price", type=float, default=None,
                     help="a price of accuracy at which to report each quantity's measured value and the baselines it "
                          "loses to. Must be one the curve was measured at: a value between two measured prices would "

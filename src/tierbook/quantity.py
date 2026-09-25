@@ -43,6 +43,10 @@ from tierbook.criterion import Null
 from tierbook.judge import WeightDigest
 from tierbook.spend import SignalPrice
 
+#: Alias of `DEFAULT_SUBJECTS`, kept for any importer who held `qt.SUBJECTS` before the rename. Re-exported
+#: deliberately, the same way `DEFAULT_SUBJECTS` itself already is above.
+SUBJECTS = DEFAULT_SUBJECTS  # noqa: F401
+
 #: What shape the value takes. Closed, because an aggregation that is correct for one is wrong for another: averaging a
 #: category is meaningless and averaging a trajectory throws away the shape that made it worth reading.
 VALUE_KINDS = ("scalar", "vector", "trajectory", "category")
@@ -233,8 +237,8 @@ class Quantity:
                 f"{self.subject!r} is not one of {self.subjects}. A mechanism handed one score cannot tell which of "
                 f"them it was handed, and the measured pair diverges rather than merely differing: the same readout "
                 f"named the item's field at 0.7593 against a chance of 0.1429 and predicted its own error at 0.4227, "
-                f"below the 0.5 a coin gets. Declare `declared_subjects` if this quantity's subject is not one of "
-                f"{DEFAULT_SUBJECTS}")
+                f"below the 0.5 a coin gets. Widen `declared_subjects` if this quantity's subject is not one of "
+                f"{self.subjects}")
         if self.register not in REGISTERS:
             raise Inadmissible(f"{self.register!r} is not one of {REGISTERS}")
         if self.register == "control_action":

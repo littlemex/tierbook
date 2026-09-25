@@ -120,10 +120,16 @@ class PartVocabulary:
     CHECK: `best_sourcing` must be total over `parts` (every part has exactly one best mode) and name nothing else --
     that totality is a structural property of a manifest, not a judgement about which parts are worth having, and
     perigraph is the corpus that gets to say what the parts ARE.
+
+    `name`/`version` are this vocabulary's OWN identity, so a record built against it can say which vocabulary it is
+    -- see `identity` and `conforms_to_perigraph` below. A caller who declares neither gets `"custom"`: declaring
+    nothing is not the same claim as vendoring the spec, so silence must not read as perigraph's name.
     """
 
     parts: tuple[str, ...]
     best_sourcing: dict[str, str]
+    name: str = "custom"
+    version: str = "unversioned"
 
     def __post_init__(self) -> None:
         if not self.parts:
@@ -138,12 +144,85 @@ class PartVocabulary:
         extra = sorted(set(self.best_sourcing) - set(self.parts))
         if extra:
             raise Unidentified(f"best_sourcing names {extra}, which {self.parts} does not declare as a part")
+        bad_modes = sorted(set(self.best_sourcing.values()) - set(HARNESS_SOURCING))
+        if bad_modes:
+            raise Unidentified(
+                f"best_sourcing names sourcing mode(s) {bad_modes}, not one of {HARNESS_SOURCING}. A typo here (a "
+                f"misspelled 'not_observable', say) would not equal the string `Manifest`/`Absence` compare it "
+                f"against, so an invalid mode would silently count as reachable instead of refusing")
+        # Canonicalised into an immutable, hashable snapshot -- decoupled from whatever mapping the caller passed in,
+        # not merely copied from it. Two things this fixes at once: a `dict` field makes every frozen dataclass that
+        # carries a `PartVocabulary` (`Part`, `Absence`, `Harness`, `Manifest`) unhashable, breaking any existing
+        # caller that put one in a set or a dict key; and `DEFAULT_PART_VOCABULARY` aliasing the module-level
+        # `DEFAULT_BEST_AVAILABLE_SOURCING` dict would let a later mutation of that module dict change this
+        # vocabulary's answers silently, after the totality check above had already run against the un-mutated copy.
+        object.__setattr__(self, "best_sourcing", tuple(sorted(self.best_sourcing.items())))
+
+    def sourcing_of(self, kind: str) -> str:
+        """The best sourcing mode for one part -- the lookup `best_sourcing` offered before it became a hashable
+        tuple of pairs rather than a dict."""
+        for k, v in self.best_sourcing:
+            if k == kind:
+                return v
+        raise KeyError(kind)
+
+    @property
+    def identity(self) -> str:
+        """Which vocabulary this is, for a reader who has to tell one caller's declaration from another's."""
+        return f"{self.name}/{self.version}"
+
+    @property
+    def conforms_to_perigraph(self) -> bool:
+        """Whether a record built against this vocabulary may be presented as perigraph-conforming.
+
+        Structural, never by name: declaring `name="perigraph"` does not make it true, and a vocabulary that never
+        heard of perigraph but happens to be an additions-only superset of it does conform. Two conditions, both read
+        against perigraph's OWN ten parts and OWN sourcing table -- additions beyond them are exactly what this
+        vocabulary exists to allow (TB-045) and never affect this property:
+
+        * every one of perigraph's parts is named here too. A vocabulary that dropped one would compute `missing`/
+          `unaccounted` against a shorter reference set, so a hole perigraph would flag would not exist in this
+          record at all -- the record would look complete about a part it cannot even ask about.
+        * every one of perigraph's parts has here the IDENTICAL best_sourcing perigraph gives it. The best sourcing
+          of a spec-defined part is a structural fact -- `tool_extension`'s behaviour is invisible from the request
+          whatever a caller declares -- not a caller's choice, so a declaration that widened it (claimed
+          `in_the_request` where perigraph says `not_observable`, say) would let a `Manifest` admit as reachable
+          something no mode actually reaches.
+        """
+        if not set(DEFAULT_HARNESS_PARTS) <= set(self.parts):
+            return False
+        return all(self.sourcing_of(k) == DEFAULT_BEST_AVAILABLE_SOURCING[k] for k in DEFAULT_HARNESS_PARTS)
+
+    @property
+    def non_conformance_reason(self) -> str:
+        """One sentence naming why `conforms_to_perigraph` is False. Refused when it is True -- there is nothing to
+        explain about a vocabulary that conforms, the same shape as `Collection.why_not` refusing when admissible."""
+        if self.conforms_to_perigraph:
+            raise Unidentified(f"{self.identity} conforms to perigraph; there is no non-conformance to explain")
+        dropped = sorted(set(DEFAULT_HARNESS_PARTS) - set(self.parts))
+        redefined = sorted(k for k in DEFAULT_HARNESS_PARTS
+                           if k in self.parts and self.sourcing_of(k) != DEFAULT_BEST_AVAILABLE_SOURCING[k])
+        reasons = []
+        if dropped:
+            reasons.append(f"drops perigraph part(s) {dropped}")
+        if redefined:
+            reasons.append(f"redefines perigraph part(s) {redefined}'s best_sourcing")
+        return f"{self.identity} " + " and ".join(reasons)
 
 
-#: The vocabulary a caller gets by declaring nothing: today's ten parts and today's sourcing table. Every existing
-#: caller keeps working exactly as before; a caller whose harness construction this default does not cover declares
-#: its own `PartVocabulary` instead of editing this module.
-DEFAULT_PART_VOCABULARY = PartVocabulary(parts=DEFAULT_HARNESS_PARTS, best_sourcing=DEFAULT_BEST_AVAILABLE_SOURCING)
+#: The vocabulary a caller gets by declaring nothing: today's ten parts and today's sourcing table -- this IS
+#: perigraph's own vocabulary, so it identifies as `perigraph`, and `conforms_to_perigraph` is trivially true for it.
+#: Every existing caller keeps working exactly as before; a caller whose harness construction this default does not
+#: cover declares its own `PartVocabulary` instead of editing this module.
+DEFAULT_PART_VOCABULARY = PartVocabulary(parts=DEFAULT_HARNESS_PARTS, best_sourcing=DEFAULT_BEST_AVAILABLE_SOURCING,
+                                         name="perigraph", version="1")
+
+#: Aliases of the names above, kept for any importer who held the pre-TB-045 names. `HARNESS_PARTS` and
+#: `BEST_AVAILABLE_SOURCING` were the only names this module ever exported for these two constants; renaming them to
+#: `DEFAULT_*` without an alias would break any external importer, in violation of "a caller who declares nothing
+#: sees exactly today's behaviour" -- the same promise TB-045 makes to every caller INSIDE this package.
+HARNESS_PARTS = DEFAULT_HARNESS_PARTS
+BEST_AVAILABLE_SOURCING = DEFAULT_BEST_AVAILABLE_SOURCING
 
 
 @dataclass(frozen=True)
@@ -178,10 +257,10 @@ class Part:
             raise Unidentified(
                 f"{self.kind!r} is not one of {self.vocabulary.parts}. A part nobody named is a part that can change "
                 f"without the identity changing, which is the defect this vocabulary exists to close. Declare a "
-                f"`vocabulary` if this harness has a part {DEFAULT_HARNESS_PARTS} does not name")
+                f"wider `vocabulary` if this harness has a part {self.vocabulary.parts} does not name")
         if self.sourcing not in HARNESS_SOURCING:
             raise Unidentified(f"{self.sourcing!r} is not one of {HARNESS_SOURCING}")
-        best = self.vocabulary.best_sourcing[self.kind]
+        best = self.vocabulary.sourcing_of(self.kind)
         if self.sourcing == "in_the_request" and best != "in_the_request":
             raise Unidentified(
                 f"{self.kind!r} is claimed as being in the request, and the best any mode can do for it is {best!r}. "
@@ -313,6 +392,17 @@ class Harness:
         """Which parts of a harness this record says nothing at all about."""
         return tuple(k for k in self.vocabulary.parts if k not in {p.kind for p in self.parts})
 
+    @property
+    def conforms_to_perigraph(self) -> bool:
+        """Whether this harness may be presented to a perigraph consumer as perigraph-conforming.
+
+        Delegates entirely to `self.vocabulary.conforms_to_perigraph`: a caller-declared vocabulary is checked here
+        rather than at construction, because a non-conforming vocabulary is not invalid -- TB-045 exists precisely so
+        a deployment with a genuinely different harness can be represented. What must not happen is presenting the
+        result as perigraph's without saying so; see `__str__` below and the module's conformance test.
+        """
+        return self.vocabulary.conforms_to_perigraph
+
     def comparable_with(self, other: Harness) -> bool:
         """Whether two runs measured what is otherwise the same thing.
 
@@ -324,8 +414,11 @@ class Harness:
 
     def __str__(self) -> str:
         who = self.identity if self.has_identity else "no identity"
-        return (f"harness {who} from {len(self.parts)} part(s); "
+        head = (f"harness {who} from {len(self.parts)} part(s); "
                 f"unobserved {list(self.unobserved) or 'none'}; unrecorded {list(self.missing) or 'none'}")
+        if self.conforms_to_perigraph:
+            return head
+        return head + f"; NOT perigraph-conforming ({self.vocabulary.non_conformance_reason})"
 
 
 def refuse_incomparable(a: Harness, b: Harness) -> None:
@@ -385,11 +478,11 @@ class Absence:
             raise Unidentified(
                 f"{self.kind!r} is not one of {self.vocabulary.parts}. An absence of something the vocabulary does not "
                 f"name is not a hole in the record; it is a hole in the vocabulary, and counting it as the first would "
-                f"report a record as complete about a part nobody can ask for. Declare a `vocabulary` if this harness "
-                f"has a part {DEFAULT_HARNESS_PARTS} does not name")
+                f"report a record as complete about a part nobody can ask for. Declare a wider `vocabulary` if this "
+                f"harness has a part {self.vocabulary.parts} does not name")
         if self.reason not in ABSENCE_REASONS:
             raise Unidentified(f"{self.reason!r} is not one of {ABSENCE_REASONS}")
-        best = self.vocabulary.best_sourcing[self.kind]
+        best = self.vocabulary.sourcing_of(self.kind)
         if self.reason == "not_observable" and best != "not_observable":
             raise Unidentified(
                 f"{self.kind!r} is absent as {self.reason!r} and the best any mode can do for it is {best!r}, so "
@@ -448,7 +541,7 @@ class Manifest:
             raise Unidentified(f"the manifest claims to reach {unknown}, which are not parts in {self.vocabulary.parts}")
         if len(set(self.reaches)) != len(self.reaches):
             raise Unidentified(f"the manifest lists a part twice in {sorted(self.reaches)}")
-        impossible = sorted(k for k in self.reaches if self.vocabulary.best_sourcing[k] == "not_observable")
+        impossible = sorted(k for k in self.reaches if self.vocabulary.sourcing_of(k) == "not_observable")
         if impossible:
             raise Unidentified(
                 f"the manifest claims to reach {impossible}, which no mode reaches. A collector that claims an "
@@ -496,6 +589,24 @@ class Collection:
             raise Unidentified(
                 "the harness and the manifest declare different vocabularies, so `unaccounted` (read against the "
                 "manifest's) and the harness's own `missing` would disagree about which parts exist for the same run")
+        mismatched = sorted(a.kind for a in self.absences if a.vocabulary != self.manifest.vocabulary)
+        if mismatched:
+            raise Unidentified(
+                f"absence(s) {mismatched} declare a different vocabulary than the manifest, which `unaccounted` "
+                f"(read against the manifest's) treats as authoritative. An absence built against a WIDER vocabulary "
+                f"could name a part the manifest's own vocabulary does not have, and `unaccounted` would then silently "
+                f"ignore that recorded absence rather than reading it -- the same disagreement the harness check "
+                f"above exists to catch, for the other place a `PartVocabulary` travels on this record")
+
+    @property
+    def conforms_to_perigraph(self) -> bool:
+        """Whether this collection may be presented to a perigraph consumer as perigraph-conforming.
+
+        Reading `manifest.vocabulary` alone is enough: `__post_init__` already requires the harness and every
+        absence to declare the SAME vocabulary as the manifest, so there is exactly one vocabulary for this record
+        to conform or not conform against.
+        """
+        return self.manifest.vocabulary.conforms_to_perigraph
 
     @property
     def unaccounted(self) -> tuple[str, ...]:
@@ -568,9 +679,12 @@ class Collection:
 
     def __str__(self) -> str:
         who = self.harness.identity if (self.harness and self.harness.has_identity) else "no identity"
-        return (f"collection {who} ({self.status}); held "
+        head = (f"collection {who} ({self.status}); held "
                 f"{len(self.harness.parts) if self.harness else 0}; absent {len(self.absences)}; "
                 f"unaccounted {list(self.unaccounted) or 'none'}; contradictions {list(self.contradictions) or 'none'}")
+        if self.conforms_to_perigraph:
+            return head
+        return head + f"; NOT perigraph-conforming ({self.manifest.vocabulary.non_conformance_reason})"
 
 
 #: Whether a tool's contract promises the same answer for the same effective context. Closed, and the reason it is not a

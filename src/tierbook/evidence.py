@@ -472,6 +472,12 @@ def elicitation_from_template(name: str, template: str) -> Elicitation:
 #: SUBJECTS` produced, found by re-reading TB-057/TB-180 rather than by a new measurement.
 DEFAULT_SUBJECTS = ("topic", "own_competence", "item_difficulty", "resource_state")
 
+#: Alias of the name above, kept for any importer who held `SUBJECTS` before it was renamed to make the default
+#: visible as a default (F141's move, applied here). This is NOT a resurrection of the removed `ESCALATION_SUBJECTS`
+#: -- that list named which subjects were worth reading and is gone; this is the same "what a subject IS" tuple
+#: under its old name, so a caller who declares nothing sees exactly today's behaviour.
+SUBJECTS = DEFAULT_SUBJECTS
+
 #: There is deliberately NO `ESCALATION_SUBJECTS` here. One lived at this spot, naming `own_competence` and
 #: `item_difficulty` as the only subjects a gate could read, and it was removed as a violation of the rule at the top of
 #: this file: it enumerated which subjects are WORTH USING rather than what a subject IS. It was supported by a real

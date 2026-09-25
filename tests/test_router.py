@@ -19,6 +19,7 @@ from dataclasses import replace  # noqa: E402
 
 from tierbook.evidence import INCORRECT, SOLVED, EvidenceError  # noqa: E402
 from tierbook.outcomes import Cell, OutcomeTable  # noqa: E402
+from tierbook.quorum import agreement  # noqa: E402
 from tierbook.router import Decision, Router, audit_broken_keys, certify_pool, default_stop_rule  # noqa: E402
 
 
@@ -150,21 +151,89 @@ def test_a_router_that_declares_no_stop_rule_gets_the_default_and_todays_decisio
     assert r.decide({m: "B" for m in members}) == default_stop_rule(r.certificate, r.ladder, {m: "B" for m in members})
 
 
-def test_a_declared_stop_rule_is_carried_and_used_in_place_of_the_default():
-    """A different study's rule -- here, one that never escalates and always abandons with a fixed fallback -- must be
-    expressible without editing `Router.decide` or `default_stop_rule`."""
+def test_swapping_the_runtime_rule_without_refitting_is_refused():
+    """TB-034's fix found a second gap by its own reviewers: swapping `stop_rule` on a fitted `Router` changed what
+    runs while the certificate went on asserting the accuracy `agreement` earned. A mismatched swap must be refused
+    at construction, not silently accepted -- see `test_a_declared_stop_rule_is_carried_and_used_in_place_of_the_default`
+    for the way to inject a different rule that keeps the certificate honest."""
     def always_abandon(certificate, ladder, answers):
         return Decision("abandon", fallback="Z", reason="a different study's rule")
 
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
-    members = r.certificate.members
-    custom = replace(r, stop_rule=always_abandon)
-    # The default would answer on unanimity; the declared rule overrides that entirely.
-    d = custom.decide({m: "B" for m in members})
-    assert d.action == "abandon" and d.fallback == "Z" and d.reason == "a different study's rule"
+    with pytest.raises(EvidenceError, match="was never measured against"):
+        replace(r, stop_rule=always_abandon)
     # The router this was copied from is untouched.
+    members = r.certificate.members
     assert r.decide({m: "B" for m in members}).action == "answer"
+
+
+def test_a_declared_stop_rule_is_carried_and_used_in_place_of_the_default():
+    """A different study's rule -- here, one that never escalates and always abandons with a fixed fallback -- must be
+    expressible without editing `Router.decide` or `default_stop_rule`. The consistent path names BOTH the batch rule
+    `enumerate_policies` scores with and the runtime rule that will execute, so the certificate describes what
+    actually runs."""
+    def never_stop(table, members, items):
+        return [], list(items)
+    never_stop.rule_id = "never_stop"
+
+    def always_abandon(certificate, ladder, answers):
+        return Decision("abandon", fallback="Z", reason="a different study's rule")
+    always_abandon.rule_id = "never_stop"
+
+    t = _table()
+    r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
+                   min_stopped=0, stop_rule=never_stop, runtime_stop_rule=always_abandon)
+    assert r.certificate.stop_rule_id == "never_stop"
+    members = r.certificate.members
+    d = r.decide({m: "B" for m in members})
+    assert d.action == "abandon" and d.fallback == "Z" and d.reason == "a different study's rule"
+
+    # The default, un-declared path still reproduces today's behaviour exactly.
+    default_r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
+    assert default_r.certificate.stop_rule_id == "agreement"
+    assert default_r.decide({m: "B" for m in default_r.certificate.members}).action == "answer"
+
+
+def test_a_custom_batch_rule_with_no_runtime_counterpart_is_refused():
+    """`Router.decide` needs something to execute per request; there is no general way to derive that from a batch
+    partition rule, so declaring one without the other refuses rather than silently keeping `default_stop_rule`."""
+    def never_stop(table, members, items):
+        return [], list(items)
+    never_stop.rule_id = "never_stop"
+
+    t = _table()
+    with pytest.raises(EvidenceError, match="no runtime counterpart"):
+        Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
+                  min_stopped=0, stop_rule=never_stop)
+
+
+def test_verify_rescopes_under_the_certificates_own_rule_not_the_module_default():
+    """A router fitted under an injected rule must be re-checked against THAT rule on a second collection, not
+    against `agreement` -- otherwise `verify` would silently score something the certificate does not describe."""
+    def never_stop(table, members, items):
+        return [], list(items)
+    never_stop.rule_id = "never_stop"
+
+    def always_abandon(certificate, ladder, answers):
+        return Decision("abandon", fallback=None, reason="never stops")
+    always_abandon.rule_id = "never_stop"
+
+    t = _table()
+    r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
+                   min_stopped=0, stop_rule=never_stop, runtime_stop_rule=always_abandon)
+    held, point, low = r.verify(t)
+    # `verify` must score under `never_stop` (r's own `_item_stop_rule`), which stops nothing -- not under the
+    # module's `agreement` default, which would stop on the same members' agreeing items and read a different
+    # accuracy for the identical (members, escalate_to) pair.
+    from tierbook.quorum import agreement as _agreement
+    from tierbook.quorum import evaluate as _evaluate
+    scored_under_never_stop = _evaluate(t, r.certificate.members, r.certificate.escalate_to,
+                                        stop_rule=never_stop).accuracy
+    scored_under_agreement = _evaluate(t, r.certificate.members, r.certificate.escalate_to,
+                                       stop_rule=_agreement).accuracy
+    assert point == pytest.approx(scored_under_never_stop)
+    assert scored_under_never_stop != scored_under_agreement, "the fixture needs the two rules to actually disagree"
 
 
 def test_everything_silent_abandons_rather_than_guessing():

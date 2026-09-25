@@ -81,6 +81,49 @@ def test_the_stop_rule_defaults_to_agreement_and_a_declared_rule_is_carried():
     assert everything_escalates.stopped == 0, "a declared rule overrides agreement entirely"
 
 
+def test_an_injected_rule_that_double_counts_an_item_is_refused():
+    """The interface was trusted unchecked: `(items, items)` -- everything both stopped AND escalated -- would
+    double an item in the bill and in the accuracy with nothing here to catch it."""
+    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+
+    def both(table, members, items):
+        return list(items), list(items)
+
+    with pytest.raises(EvidenceError, match="both stopped and escalated"):
+        evaluate(t, ("a",), "dear", stop_rule=both)
+
+
+def test_an_injected_rule_that_invents_an_item_id_is_refused():
+    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+
+    def invents(table, members, items):
+        return list(items) + ["nonexistent"], []
+
+    with pytest.raises(EvidenceError, match="not asked for"):
+        evaluate(t, ("a",), "dear", stop_rule=invents)
+
+
+def test_an_injected_rule_that_drops_an_item_id_is_refused():
+    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)},
+               "y": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+
+    def drops(table, members, items):
+        return list(items)[:-1], []
+
+    with pytest.raises(EvidenceError, match="missing"):
+        evaluate(t, ("a",), "dear", stop_rule=drops)
+
+
+def test_an_injected_rule_that_duplicates_an_item_id_is_refused():
+    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+
+    def duplicates(table, members, items):
+        return list(items) * 2, []
+
+    with pytest.raises(EvidenceError, match="duplicate item id"):
+        evaluate(t, ("a",), "dear", stop_rule=duplicates)
+
+
 def test_a_single_member_policy_stops_on_everything():
     """One candidate has nothing to disagree with, so this is 'the cheap tier answers, nobody checks'.
 

@@ -371,6 +371,44 @@ def test_a_config_declaring_throughput_per_family_is_refused_rather_than_silentl
             load_config(p)
 
 
+def test_an_empty_throughput_per_family_is_refused_the_same_as_a_populated_one():
+    """A reviewer found the original check used `raw.get("throughput_per_family")`, which is FALSY for an empty
+    dict -- so `{"throughput_per_family": {}}` loaded silently, the same silent-drop this refusal exists to
+    prevent, just for one particular value of the key. The check is by key PRESENCE now."""
+    body = {
+        "config_format": CONFIG_FORMAT,
+        "candidates": {"ref": _candidate("ref")},
+        "families": {"only-family": _full_family("ref")},
+        "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
+        "throughput_per_family": {},
+    }
+    with tempfile.TemporaryDirectory() as d:
+        p = _write(Path(d), body)
+        with pytest.raises(ConfigError, match="throughput_per_family is refused"):
+            load_config(p)
+
+
+def test_throughput_per_family_is_collected_with_every_other_problem_not_raised_first():
+    """C8's whole point is one refusal naming everything wrong, in one load. The original check raised on
+    `throughput_per_family` immediately, before any other problem in the file was even looked at -- an operator
+    fixing this key alone would still have to reload to discover the second problem below (a family naming a
+    candidate the file never declares)."""
+    body = {
+        "config_format": CONFIG_FORMAT,
+        "candidates": {"ref": _candidate("ref")},
+        "families": {"only-family": _full_family("nonexistent-candidate")},
+        "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
+        "throughput_per_family": {"only-family": 1000000},
+    }
+    with tempfile.TemporaryDirectory() as d:
+        p = _write(Path(d), body)
+        with pytest.raises(ConfigError) as exc_info:
+            load_config(p)
+    text = str(exc_info.value)
+    assert "throughput_per_family is refused" in text
+    assert "not candidates" in text
+
+
 def test_every_ci_checkout_that_runs_the_suite_fetches_the_history_it_needs():
     """The omission that broke CI, made into a failure here rather than there.
 

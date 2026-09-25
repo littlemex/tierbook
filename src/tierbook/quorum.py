@@ -134,7 +134,23 @@ def _cell(table: OutcomeTable, item: str, tier: str) -> Cell:
 #: The signature every stop rule `evaluate` accepts must have: given the matrix, the member set and the items to
 #: decide over, return `(stopped, escalated)`. `agreement` below is the DEFAULT this project measured, not the only
 #: shape the signature can hold.
-StopRule = Callable[[OutcomeTable, tuple[str, ...], list[str]], tuple[list[str], list[str]]]
+#:
+#: Named `ItemStopRule` rather than the bare `StopRule` an earlier version used, because `router.py` declares a
+#: SECOND stop rule under that name with an incompatible signature -- one partitions a whole item set at once for
+#: scoring, the other decides one streaming request's next action given partial answers -- and one name for two
+#: shapes is how the wrong one gets imported.
+ItemStopRule = Callable[[OutcomeTable, tuple[str, ...], list[str]], tuple[list[str], list[str]]]
+
+
+def rule_identity(rule: Callable) -> str:
+    """A name for an injected rule, stable enough to compare across a fit and the runtime that executes it.
+
+    `rule_id`, when a rule declares one, else the function's own qualified name. A caller who wants a certificate
+    to describe their own rule under a chosen name sets `my_rule.rule_id = "..."` before fitting; `agreement` and
+    `router.default_stop_rule` both set theirs to `"agreement"`, because they are the streaming and the batch
+    expression of the SAME fold-derived rule and a certificate should read that as one identity, not two.
+    """
+    return getattr(rule, "rule_id", getattr(rule, "__qualname__", repr(rule)))
 
 
 def agreement(table: OutcomeTable, members: tuple[str, ...], items: list[str]) -> tuple[list[str], list[str]]:
@@ -159,6 +175,12 @@ def agreement(table: OutcomeTable, members: tuple[str, ...], items: list[str]) -
     return stopped, escalated
 
 
+#: `agreement` and `router.default_stop_rule` are the batch and the streaming expression of one fold-derived rule;
+#: giving them the same `rule_id` is what lets `router.Router` check that a runtime rule matches the rule a
+#: certificate was fitted under (see `router.Router.__post_init__`).
+agreement.rule_id = "agreement"
+
+
 def joint_failure(table: OutcomeTable, a: str, b: str, items: list[str]) -> float | None:
     """`P(both wrong | at least one wrong)` for a pair, which is what makes agreement worth having.
 
@@ -181,9 +203,37 @@ def joint_failure(table: OutcomeTable, a: str, b: str, items: list[str]) -> floa
     return both / either if either else None
 
 
+def _check_partition(stopped: list[str], escalated: list[str], subject: list[str], stop_rule: Callable) -> None:
+    """Refuse an injected rule whose output is not an exact, disjoint partition of `subject`.
+
+    Trusting the rule's output unchecked is what lets `(items, items)` -- everything both stopped AND escalated --
+    or a rule inventing an id nobody asked about corrupt `evaluate`'s bill and `enumerate_policies`'s `min_stopped`
+    logic silently. The check is purely structural: it says nothing about whether the PARTITION is a good one, only
+    that it accounts for exactly the items asked for, exactly once each.
+    """
+    stopped_set, escalated_set = set(stopped), set(escalated)
+    if len(stopped) != len(stopped_set) or len(escalated) != len(escalated_set):
+        raise EvidenceError(
+            f"stop_rule {rule_identity(stop_rule)!r} returned a duplicate item id within stopped or escalated, so "
+            f"scoring it would count that item more than once")
+    overlap = sorted(stopped_set & escalated_set)
+    if overlap:
+        raise EvidenceError(
+            f"stop_rule {rule_identity(stop_rule)!r} returned {overlap} as both stopped and escalated. An item is "
+            f"either agreed on or it is not; counting it as both would double it in the bill and in the accuracy")
+    subject_set = set(subject)
+    missing = subject_set - (stopped_set | escalated_set)
+    extra = (stopped_set | escalated_set) - subject_set
+    if missing or extra:
+        raise EvidenceError(
+            f"stop_rule {rule_identity(stop_rule)!r} did not return an exact partition of the {len(subject)} items "
+            f"asked for" + (f"; missing {sorted(missing)}" if missing else "")
+            + (f"; returned {sorted(extra)} that were not asked for" if extra else ""))
+
+
 def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
              prices: dict[str, float] | None = None, items: list[str] | None = None,
-             stop_rule: StopRule = agreement) -> QuorumPolicy:
+             stop_rule: ItemStopRule = agreement) -> QuorumPolicy:
     """Price and score one policy on the matrix.
 
     `prices` is a per-item cost per tier, overriding the matrix's own recorded cost. That override is
@@ -194,9 +244,22 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
     `members` -- which is the shape this module's own docstring traces to one fold's measurement (TB-034).
     **Declared here rather than fixed in the function**, so a study whose stop rule is not unanimity (a
     majority, a signal-gated escalation) can be scored on the same frontier without editing this function.
+
+    **What an injected rule may decide, and what it may not.** It may only say WHICH items stop; it has no way to
+    say WHICH ANSWER the policy returns for them, because this function still reads a stopped item's correctness as
+    "did any member solve it" (below), which is a safe reading only when the members that stopped it are actually
+    unanimous -- as `agreement`'s stop set always is by construction. A `stop_rule` that stops on some OTHER
+    agreement notion (a majority of three, say) can report an item as stopped without its members agreeing, and this
+    function will still read "solved" off ANY member rather than off the answer the rule actually selected. The
+    scored accuracy would then describe "did the majority side happen to include a correct member", not "was the
+    majority's own answer correct" -- the two coincide only when the disagreement is one correct member against a
+    unanimous wrong side, and diverge as soon as three-plus distinct wrong answers appear among the stoppers.
+    Expressing a majority rule's SELECTED ANSWER needs a wider signature than `(stopped, escalated)`; this one
+    cannot hold it, and widening it is future work rather than something this change makes.
     """
     subject = list(items if items is not None else table.items)
     stopped, escalated = stop_rule(table, members, subject)
+    _check_partition(stopped, escalated, subject, stop_rule)
 
     def cost_of(item: str, tier: str) -> float | None:
         if prices is not None:
@@ -246,7 +309,7 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
 def enumerate_policies(table: OutcomeTable, *, candidates: list[str], escalate_to: list[str],
                        max_members: int = 4, prices: dict[str, float] | None = None,
                        items: list[str] | None = None, min_stopped: int = 30,
-                       stop_rule: StopRule = agreement) -> list[QuorumPolicy]:
+                       stop_rule: ItemStopRule = agreement) -> list[QuorumPolicy]:
     """Every policy worth pricing, with the unreadable ones dropped.
 
     A member is never also the escalation tier: escalating to a candidate that already answered and
@@ -316,8 +379,8 @@ def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
             f"What it is NOT is a judgement about which of them is worth escalating on: this function used to refuse "
             f"everything except competence and difficulty, on the strength of one corpus, which made a study "
             f"measuring topic to predict competence unable to say so. Whether the signal earns its place is decided "
-            f"by what is measured about it, not by which name it carries. Pass `subjects` if this signal is about "
-            f"something {DEFAULT_SUBJECTS} does not name")
+            f"by what is measured about it, not by which name it carries. Widen `subjects` if this signal is about "
+            f"something {vocabulary} does not name")
     item_ids = list(items if items is not None else table.items)
 
     def cost_of(item: str, tier: str) -> float | None:
