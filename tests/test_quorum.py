@@ -123,6 +123,54 @@ def _cell_answer(table, item, tier):
     return table.cells.get(item, {}).get(tier).answer
 
 
+def test_a_selected_answer_no_member_produced_is_refused_not_scored_wrong():
+    """Defaulting an unattested selection to 'wrong' would score a selection this table never measured -- the
+    ambiguity a reviewer found `_answer_is_correct` used to resolve silently."""
+    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+
+    def invents_an_answer(table, members, items):
+        return {i: "Z" for i in items}  # "Z" is nobody's answer
+
+    with pytest.raises(EvidenceError, match="no member's cell recorded"):
+        evaluate(t, ("a",), "dear", stop_rule=invents_an_answer)
+
+
+def test_two_members_recording_the_same_answer_with_different_verdicts_is_refused():
+    """If two members hold the identical answer string with different `solved` verdicts, the table contradicts
+    itself about whether that string is correct -- `any(...)` used to pick a side silently."""
+    t = _table({"x": {"a": (SOLVED, "B", 1.0), "b": (INCORRECT, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+
+    def always_stop_on_b(table, members, items):
+        return {i: "B" for i in items}
+
+    with pytest.raises(EvidenceError, match="different solved verdicts"):
+        evaluate(t, ("a", "b"), "dear", stop_rule=always_stop_on_b)
+
+
+def test_an_old_two_list_shaped_rule_is_refused_by_name_not_a_typeerror():
+    """A reviewer found that a rule still returning the pre-round-3 `(stopped, escalated)` two-list shape reaches
+    `set(<the returned tuple>)` inside the structural check and raises a bare `TypeError`
+    (`unhashable type: 'list'`) instead of a readable `EvidenceError`. `evaluate` must recognise a non-mapping
+    return and refuse it by name before anything downstream touches it."""
+    t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
+
+    def old_shaped(table, members, items):
+        return list(items), []
+
+    with pytest.raises(EvidenceError, match="not a mapping"):
+        evaluate(t, ("a",), "dear", stop_rule=old_shaped)
+
+
+def test_rule_identity_and_check_stopped_answers_are_public_deprecated_names():
+    """Round 4 restores `quorum.rule_identity` (deleted with no shim in round 3) as a public, explicitly
+    deprecated-for-equivalence-checking name, and exposes `check_stopped_answers` so `router.py`'s runtime
+    derivation can reuse the identical structural check rather than a second, drifting copy of it."""
+    import tierbook.quorum as quorum_mod
+    assert callable(quorum_mod.rule_identity)
+    assert callable(quorum_mod.check_stopped_answers)
+    assert quorum_mod.rule_identity(agreement) == "agreement"
+
+
 def test_an_injected_rule_that_invents_an_item_id_is_refused():
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 

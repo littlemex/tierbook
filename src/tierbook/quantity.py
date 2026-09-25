@@ -347,13 +347,35 @@ class Quantity:
         """`about`/`subjects`, ready to splat into `quorum.evaluate_signal`/`enumerate_signal_policies`.
 
         Round 1 found this quantity's own subject vocabulary (`declared_subjects`/`self.subjects`) does not
-        travel automatically to a re-check elsewhere: `evaluate_signal(about=q.subject)` alone drops
-        `q.subjects`, so a quantity that needed a WIDENED vocabulary to be constructible at all is then refused
-        by `evaluate_signal` unless the caller remembers to separately pass `subjects=q.subjects` too. This
-        property is that pass-through, so a caller who has the `Quantity` does not have to reconstruct its
-        vocabulary by hand: `evaluate_signal(table, member, escalate_to, signal=..., threshold=..., **q.signal_kwargs)`.
+        travel automatically wherever `about`/`subjects` are supplied separately -- `evaluate_signal(about=
+        q.subject)` alone drops `q.subjects`, so a quantity that needed a WIDENED vocabulary to be constructible
+        at all would be refused again unless the caller remembers to separately pass `subjects=q.subjects` too.
+        This property is that pass-through, for `enumerate_signal_policies` and any other caller that takes
+        `about`/`subjects` as separate keyword arguments rather than a whole `Quantity`. Prefer `self.evaluate_signal`
+        below when scoring a single member/escalation pair: it takes this quantity directly, so there is nothing
+        left for a caller to remember to pass.
         """
         return {"about": self.subject, "subjects": self.subjects}
+
+    def evaluate_signal(self, table, member: str, escalate_to: str, *, signal: dict[str, float],
+                       threshold: float, probe_usd: float = 0.0,
+                       prices: dict[str, float] | None = None,
+                       items: list[str] | None = None):
+        """Score `quorum.evaluate_signal` against THIS quantity's own subject and declared vocabulary.
+
+        Round 1's finding 12, closed at its actual re-check rather than by a convenience the caller has to
+        remember: a caller with a `Quantity` who wants to score a policy from its signal calls `q.evaluate_signal
+        (...)`, not the bare module function, so `about`/`subjects` are supplied from `self` and cannot be
+        forgotten -- there is no second argument list to keep in sync with `self.declared_subjects`.
+
+        Imported locally rather than at module load, the same direction `judge.py` already imports `reproduce.py`
+        (which imports `quorum.py`) -- `quorum` importing `quantity` back would close that cycle, so the
+        dependency runs the other way, from here.
+        """
+        from tierbook.quorum import evaluate_signal as _evaluate_signal
+
+        return _evaluate_signal(table, member, escalate_to, signal=signal, threshold=threshold,
+                                probe_usd=probe_usd, prices=prices, items=items, **self.signal_kwargs)
 
     def __str__(self) -> str:
         return (f"{self.name}/{self.readout_version} (about {self.subject}, {self.kind}, {self.availability}, "

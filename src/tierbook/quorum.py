@@ -47,6 +47,7 @@ too thin to read.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Callable
@@ -200,30 +201,45 @@ def joint_failure(table: OutcomeTable, a: str, b: str, items: list[str]) -> floa
     return both / either if either else None
 
 
-def _identity_of(rule: Callable) -> str:
-    """A name for an injected rule to put in a refusal message. Not a proof of anything about the rule -- see
-    `router.Rule` for why this project no longer treats a shared name as evidence that two callables behave
-    alike. This is display only."""
+def rule_identity(rule: Callable) -> str:
+    """A name for an injected rule to put in a refusal message or a report. **Display only, and deprecated for
+    anything else**: round 2 used a shared name as PROOF that two independently-declared callables behaved
+    alike, and a reviewer found that a name is self-declared and proves nothing -- round 3 removed the
+    cross-check this fed. Kept under its old name only because deleting it outright breaks any importer who
+    held it; do not reintroduce a check that compares two of these strings and treats equality as equivalence.
+    """
     return getattr(rule, "__qualname__", repr(rule))
 
 
-def _check_stopped_answers(stopped_answers: dict[str, str], subject: list[str], stop_rule: Callable) -> None:
+def check_stopped_answers(stopped_answers: object, subject: list[str], stop_rule: Callable) -> None:
     """Refuse an injected rule whose output cannot be scored honestly.
 
-    Trusting the rule's output unchecked is how a rule inventing an id nobody asked about, or "stopping" on an
-    empty answer, would corrupt `evaluate`'s bill, its accuracy, and `enumerate_policies`'s `min_stopped` logic
-    silently. The check is purely structural: it says nothing about whether the PARTITION or the ANSWERS are good,
-    only that every key is one of the items asked for and every value is an answer the rule is actually selecting.
+    Trusting the rule's output unchecked is how a rule returning the OLD `(stopped, escalated)` two-list shape
+    (or any other non-mapping), or one inventing an id nobody asked about, or one "stopping" on an empty answer,
+    would corrupt `evaluate`'s bill, its accuracy, and `enumerate_policies`'s `min_stopped` logic silently. The
+    check is purely structural: it says nothing about whether the PARTITION or the ANSWERS are good, only that
+    the shape is right, every key is one of the items asked for, and every value is an answer the rule is
+    actually selecting.
+
+    Public (not `_`-prefixed) because `router.py`'s runtime derivation calls the same `stop_rule` on a
+    synthetic one-item table and needs the identical check, rather than a second, drifting copy of it.
     """
+    if not isinstance(stopped_answers, Mapping):
+        raise EvidenceError(
+            f"stop_rule {rule_identity(stop_rule)!r} returned {type(stopped_answers).__name__}, not a mapping of "
+            f"item -> selected answer. This is the pre-round-3 `(stopped, escalated)` two-list contract if it "
+            f"looks like a tuple of two lists -- that shape was replaced because it could not carry which ANSWER "
+            f"a non-unanimous rule selected; return `{{item: answer, ...}}` and leave an item out entirely to "
+            f"escalate it")
     invalid_keys = sorted(set(stopped_answers) - set(subject))
     if invalid_keys:
         raise EvidenceError(
-            f"stop_rule {_identity_of(stop_rule)!r} returned {invalid_keys} as stopped, which were not among the "
+            f"stop_rule {rule_identity(stop_rule)!r} returned {invalid_keys} as stopped, which were not among the "
             f"{len(subject)} items asked for")
     empty = sorted(k for k, v in stopped_answers.items() if not v)
     if empty:
         raise EvidenceError(
-            f"stop_rule {_identity_of(stop_rule)!r} returned {empty} as stopped with no answer (falsy). Stopping "
+            f"stop_rule {rule_identity(stop_rule)!r} returned {empty} as stopped with no answer (falsy). Stopping "
             f"on an item means committing to an answer for it; a rule with nothing to commit should leave that "
             f"item out of the mapping so it escalates instead")
 
@@ -253,7 +269,7 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
         raise EvidenceError(f"items contains duplicate id(s) {dupes}, so scoring it would count that item more "
                            f"than once regardless of what any stop_rule returns")
     stopped_answers = stop_rule(table, members, subject)
-    _check_stopped_answers(stopped_answers, subject, stop_rule)
+    check_stopped_answers(stopped_answers, subject, stop_rule)
     stopped = list(stopped_answers)
     escalated = [i for i in subject if i not in stopped_answers]
 
@@ -287,8 +303,26 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
         makes the check correct for `agreement` (every stopper gave the identical answer, so this is exactly "any
         member solved it", unchanged from round 2) and for a rule that is NOT unanimous (a majority's answer is
         scored by whether THAT answer was right, not by whether some other, dissenting member happened to be).
+
+        **Two ambiguities are refused rather than guessed at.** A selected answer that matches NO member's cell
+        cannot be graded at all -- defaulting it to "wrong" would score a selection this table never measured,
+        which is the direction that flatters nothing but hides a rule inventing answers. And if two members
+        recorded the identical answer string with DIFFERENT `solved` verdicts, the table itself contradicts
+        itself about whether that string is correct, and picking one verdict via `any` would silently prefer
+        whichever member happened to be listed (or graded) as solved.
         """
-        return any(_cell(table, item, m).answer == answer and _cell(table, item, m).solved for m in members)
+        verdicts = {_cell(table, item, m).solved for m in members if _cell(table, item, m).answer == answer}
+        if not verdicts:
+            raise EvidenceError(
+                f"stop_rule {rule_identity(stop_rule)!r} selected {answer!r} for item {item!r}, which no member's "
+                f"cell recorded as its own answer. There is nothing to grade this selection against -- scoring it "
+                f"'wrong' by default would score a selection this table never measured")
+        if len(verdicts) > 1:
+            raise EvidenceError(
+                f"item {item!r} has members recording {answer!r} with different solved verdicts ({verdicts}), so "
+                f"whether {answer!r} is correct depends on which member is asked. That is a contradiction in the "
+                f"table, not something scoring can resolve by picking one member's verdict over another's")
+        return verdicts.pop()
 
     right_stopped = sum(1 for i in stopped if _answer_is_correct(i, stopped_answers[i]))
     right_escalated = sum(1 for i in escalated if _cell(table, i, escalate_to).solved)

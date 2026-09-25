@@ -57,6 +57,11 @@ class Turn:
     #: What the capacity question answered per candidate this turn: `deliverable`, `refused` or `unknown`. Kept per turn
     #: rather than once for the run, because evidence arrives while the loop is running and the answer changes with it.
     capacity: dict[str, str] = field(default_factory=dict)
+    #: Which vocabulary `harness_identity` was computed under -- perigraph's own ten parts by default. Recorded
+    #: beside the identity rather than assumed, because two harnesses declared against different vocabularies can
+    #: hash into the same-shaped identity space, and a report reading `harness_identity` alone across runs that
+    #: used different vocabularies would silently compare things that were never comparable.
+    harness_vocabulary: str | None = None
 
 
 @dataclass
@@ -178,6 +183,12 @@ class Ops:
             "price": price,
             "spend": cost.total,
             "harness": record.harness.identity if record.harness and record.harness.has_identity else None,
+            # Recorded beside "harness" rather than assumed: this collector only ever declares the default
+            # (perigraph) vocabulary, but a reader of this history has no way to know that without this key.
+            # `hn.Harness.identity` folds a NON-default vocabulary's own identity into its hash, but leaves the
+            # default vocabulary's bytes untouched (pinned to perigraph's own cross-language digest algorithm),
+            # so this collector's own identities never carry that signal either way -- recorded explicitly.
+            "harness_vocabulary": record.harness.vocabulary.identity if record.harness else None,
             # Recorded because a later comparison needs it: traffic that arrived here by exploration was not chosen by
             # the policy, and averaging the two together attributes the explorer's cost to the policy's decisions.
             "propensity": propensity,
@@ -194,6 +205,7 @@ class Ops:
         })
         return Turn(candidate=candidate, accepted=reply.accepted, cost=cost,
                     harness_identity=self.history[-1]["harness"],
+                    harness_vocabulary=self.history[-1]["harness_vocabulary"],
                     unobserved=tuple(a.kind for a in record.absences),
                     unaccounted=record.unaccounted,
                     thresholds=thresholds,

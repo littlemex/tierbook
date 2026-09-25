@@ -61,8 +61,8 @@ def test_the_loop_spends_less_per_accepted_answer_than_always_escalating():
         price = always_dear.world.price_per_mtok[P.DEAR]
         always_dear.history.append({"candidate": P.DEAR, "accepted": reply.accepted, "price": price,
                                     "spend": reply.input_mtok * price + reply.output_mtok * price * 3.0,
-                                    "harness": None, "propensity": 1.0, "explored": False, "why": "fixed",
-                                    "capacity": "unknown"})
+                                    "harness": None, "harness_vocabulary": None, "propensity": 1.0,
+                                    "explored": False, "why": "fixed", "capacity": "unknown"})
 
     assert looped.spend_per_accepted() is not None
     assert looped.spend_per_accepted() < always_dear.spend_per_accepted()

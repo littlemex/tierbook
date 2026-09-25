@@ -719,6 +719,27 @@ def test_signal_kwargs_carries_the_declared_vocabulary_to_evaluate_signal():
     assert policy is not None
 
 
+def test_quantity_evaluate_signal_is_the_real_re_check_call_site():
+    """Round 3's `signal_kwargs` was a convenience a caller had to remember to splat -- reviewers found that
+    left the ACTUAL re-check (whatever calls `evaluate_signal(about=q.subject)`) unfixed, because a convenience
+    property does not change a call site nobody is using it from. `Quantity.evaluate_signal` is that call site
+    itself, moved onto the `Quantity`, so a caller reaching for 'score this quantity's signal' has no second
+    argument to forget: `q.evaluate_signal(...)` is the direct, real caller, not a test-only construct."""
+    from tierbook.outcomes import Cell, OutcomeTable
+
+    widened = q(subject="latency_bucket", declared_subjects=("latency_bucket", *qt.DEFAULT_SUBJECTS))
+    t = OutcomeTable(suite="s", manifest_digest="d")
+    t.cells["i1"] = {"a": Cell("solved", usd=1.0, answer="B"), "dear": Cell("solved", usd=5.0, answer="B")}
+
+    policy = widened.evaluate_signal(t, "a", "dear", signal={"i1": 0.1}, threshold=0.5)
+    assert policy is not None
+
+    # A quantity with the DEFAULT vocabulary still works through the same call site.
+    default_q = q(subject="own_competence")
+    default_policy = default_q.evaluate_signal(t, "a", "dear", signal={"i1": 0.1}, threshold=0.5)
+    assert default_policy is not None
+
+
 def test_the_door_admits_a_topic_quantity_like_any_other(tmp_path, capsys):
     """Rewritten with the rule it encoded. The door used to print "not usable: field_name" for a topic signal, which put
     the same hardcoded judgement in the operator's face."""

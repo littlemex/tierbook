@@ -38,6 +38,7 @@ silently groups two different harnesses under one identity.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -149,6 +150,21 @@ class PartVocabulary:
         # rather than part names and the totality check breaks. `dict(...)` accepts a mapping or a sequence of
         # pairs identically, so normalising through it first makes every check below correct for either input,
         # and makes `replace`/reconstruction-from-fields round-trip.
+        #
+        # But `dict(...)` on a sequence of pairs SILENTLY COLLAPSES a duplicate key, keeping only the last
+        # entry -- a reviewer found `best_sourcing=(("instruction", "in_the_request"), ("instruction",
+        # "not_observable")))` passes with the second value winning and no sign that two contradictory
+        # declarations were made for the same part. Checked here, before the collapse, and only for the
+        # sequence-of-pairs input: a `Mapping` cannot carry a duplicate key at all (its own `__setitem__` already
+        # resolved that before this constructor ever saw it).
+        if not isinstance(self.best_sourcing, Mapping):
+            pairs = list(self.best_sourcing)
+            keys = [k for k, _ in pairs]
+            if len(keys) != len(set(keys)):
+                dupes = sorted({k for k in keys if keys.count(k) > 1})
+                raise Unidentified(
+                    f"best_sourcing names {dupes} more than once. dict(...) would silently keep only the last "
+                    f"entry, hiding a contradiction between two declared sourcing modes for the same part")
         sourcing = dict(self.best_sourcing)
         if not self.parts:
             raise Unidentified("a vocabulary with no parts names nothing a harness could be built from")
@@ -396,6 +412,19 @@ class Harness:
         they then appeared neither held nor explained, which the contradiction check correctly flagged as the collector
         saying nothing about a part it claimed. The parts are not the problem. The identity is, and it is missing exactly
         where it is read.
+
+        **The vocabulary enters the hash for any vocabulary other than perigraph's own default.** A reviewer found
+        that two harnesses declared against DIFFERENT vocabularies, but built from identifying parts of the same
+        kind and digest, hash to the SAME identity -- `comparable_with`/`refuse_incomparable` already catch that
+        for a direct comparison, but any OTHER grouping keyed on `identity` alone (a set, a dict key, a persisted
+        identity) would still silently merge them. Folding the vocabulary in closes that, but NOT for the default
+        vocabulary: `identity`'s bytes for perigraph's own ten parts are pinned to a cross-language digest
+        algorithm a second, TypeScript implementation was built against (see the spec conformance test), and
+        changing those bytes for every perigraph-conforming harness would break interoperability with every
+        compliant consumer to fix a collision that, for the default vocabulary alone, `comparable_with` already
+        prevents from being misread. So: unchanged, byte-for-byte, when `self.vocabulary == DEFAULT_PART_VOCABULARY`
+        (value equality -- a caller's own default-shaped `PartVocabulary` counts, not only the literal module
+        object); prefixed with the vocabulary's own identity for anything else.
         """
         if not self.has_identity:
             raise Unidentified(
@@ -403,6 +432,8 @@ class Harness:
                 "would be constant across every possible harness. At minimum the instruction is in the request; a "
                 "record without it describes somebody's account of a run rather than the run")
         h = hashlib.sha256()
+        if self.vocabulary != DEFAULT_PART_VOCABULARY:
+            h.update(f"vocabulary={self.vocabulary.identity};".encode())
         for p in sorted((p for p in self.parts if p.identifying), key=lambda p: p.kind):
             h.update(f"{p.kind}={p.digest};".encode())
         return h.hexdigest()[:24]
@@ -427,6 +458,43 @@ class Harness:
         result as perigraph's without saying so; see `__str__` below and the module's conformance test.
         """
         return self.vocabulary.conforms_to_perigraph
+
+    @property
+    def grouping_key(self) -> tuple[PartVocabulary, str] | None:
+        """A key safe to put in a `set` or use as a `dict` key when two harnesses might have been declared
+        against DIFFERENT vocabularies, stronger than `identity` alone even after `identity` started folding a
+        NON-default vocabulary's own `identity` STRING into its hash (see `identity`'s docstring): two
+        vocabularies that forgot to declare different `name`/`version` -- both left at `"custom"`/`"unversioned"`
+        -- but differ in their actual `parts`/`best_sourcing` would still share that string and could still
+        collide in `identity`'s hash. This uses the WHOLE `PartVocabulary` object instead, which is
+        value-comparable on every field (`parts`, `best_sourcing`, `name` AND `version`), so two vocabularies
+        that differ in content but not in self-declared name are still told apart. `None` when this harness has
+        no identity at all, matching the state `identity` itself refuses to return.
+        """
+        if not self.has_identity:
+            return None
+        return (self.vocabulary, self.identity)
+
+    def to_dict(self) -> dict:
+        """A JSON/dict-safe structured representation, carrying `vocabulary_identity` and `conforms_to_perigraph`
+        -- both PROPERTIES, so `dataclasses.asdict(self)` would silently omit them and leave a consumer with no
+        way to tell which vocabulary produced this record or whether it conforms to perigraph. This project has
+        no other JSON/dict output path for a `Harness` today (checked across `src/`, `harness/`, `examples/`,
+        `tools/`); this is the safe path for the day one is added, not `dataclasses.asdict`.
+        """
+        return {
+            "identity": self.identity if self.has_identity else None,
+            "has_identity": self.has_identity,
+            "vocabulary_identity": self.vocabulary.identity,
+            "conforms_to_perigraph": self.conforms_to_perigraph,
+            "parts": [
+                {"kind": p.kind, "sourcing": p.sourcing, "label": p.label, "digest": p.digest,
+                 "boundary": p.boundary, "identifying": p.identifying}
+                for p in self.parts
+            ],
+            "unobserved": list(self.unobserved),
+            "missing": list(self.missing),
+        }
 
     def comparable_with(self, other: Harness) -> bool:
         """Whether two runs measured what is otherwise the same thing.
@@ -714,6 +782,24 @@ class Collection:
             parts.append("no part was identified by bytes we hold that the model provably read, so the identity would "
                          "be the same for every possible harness")
         return "not admissible to a verdict -- " + "; and ".join(parts)
+
+    def to_dict(self) -> dict:
+        """A JSON/dict-safe structured representation, carrying `vocabulary_identity` and `conforms_to_perigraph`
+        -- see `Harness.to_dict` for why `dataclasses.asdict` is not the safe path for this either."""
+        return {
+            "status": self.status,
+            "harness": self.harness.to_dict() if self.harness is not None else None,
+            "absences": [{"kind": a.kind, "reason": a.reason, "detail": a.detail, "blames": a.blames}
+                        for a in self.absences],
+            "manifest": {"collector": self.manifest.collector, "version": self.manifest.version,
+                        "reaches": list(self.manifest.reaches)},
+            "vocabulary_identity": self.manifest.vocabulary.identity,
+            "conforms_to_perigraph": self.conforms_to_perigraph,
+            "unaccounted": list(self.unaccounted),
+            "contradictions": list(self.contradictions),
+            "our_failures": list(self.our_failures),
+            "admissible_to_a_verdict": self.admissible_to_a_verdict(),
+        }
 
     def __str__(self) -> str:
         who = self.harness.identity if (self.harness and self.harness.has_identity) else "no identity"

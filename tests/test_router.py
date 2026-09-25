@@ -24,9 +24,9 @@ from tierbook.router import (  # noqa: E402
     AGREEMENT,
     Decision,
     Router,
-    Rule,
     audit_broken_keys,
     certify_pool,
+    decide_from_score,
     default_stop_rule,
 )
 
@@ -154,8 +154,8 @@ def test_a_router_that_declares_no_stop_rule_gets_the_default_and_todays_decisio
     what `decide` returned before this change -- unanimity stops, disagreement escalates through `ladder`."""
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
-    assert r.rule.runtime is default_stop_rule
     assert r.rule is AGREEMENT
+    assert AGREEMENT is agreement
     members = r.certificate.members
     assert r.decide({m: "B" for m in members}) == default_stop_rule(r.certificate, r.ladder, {m: "B" for m in members})
 
@@ -176,40 +176,47 @@ def test_swapping_the_rule_without_refitting_is_refused():
     """Swapping `rule` on a fitted `Router` via `replace` must not silently keep the OLD certificate's accuracy
     while a different rule executes -- the TB-034 failure `replace` can still reach even on a frozen dataclass,
     since `replace` constructs a new instance rather than mutating the old one. `__post_init__` runs on that new
-    instance and must catch the mismatch."""
-    always_abandon_rule = Rule(
-        name="always_abandon",
-        score=lambda table, members, items: {},
-        runtime=lambda certificate, ladder, answers: Decision("abandon", fallback="Z", reason="always abandons"))
+    instance and must catch the mismatch. This time the check is OBJECT IDENTITY (`certificate.stop_rule is
+    rule`), not a name: a reviewer showed round 3's name check let `Rule(name="agreement", score=agreement,
+    runtime=always_abandon)` straight through `replace`, because a name is self-declared and a caller can put
+    ANY name on ANY callable. A same-named, differently-behaving callable must fail here too."""
+    def always_abandon_score(table, members, items):
+        return {}
 
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
-    with pytest.raises(EvidenceError, match="was never measured against"):
-        replace(r, rule=always_abandon_rule)
+    with pytest.raises(EvidenceError, match="not the exact object"):
+        replace(r, rule=always_abandon_score)
+    # Even naming it "agreement" (the default's own display name) must not let it through: identity, not name.
+    always_abandon_score.__qualname__ = "agreement"
+    with pytest.raises(EvidenceError, match="not the exact object"):
+        replace(r, rule=always_abandon_score)
     # The router this was copied from is untouched.
     members = r.certificate.members
     assert r.decide({m: "B" for m in members}).action == "answer"
 
 
 def test_a_declared_rule_is_carried_and_used_in_place_of_the_default():
-    """A different study's rule -- here, one that never stops and always abandons with a fixed fallback -- must be
-    expressible without editing `Router.decide` or `default_stop_rule`. Round 3's fix: ONE `Rule` object supplies
-    both the batch scorer `enumerate_policies` certifies against and the runtime `decide()` executes, so there is
-    no second, independently-injectable callable that could disagree with it."""
-    never_stop_rule = Rule(
-        name="never_stop",
-        score=lambda table, members, items: {},
-        runtime=lambda certificate, ladder, answers: Decision("abandon", fallback="Z",
-                                                              reason="a different study's rule"))
+    """A different study's rule -- here, one that never stops on anything -- must be expressible without editing
+    `Router.decide` or `default_stop_rule`. Round 4's fix: there is exactly ONE callable to inject (the batch
+    scorer), and the runtime behaviour is DERIVED from it generically (`decide_from_score`), so there is no
+    second, independently-injectable callable that could disagree with it -- unlike round 3's `Rule`, which
+    bundled two callables that were still free to disagree."""
+    def never_stop_score(table, members, items):
+        return {}
 
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
-                   min_stopped=0, stop_rule=never_stop_rule)
-    assert r.certificate.stop_rule_id == "never_stop"
-    assert r.rule is never_stop_rule
+                   min_stopped=0, stop_rule=never_stop_score)
+    assert "never_stop_score" in r.certificate.stop_rule_id
+    assert r.rule is never_stop_score
     members = r.certificate.members
+    escalate = r.ladder[0]
+    # It never stops, so it must escalate every time, then answer with whatever the escalation tier said.
     d = r.decide({m: "B" for m in members})
-    assert d.action == "abandon" and d.fallback == "Z" and d.reason == "a different study's rule"
+    assert d.action == "call" and d.tiers == (escalate,)
+    d2 = r.decide({**{m: "B" for m in members}, escalate: "E"})
+    assert d2.action == "answer" and d2.answer == "E" and d2.reason == f"escalated to {escalate}"
     # An injected rule is not the fold-derived rule this project measured, so the adaptive-analysis warning that
     # applies to `agreement` must not be printed for someone else's rule.
     assert r.certificate.rules_are_fold_derived is False
@@ -222,9 +229,10 @@ def test_a_declared_rule_is_carried_and_used_in_place_of_the_default():
 
 
 def test_a_rule_certifies_a_majority_stop_correctly():
-    """The scoring gap a round-3 review found: with `never_stop`-style rules retired to a hand-built `Rule`,
-    confirm a MAJORITY rule (which round 2's `evaluate` misjudged, see `test_quorum.py`) also certifies through
-    `Router.fit` at the accuracy it actually earns, not an inflated one."""
+    """The scoring gap a round-3 review found persists: confirm a MAJORITY rule (which round 2's `evaluate`
+    misjudged, see `test_quorum.py`) certifies through `Router.fit` at the accuracy it actually earns. Round 4
+    adds: its RUNTIME needs no separate declaration at all -- `decide_from_score` derives it from the same
+    scorer, and this test checks that the derived runtime actually answers with the majority's own answer."""
     def majority_of_three(table, members, items):
         out = {}
         for item in items:
@@ -235,20 +243,10 @@ def test_a_rule_certifies_a_majority_stop_correctly():
             out[item] = max(set(answers), key=answers.count)
         return out
 
-    def majority_runtime(certificate, ladder, answers):
-        members = certificate.members
-        if not all(m in answers for m in members):
-            return Decision("call", tiers=tuple(m for m in members if m not in answers), reason="not all answered")
-        vals = [answers[m] for m in members if answers[m] is not None]
-        if not vals:
-            return Decision("abandon", fallback=None, reason="nobody answered")
-        return Decision("answer", answer=max(set(vals), key=vals.count), reason="majority")
-
-    majority_rule = Rule(name="majority", score=majority_of_three, runtime=majority_runtime)
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
-                   min_stopped=0, stop_rule=majority_rule)
-    assert r.certificate.stop_rule_id == "majority"
+                   min_stopped=0, stop_rule=majority_of_three)
+    assert "majority_of_three" in r.certificate.stop_rule_id
     # Cross-check: the certificate's point accuracy must equal what quorum.evaluate independently computes for
     # the SAME (members, escalate_to, rule) -- i.e. Router.fit is not silently using a different scorer.
     from tierbook.quorum import evaluate as _evaluate
@@ -256,30 +254,106 @@ def test_a_rule_certifies_a_majority_stop_correctly():
                                      stop_rule=majority_of_three).accuracy
     assert r.certificate.accuracy_point == pytest.approx(independently_scored)
 
+    # The runtime derivation, checked directly against a synthetic three-member certificate so this assertion
+    # does not depend on `Router.fit`'s own search happening to prefer three members over fewer on this pool.
+    from tierbook.router import Certificate
+    synthetic = Certificate(
+        members=("a", "b", "c"), escalate_to="dear", accuracy_floor=0.10, accuracy_point=1.0, accuracy_lower=1.0,
+        usd_per_item=0.0, usd_upper=0.0, stop_rate=1.0, stop_rate_interval=(1.0, 1.0), agreement_lift=0.0,
+        wrong_stop_rate=0.0, wrong_stop_interval=(0.0, 0.0), considered=1, items=1, suite="s", manifest_digest="d",
+        abandon_depth=1, stop_rule_id="majority_of_three", stop_rule=majority_of_three)
+    # Two of three say "B", one says "C": the derived runtime must answer "B" without ever consulting `ladder`.
+    d = decide_from_score(majority_of_three, synthetic, (), {"a": "B", "b": "B", "c": "C"})
+    assert d.action == "answer" and d.answer == "B"
+
 
 def test_verify_rescores_under_the_certificates_own_rule_not_the_module_default():
     """A router fitted under an injected rule must be re-checked against THAT rule on a second collection, not
     against `agreement` -- otherwise `verify` would silently score something the certificate does not describe."""
-    never_stop_rule = Rule(
-        name="never_stop",
-        score=lambda table, members, items: {},
-        runtime=lambda certificate, ladder, answers: Decision("abandon", fallback=None, reason="never stops"))
+    def never_stop_score(table, members, items):
+        return {}
 
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
-                   min_stopped=0, stop_rule=never_stop_rule)
+                   min_stopped=0, stop_rule=never_stop_score)
     held, point, low = r.verify(t)
-    # `verify` must score under `never_stop_rule.score` (r's own `rule`), which stops nothing -- not under the
+    # `verify` must score under `never_stop_score` (r's own `rule`), which stops nothing -- not under the
     # module's `agreement` default, which would stop on the same members' agreeing items and read a different
     # accuracy for the identical (members, escalate_to) pair.
     from tierbook.quorum import agreement as _agreement
     from tierbook.quorum import evaluate as _evaluate
     scored_under_never_stop = _evaluate(t, r.certificate.members, r.certificate.escalate_to,
-                                        stop_rule=never_stop_rule.score).accuracy
+                                        stop_rule=never_stop_score).accuracy
     scored_under_agreement = _evaluate(t, r.certificate.members, r.certificate.escalate_to,
                                        stop_rule=_agreement).accuracy
     assert point == pytest.approx(scored_under_never_stop)
     assert scored_under_never_stop != scored_under_agreement, "the fixture needs the two rules to actually disagree"
+
+
+def _reference_default_stop_rule(certificate, ladder, answers):
+    """A verbatim copy of round 3's hand-written `default_stop_rule` body -- kept ONLY so the test below can
+    compare the new generic derivation against the exact logic it replaces. Not exported; do not import this
+    from outside this file."""
+    members = certificate.members
+    missing = tuple(m for m in members if m not in answers)
+    if missing:
+        return Decision("call", tiers=missing, reason="the members have not all answered")
+    vals = [answers[m] for m in members]
+    parsed = [v for v in vals if v is not None]
+    if len(parsed) == len(vals) and len(set(parsed)) == 1:
+        return Decision("answer", answer=parsed[0], reason="every member produced the same answer")
+    reason = ("a member produced no parseable answer, which is not agreement"
+              if len(parsed) < len(vals) else "the members disagreed")
+    for tier in ladder:
+        if tier not in answers:
+            return Decision("call", tiers=(tier,), reason=reason)
+        if answers[tier] is not None:
+            return Decision("answer", answer=answers[tier], reason=f"escalated to {tier}")
+    called = len(members) + len(ladder)
+    fallback = parsed[0] if parsed else None
+    return Decision("abandon", fallback=fallback,
+                    reason=(f"{called} tiers produced nothing parseable; abandoning at the fixed depth of "
+                            f"{certificate.abandon_depth}"))
+
+
+def test_decide_from_score_reproduces_default_stop_rule_exactly():
+    """The coordinator's own requirement: `decide_from_score(quorum.agreement, ...)` must reproduce round 3's
+    hand-written `default_stop_rule` exactly, over every branch that function had. Where it does NOT reproduce
+    exactly, this test names the one known difference rather than silently loosening the comparison."""
+    t = _table()
+    r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
+    cert, ladder = r.certificate, r.ladder
+    members = cert.members
+    if len(members) < 2:
+        pytest.skip("this fixture chose a single-member policy")
+    escalate = ladder[0]
+
+    cases = {
+        "missing answers": {members[0]: "B"},
+        "unanimous": {m: "B" for m in members},
+        "one silent member": {**{m: "B" for m in members[:-1]}, members[-1]: None},
+        "disagreement, escalation not yet answered": {**{m: "B" for m in members[:-1]}, members[-1]: "C"},
+        "disagreement, escalation answers": {**{m: "B" for m in members[:-1]}, members[-1]: "C", escalate: "E"},
+        "disagreement, escalation silent -> abandon": {**{m: "B" for m in members[:-1]}, members[-1]: "C",
+                                                        escalate: None},
+    }
+    for label, answers in cases.items():
+        got = decide_from_score(agreement, cert, ladder, answers)
+        want = _reference_default_stop_rule(cert, ladder, answers)
+        assert (got.action, got.answer, got.tiers, got.fallback) == (want.action, want.answer, want.tiers,
+                                                                      want.fallback), (
+            f"{label}: behaviour differs -- decide_from_score gave {got!r}, the reference gave {want!r}")
+        if want.reason == "every member produced the same answer":
+            # The ONE known, reported difference: the generic derivation cannot know WHY an arbitrary injected
+            # rule stopped (a custom rule need not be unanimity-based at all), so its reason is deliberately
+            # generic ("the rule selected an answer") rather than asserting unanimity specifically, which would
+            # be a false claim for a non-unanimous rule using the same derivation. Every other field, and every
+            # other branch's reason text, reproduces exactly.
+            assert got.reason == "the rule selected an answer", label
+        else:
+            assert got.reason == want.reason, f"{label}: reason differs unexpectedly -- {got.reason!r} vs {want.reason!r}"
+        # And the named entry point (what a caller actually calls) matches the derivation for every case.
+        assert default_stop_rule(cert, ladder, answers) == decide_from_score(agreement, cert, ladder, answers), label
 
 
 def test_everything_silent_abandons_rather_than_guessing():
@@ -424,6 +498,16 @@ def test_fit_best_raises_when_neither_family_certifies():
     with pytest.raises(EvidenceError):
         Router.fit_best(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"],
                         accuracy_floor=0.999)
+
+
+def test_fit_refuses_a_non_callable_stop_rule_with_a_readable_message():
+    """Round 3's `Rule` wrapper (`score=`/`runtime=` on one object) no longer exists; a caller who still passes
+    one, or any other non-callable, must get a sentence naming what changed rather than an `AttributeError` deep
+    inside `enumerate_policies`."""
+    t = _table()
+    with pytest.raises(EvidenceError, match="is not callable"):
+        Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80,
+                  stop_rule="agreement")
 
 
 def test_stoprule_is_a_deprecated_alias_for_runtimestoprule():
