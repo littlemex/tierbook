@@ -37,28 +37,36 @@ module exists to prevent one layer up, so it is worth naming here rather than qu
 
 ## TB-107: the top-level `version` string cannot tell two contracts apart
 
-The router's own `version` field is pinned to the literal `"v0.3"` by the router itself -- both the release
-this project first targeted and the router's `main` after PR #3489 (commit `867155c9`, "Add unified model
-catalog and model hub") reject anything else there. So `version` is not a place this exporter can record which
-contract it wrote *for*, and it is not read back to decide compatibility either: the router's own loader
-never inspects it once `routing`/`global` are present.
+The router's own `version` field is pinned to the literal `"v0.3"` by the router itself -- both the v0.3.0
+release this project first targeted, at commit `9afc5a42` ("docs: refresh contributor rank for v0.3.0"), and
+the router's `main` at commit `867155c9` ("Add unified model catalog and model hub", PR #3489) reject
+anything else there. So `version` is not a place this exporter can record which contract it wrote *for*, and
+it is not read back to decide compatibility either: the router's own loader never inspects it once
+`routing`/`global` are present.
 
-Before that PR, `providers.defaults.default_model`, `providers.models[].backend_refs[].type` and
-`routing.modelCards[].quality_score` were the router's own field names -- confirmed by reading the checkout at
-commit `43446e8` (`config/config.yaml`, `pkg/config/canonical_providers.go`). After it, the router's loader
+At `9afc5a42`, `providers.defaults.default_model`, `providers.models[].backend_refs[].type` and
+`routing.modelCards[].quality_score` were the router's own field names -- confirmed by reading that checkout
+(`config/config.yaml`, `pkg/config/canonical_providers.go`). At `867155c9`, the router's loader
 (`pkg/config/loader.go`, `rejectDeprecatedUserConfigFields`) refuses a config file at start-up if any of those
 three keys are present, and the replacement names are `providers.defaults.model` and
-`providers.models[].backend_refs[].provider`, with `quality_score` dropped rather than renamed. Both checkouts
-were read with the router's own Go `config` package, not guessed from a diff: the pre-PR shape parses on
-`43446e8` and is refused on `867155c9`+; the post-PR shape parses on both, but on `43446e8` the renamed key
+`providers.models[].backend_refs[].provider`, with `quality_score` dropped rather than renamed. Both commits
+were read with the router's own Go `config` package, not guessed from a diff: the pre-PR shape parses at
+`9afc5a42` and is refused at `867155c9`; the post-PR shape parses at both, but at `9afc5a42` the renamed key
 `model` matches nothing the old struct declares, so `providers.defaults.default_model` in the parsed config
 comes back **empty** -- exactly the silent loss TB-107 named, reproduced rather than assumed.
 
+Neither read-back says anything about a third commit. A checkout at some other point on `main` -- earlier,
+later, or on a fork -- is not covered by either row below just because it looks like it should parse the same
+way: `export()` refuses a `target` this table does not name rather than assuming it behaves like its nearest
+neighbour, and the same discipline applies to reading the table itself. Supporting another commit means
+reading it back with that commit's own parser and adding a row pinned to it, exactly as these two were.
+
 So the exporter needs to know, as an input rather than a guess, which of these two contracts it is writing
 for. `SR_TARGETS` below is that input: a small declared table, keyed by an identity string a caller names
-explicitly, each entry pinned to the commit it was actually read back against. Adding a third contract some
-future router version requires means adding a row and reading it back with that version's own parser -- not
-branching on a version number this module would otherwise have to guess.
+explicitly, each entry pinned to the exact commit it was read back against -- a commit, not a release name and
+not a range. Adding a third contract some future router version requires means adding a row and reading it
+back with that version's own parser -- not branching on a version number this module would otherwise have to
+guess, and not stretching an existing row to cover a commit nobody read back.
 """
 from __future__ import annotations
 
@@ -85,7 +93,8 @@ class SRTargetShape:
     This is declared data, not a branch in this module's logic: every field here is a key name or a boolean
     about whether a key is emitted at all, never a rule about what the router does with the value. The three
     fields below are exactly the three TB-107 found disagreeing between the router's pre- and post-PR#3489
-    contracts; a fourth disagreement would be a fourth field here, not a new code path.
+    contracts; a fourth disagreement would need a new field here, plus the one site in `export()` that reads
+    it -- not a new branch on `target`, but not free either.
     """
 
     #: What this target actually is, for a human reading provenance rather than for the router.
@@ -104,24 +113,27 @@ class SRTargetShape:
     emit_quality_score: bool
 
 
-#: Declared, not inferred: every row was produced by exporting a config and reading it back with that
+#: Declared, not inferred: every row was produced by exporting a config and reading it back with that exact
 #: commit's own `vllm-project/semantic-router` Go `config` package (`tools/sr_readback/` in this repo), not by
 #: reading a diff and assuming the parser agrees with it. A target this table does not name is refused by
 #: `export()` rather than guessed at the nearest neighbour, because a guess here fails exactly the way TB-107
-#: did: silently, and only inside the router's own loader.
+#: did: silently, and only inside the router's own loader. A commit that is not one of the two `sr_commit`
+#: values below is unverified for this exporter -- whatever shape it looks like it uses -- until it has its
+#: own row and its own read-back.
 SR_TARGETS: dict[str, SRTargetShape] = {
     "v0.3.0": SRTargetShape(
-        identity=("vLLM Semantic Router before PR #3489 (\"Add unified model catalog and model hub\"): "
-                  "providers.defaults.default_model, backend_refs[].type, modelCards[].quality_score."),
-        sr_commit="43446e8680d0f80f8d8acd7dc23381e487b258b4",
+        identity=("vLLM Semantic Router v0.3.0, commit 9afc5a42 (\"docs: refresh contributor rank for "
+                  "v0.3.0\"): providers.defaults.default_model, backend_refs[].type, "
+                  "modelCards[].quality_score."),
+        sr_commit="9afc5a421886f44085f9070a8fbd878b80724f64",
         default_model_key="default_model",
         backend_ref_type_key="type",
         emit_quality_score=True,
     ),
     "main-867155c9": SRTargetShape(
-        identity=("vLLM Semantic Router main at or after PR #3489 (commit 867155c9, \"Add unified model "
-                  "catalog and model hub\"): providers.defaults.model, backend_refs[].provider, no "
-                  "quality_score -- the prior three keys are refused at start-up if present at all."),
+        identity=("vLLM Semantic Router main, commit 867155c9 (\"Add unified model catalog and model hub\", "
+                  "PR #3489): providers.defaults.model, backend_refs[].provider, no quality_score -- the "
+                  "prior three keys are refused at start-up if present at all."),
         sr_commit="867155c924b6527d6a412e1412ce712a9e5cc9b8",
         default_model_key="model",
         backend_ref_type_key="provider",
@@ -368,7 +380,10 @@ def export(
             # config, to know which contract the config beside it was written for.
             "export_target": target,
             "export_target_identity": shape.identity,
-            "export_target_sr_commit": shape.sr_commit,
+            # Named "declared_against", not "verified": export() itself does no read-back on this file. This
+            # is the commit `target`'s row in SR_TARGETS was read back against when the row was declared, not
+            # a claim that this particular export was checked against a running router.
+            "export_target_declared_against_sr_commit": shape.sr_commit,
     }
     config = {
         "version": CONFIG_VERSION,

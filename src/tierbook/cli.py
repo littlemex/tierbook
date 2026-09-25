@@ -1417,8 +1417,11 @@ def main(argv: list[str] | None = None) -> int:
                         "request is one there is no evidence about")
     x.add_argument("--target", required=True,
                    help="which router contract to write for (TB-107: the router's own version string cannot "
-                        "say). One of the keys in tierbook.export_vsr.SR_TARGETS, each pinned to the "
-                        "semantic-router commit it was read back against; e.g. 'v0.3.0' or 'main-867155c9'")
+                        "say). One of the keys in tierbook.export_vsr.SR_TARGETS, each pinned to the exact "
+                        "semantic-router commit it was read back against; e.g. 'v0.3.0' or 'main-867155c9'. "
+                        "Any other semantic-router commit is unverified for this exporter, whatever shape it "
+                        "appears to use -- it needs its own row in SR_TARGETS plus its own read-back with "
+                        "tools/sr_readback before it can be named here")
     x.add_argument("--entrypoint", default="tierbook/routed",
                    help="the virtual model name a client asks for. Not 'auto', which the "
                         "router reserves")
