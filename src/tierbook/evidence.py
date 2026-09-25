@@ -460,7 +460,17 @@ def elicitation_from_template(name: str, template: str) -> Elicitation:
 #: Here, in this leaf, rather than beside the structure that first needed it: `quorum` builds escalation policies from a
 #: signal and must check the same vocabulary, and importing the structure's module from there would close a cycle
 #: (quantity imports judge imports reproduce imports quorum). One home, reachable from both.
-SUBJECTS = ("topic", "own_competence", "item_difficulty", "resource_state")
+#:
+#: **A DEFAULT, not a gate.** These four are the subjects this project happened to need, offered so a caller with the
+#: same needs does not retype them. `Quantity.subject` and `quorum.evaluate_signal`'s `about` are checked against a
+#: vocabulary the caller declares (`Quantity.declared_subjects`, `evaluate_signal`'s `subjects`), which falls back to
+#: this tuple when the caller declares nothing -- the same move `decide.DEFAULT_STATE_VARS` made for the state
+#: vocabulary (F141): what a subject IS stays a structural classification a mechanism handed one score cannot
+#: recover from the number alone, but WHICH NAMES ARE ADMITTED is a fact about the deployment, not about this module.
+#: A study whose signals are about something this list does not name -- a different modality's own subjects -- could
+#: not declare a `Quantity` at all before this, which is the same shape of unrepresentable conclusion `ESCALATION_
+#: SUBJECTS` produced, found by re-reading TB-057/TB-180 rather than by a new measurement.
+DEFAULT_SUBJECTS = ("topic", "own_competence", "item_difficulty", "resource_state")
 
 #: There is deliberately NO `ESCALATION_SUBJECTS` here. One lived at this spot, naming `own_competence` and
 #: `item_difficulty` as the only subjects a gate could read, and it was removed as a violation of the rule at the top of

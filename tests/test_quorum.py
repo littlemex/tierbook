@@ -64,6 +64,23 @@ def test_an_absent_answer_escalates_and_is_never_recovered():
     assert escalated == ["one-silent"], "two answers of which one is missing is not agreement"
 
 
+def test_the_stop_rule_defaults_to_agreement_and_a_declared_rule_is_carried():
+    """TB-034's fix applied to `evaluate`: `agreement` is the DEFAULT a caller who declares nothing still gets, and
+    a different study's stop rule can be expressed through `stop_rule` without editing this module."""
+    t = _table({
+        "same-wrong": {"a": (INCORRECT, "B", 1.0), "b": (INCORRECT, "B", 1.0), "dear": (SOLVED, "B", 5.0)},
+        "diff-wrong": {"a": (INCORRECT, "B", 1.0), "b": (INCORRECT, "C", 1.0), "dear": (SOLVED, "B", 5.0)},
+    })
+    default = evaluate(t, ("a", "b"), "dear")
+    assert (default.stopped, default.items) == (1, 2), "unchanged: unanimity stops on the agreeing item only"
+
+    def never_stop(table, members, items):
+        return [], list(items)
+
+    everything_escalates = evaluate(t, ("a", "b"), "dear", stop_rule=never_stop)
+    assert everything_escalates.stopped == 0, "a declared rule overrides agreement entirely"
+
+
 def test_a_single_member_policy_stops_on_everything():
     """One candidate has nothing to disagree with, so this is 'the cheap tier answers, nobody checks'.
 
@@ -550,6 +567,19 @@ def test_every_named_subject_is_admitted_and_the_policy_records_which(about):
     from tierbook.quorum import evaluate_signal
     t, signal = _small_signal_table()
     assert evaluate_signal(t, "a", "dear", signal=signal, about=about, threshold=0.5) is not None
+
+
+def test_the_subject_vocabulary_is_declarable_and_the_default_reproduces_todays_refusal():
+    """F141's move applied to the one closed vocabulary this module still checks membership against: a caller who
+    declares nothing gets exactly today's refusal, and a caller whose signal is about something the default does not
+    name can declare it rather than being unable to build a policy at all."""
+    from tierbook.quorum import evaluate_signal
+    t, signal = _small_signal_table()
+    with pytest.raises(EvidenceError, match="is not one of"):
+        evaluate_signal(t, "a", "dear", signal=signal, about="vibes", threshold=0.5)
+    p = evaluate_signal(t, "a", "dear", signal=signal, about="vibes", threshold=0.5,
+                        subjects=("vibes", "own_competence", "item_difficulty", "topic", "resource_state"))
+    assert p is not None
 
 
 def test_the_word_subject_no_longer_has_three_meanings_in_this_module():

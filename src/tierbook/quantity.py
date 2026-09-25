@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tierbook.evidence import (SUBJECTS, Elicitation,  # noqa: F401
+from tierbook.evidence import (DEFAULT_SUBJECTS, Elicitation,  # noqa: F401
                               EvidenceError)
 from tierbook.criterion import Null
 from tierbook.judge import WeightDigest
@@ -200,6 +200,19 @@ class Quantity:
     #: Set when this quantity IS a probability the candidate returned beside its answer. `None` means it is not that
     #: kind of quantity -- an entropy or a queue length has no calibration claim to check.
     confidence: Confidence | None = None
+    #: Which subjects `subject` may be checked against. **Declared here rather than fixed in the module**, so a study
+    #: whose signal is about something `evidence.DEFAULT_SUBJECTS` does not name can still declare a `Quantity` --
+    #: `Probe.name` (Prismyra's `signals.py`) is a free string plus provenance, and this field is the analogous move for
+    #: the one closed vocabulary `evidence.py` kept after F140/F141: what a subject IS stays a check (a mechanism
+    #: handed one score cannot recover which of them it was handed), but WHICH NAMES ARE ADMITTED is a fact about the
+    #: deployment. Empty falls back to `DEFAULT_SUBJECTS`, which keeps every existing caller working while making the
+    #: default visibly a default.
+    declared_subjects: tuple[str, ...] = ()
+
+    @property
+    def subjects(self) -> tuple[str, ...]:
+        """The subject vocabulary `self.subject` is checked against. Falls back to the default when none was declared."""
+        return self.declared_subjects or DEFAULT_SUBJECTS
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -215,12 +228,13 @@ class Quantity:
                 f"{self.availability!r} is not one of {AVAILABILITY}. A layer number is not an availability: it is "
                 f"provider-specific detail below this axis, and a mechanism keyed on it would refuse a quantity from a "
                 f"model of different depth for no reason that matters")
-        if self.subject not in SUBJECTS:
+        if self.subject not in self.subjects:
             raise Inadmissible(
-                f"{self.subject!r} is not one of {SUBJECTS}. A mechanism handed one score cannot tell which of them it "
-                f"was handed, and the measured pair diverges rather than merely differing: the same readout named the "
-                f"item's field at 0.7593 against a chance of 0.1429 and predicted its own error at 0.4227, below the "
-                f"0.5 a coin gets")
+                f"{self.subject!r} is not one of {self.subjects}. A mechanism handed one score cannot tell which of "
+                f"them it was handed, and the measured pair diverges rather than merely differing: the same readout "
+                f"named the item's field at 0.7593 against a chance of 0.1429 and predicted its own error at 0.4227, "
+                f"below the 0.5 a coin gets. Declare `declared_subjects` if this quantity's subject is not one of "
+                f"{DEFAULT_SUBJECTS}")
         if self.register not in REGISTERS:
             raise Inadmissible(f"{self.register!r} is not one of {REGISTERS}")
         if self.register == "control_action":

@@ -188,6 +188,50 @@ class Outcome:
     stages: int
 
 
+#: The signature every stop rule `Router.decide` accepts must have: given the certificate, the escalation ladder and
+#: what has been heard so far, return what to do next. `default_stop_rule` below is the DEFAULT this project
+#: measured, not the only rule the signature can hold.
+StopRule = Callable[[Certificate, "tuple[str, ...]", "dict[str, str | None]"], Decision]
+
+
+def default_stop_rule(certificate: Certificate, ladder: tuple[str, ...],
+                      answers: dict[str, str | None]) -> Decision:
+    """Agreement stops, disagreement escalates through `ladder` in order, abandonment at a fixed depth.
+
+    **This is the rule the module docstring traces to one fold's measurement, extracted rather than rewritten.**
+    "Escalation does not branch" came from a fitted one-dimensional model reproducing the direction-stability of a
+    fold's first three components; `Certificate.rules_are_fold_derived=True` discloses that, and disclosure is not
+    the same as making the rule injectable -- TB-034 named the gap between the two. `Router.stop_rule` is where a
+    different study's rule (escalate to a signal-chosen tier on disagreement, a different abandonment test) can be
+    expressed without editing this function, and this function stays as the default a caller who declares nothing
+    still gets.
+    """
+    members = certificate.members
+    missing = tuple(m for m in members if m not in answers)
+    if missing:
+        return Decision("call", tiers=missing, reason="the members have not all answered")
+
+    vals = [answers[m] for m in members]
+    parsed = [v for v in vals if v is not None]
+    if len(parsed) == len(vals) and len(set(parsed)) == 1:
+        return Decision("answer", answer=parsed[0],
+                        reason="every member produced the same answer")
+    reason = ("a member produced no parseable answer, which is not agreement"
+              if len(parsed) < len(vals) else "the members disagreed")
+
+    for tier in ladder:
+        if tier not in answers:
+            return Decision("call", tiers=(tier,), reason=reason)
+        if answers[tier] is not None:
+            return Decision("answer", answer=answers[tier], reason=f"escalated to {tier}")
+
+    called = len(members) + len(ladder)
+    fallback = parsed[0] if parsed else None
+    return Decision("abandon", fallback=fallback,
+                    reason=(f"{called} tiers produced nothing parseable; abandoning at the fixed "
+                            f"depth of {certificate.abandon_depth}"))
+
+
 @dataclass
 class Router:
     """A fitted policy plus the runtime that executes it."""
@@ -195,6 +239,12 @@ class Router:
     certificate: Certificate
     ladder: tuple[str, ...] = ()
     _policy: QuorumPolicy | None = field(default=None, repr=False)
+    #: What to do next, given what has been heard so far. **Declared here rather than fixed in `decide`'s body**, so
+    #: a study whose own measurement supports a different stop rule can express it without editing this class.
+    #: Defaults to `default_stop_rule` -- agreement stops, `ladder` is walked in order, abandonment is at
+    #: `certificate.abandon_depth` -- which keeps every existing caller working while making the default visibly a
+    #: default (the same move F141 made for `decide.STATE_VARS`, applied to the rule TB-034 named).
+    stop_rule: StopRule = field(default=default_stop_rule, repr=False, compare=False)
 
     # ---------------------------------------------------------------- fitting
 
@@ -390,31 +440,12 @@ class Router:
     # ---------------------------------------------------------------- runtime
 
     def decide(self, answers: dict[str, str | None]) -> Decision:
-        """Given what has been heard, say what to do next. Pure, so a log can be replayed through it."""
-        members = self.certificate.members
-        missing = tuple(m for m in members if m not in answers)
-        if missing:
-            return Decision("call", tiers=missing, reason="the members have not all answered")
+        """Given what has been heard, say what to do next. Pure, so a log can be replayed through it.
 
-        vals = [answers[m] for m in members]
-        parsed = [v for v in vals if v is not None]
-        if len(parsed) == len(vals) and len(set(parsed)) == 1:
-            return Decision("answer", answer=parsed[0],
-                            reason="every member produced the same answer")
-        reason = ("a member produced no parseable answer, which is not agreement"
-                  if len(parsed) < len(vals) else "the members disagreed")
-
-        for tier in self.ladder:
-            if tier not in answers:
-                return Decision("call", tiers=(tier,), reason=reason)
-            if answers[tier] is not None:
-                return Decision("answer", answer=answers[tier], reason=f"escalated to {tier}")
-
-        called = len(members) + len(self.ladder)
-        fallback = parsed[0] if parsed else None
-        return Decision("abandon", fallback=fallback,
-                        reason=(f"{called} tiers produced nothing parseable; abandoning at the fixed "
-                                f"depth of {self.certificate.abandon_depth}"))
+        Delegates to `self.stop_rule`, which defaults to `default_stop_rule` -- see that function and the
+        `stop_rule` field for what changed and why.
+        """
+        return self.stop_rule(self.certificate, self.ladder, answers)
 
     def run(self, call: Callable[[str], str | None], *,
             cost: Callable[[str], float] | None = None,

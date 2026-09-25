@@ -49,7 +49,7 @@ def test_the_vendored_copy_is_the_one_this_test_was_written_against():
 
 
 def test_the_parts_match():
-    assert hn.HARNESS_PARTS == tuple(SPEC["parts"]["values"])
+    assert hn.DEFAULT_HARNESS_PARTS == tuple(SPEC["parts"]["values"])
 
 
 def test_the_sourcing_modes_and_which_may_identify_match():

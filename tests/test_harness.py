@@ -42,15 +42,66 @@ def full(instruction=TERSE):
 def test_every_part_is_classified_so_forgetting_one_is_a_failure():
     """Total on purpose: adding a part without deciding how it is observed breaks this rather than defaulting the new
     part to observable."""
-    assert set(hn.BEST_AVAILABLE_SOURCING) == set(hn.HARNESS_PARTS)
-    assert set(hn.BEST_AVAILABLE_SOURCING.values()) <= set(HARNESS_SOURCING)
+    assert set(hn.DEFAULT_BEST_AVAILABLE_SOURCING) == set(hn.DEFAULT_HARNESS_PARTS)
+    assert set(hn.DEFAULT_BEST_AVAILABLE_SOURCING.values()) <= set(HARNESS_SOURCING)
+
+
+# --- TB-045: the part vocabulary is a declaration, not a gate this package owns -----------------------------------
+
+def test_the_part_vocabulary_is_declarable_and_the_default_reproduces_todays_refusal():
+    """F140/F141's move applied to `HARNESS_PARTS`: a caller who declares nothing must see exactly today's refusal
+    of an unnamed part, and a caller whose harness has a part `DEFAULT_HARNESS_PARTS` does not name can declare its
+    own `PartVocabulary` instead of editing this module."""
+    with pytest.raises(hn.Unidentified, match="is not one of"):
+        part(kind="context_window_policy", sourcing="pushed_by_owner", label="", digest="")
+
+    declared = hn.PartVocabulary(
+        parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"})
+    p = part(kind="context_window_policy", sourcing="pushed_by_owner", label="react", digest="a" * 64,
+            vocabulary=declared)
+    assert p.kind == "context_window_policy"
+    assert p.vocabulary is declared
+
+
+def test_a_declared_vocabulary_must_be_total_over_its_own_parts():
+    """The check this package keeps: total on purpose, same reason the default table is total (TB-045's fix moved
+    WHO declares the parts, not whether the declaration has to be total)."""
+    with pytest.raises(hn.Unidentified, match="have no best_sourcing entry"):
+        hn.PartVocabulary(parts=("instruction", "extra"), best_sourcing={"instruction": "in_the_request"})
+    with pytest.raises(hn.Unidentified, match="which .* does not declare as a part"):
+        hn.PartVocabulary(parts=("instruction",),
+                          best_sourcing={"instruction": "in_the_request", "extra": "pushed_by_owner"})
+
+
+def test_a_harness_and_its_parts_must_agree_on_the_declared_vocabulary():
+    """A harness reading `missing` against one vocabulary while a part inside it was checked against another would
+    let the two disagree about what a part IS for the same record."""
+    declared = hn.PartVocabulary(
+        parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"})
+    p = part(kind="context_window_policy", sourcing="pushed_by_owner", label="", digest="a" * 64, vocabulary=declared)
+    with pytest.raises(hn.Unidentified, match="different vocabulary"):
+        hn.Harness(parts=(p,))
+    h = hn.Harness(parts=(p,), vocabulary=declared)
+    assert "context_window_policy" not in h.missing
+
+
+def test_a_manifest_can_declare_a_vocabulary_wider_than_the_default():
+    declared = hn.PartVocabulary(
+        parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
+        best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"})
+    with pytest.raises(hn.Unidentified, match="not parts in"):
+        hn.Manifest(collector="c", version="1", reaches=("context_window_policy",))
+    m = hn.Manifest(collector="c", version="1", reaches=("context_window_policy",), vocabulary=declared)
+    assert "context_window_policy" in m.reaches
 
 
 def test_a_tools_behaviour_is_structurally_unobservable_and_that_is_the_finding():
     """Its schema is in the request and its behaviour is not, so a change behind an unchanged schema is invisible from
     the bytes we hold."""
-    assert hn.BEST_AVAILABLE_SOURCING["tool_extension"] == "not_observable"
-    assert hn.BEST_AVAILABLE_SOURCING["tool_schemas"] == "in_the_request"
+    assert hn.DEFAULT_BEST_AVAILABLE_SOURCING["tool_extension"] == "not_observable"
+    assert hn.DEFAULT_BEST_AVAILABLE_SOURCING["tool_schemas"] == "in_the_request"
     with pytest.raises(hn.Unidentified, match="invisible from the bytes"):
         part(kind="tool_extension", sourcing="in_the_request", label="", digest="a" * 64)
 
@@ -367,8 +418,8 @@ def call(tool="search", prefix="s", args="q", response="r1", credentials_class="
 def test_the_function_and_the_exercised_inputs_are_different_objects():
     """One classification was covering two. The function is unobservable; its restriction to the inputs actually
     exercised is bytes the run itself produced."""
-    assert hn.BEST_AVAILABLE_SOURCING["tool_extension"] == "not_observable"
-    assert hn.BEST_AVAILABLE_SOURCING["tool_trace"] == "in_the_request"
+    assert hn.DEFAULT_BEST_AVAILABLE_SOURCING["tool_extension"] == "not_observable"
+    assert hn.DEFAULT_BEST_AVAILABLE_SOURCING["tool_trace"] == "in_the_request"
 
 
 def test_the_trace_may_never_key_an_identity_even_though_we_hold_its_bytes():

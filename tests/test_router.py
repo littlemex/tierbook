@@ -15,9 +15,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from dataclasses import replace  # noqa: E402
+
 from tierbook.evidence import INCORRECT, SOLVED, EvidenceError  # noqa: E402
 from tierbook.outcomes import Cell, OutcomeTable  # noqa: E402
-from tierbook.router import Router, audit_broken_keys, certify_pool  # noqa: E402
+from tierbook.router import Decision, Router, audit_broken_keys, certify_pool, default_stop_rule  # noqa: E402
 
 
 def _table(n: int = 400, *, cheap_ok=lambda i: i % 4 != 0, dear_ok=lambda i: i % 40 != 0,
@@ -136,6 +138,33 @@ def test_escalation_costs_exactly_one_more_stage():
     assert out.answer == "E"
     assert out.stages == 2
     assert not out.abandoned
+
+
+def test_a_router_that_declares_no_stop_rule_gets_the_default_and_todays_decisions():
+    """TB-034's fix: injectable, not a claim that the shape changed. A caller who declares nothing must see exactly
+    what `decide` returned before this change -- unanimity stops, disagreement escalates through `ladder`."""
+    t = _table()
+    r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
+    assert r.stop_rule is default_stop_rule
+    members = r.certificate.members
+    assert r.decide({m: "B" for m in members}) == default_stop_rule(r.certificate, r.ladder, {m: "B" for m in members})
+
+
+def test_a_declared_stop_rule_is_carried_and_used_in_place_of_the_default():
+    """A different study's rule -- here, one that never escalates and always abandons with a fixed fallback -- must be
+    expressible without editing `Router.decide` or `default_stop_rule`."""
+    def always_abandon(certificate, ladder, answers):
+        return Decision("abandon", fallback="Z", reason="a different study's rule")
+
+    t = _table()
+    r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
+    members = r.certificate.members
+    custom = replace(r, stop_rule=always_abandon)
+    # The default would answer on unanimity; the declared rule overrides that entirely.
+    d = custom.decide({m: "B" for m in members})
+    assert d.action == "abandon" and d.fallback == "Z" and d.reason == "a different study's rule"
+    # The router this was copied from is untouched.
+    assert r.decide({m: "B" for m in members}).action == "answer"
 
 
 def test_everything_silent_abandons_rather_than_guessing():

@@ -49,8 +49,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import combinations
+from typing import Callable
 
-from tierbook.evidence import SUBJECTS, UNOBSERVED, EvidenceError
+from tierbook.evidence import DEFAULT_SUBJECTS, UNOBSERVED, EvidenceError
 from tierbook.outcomes import Cell, OutcomeTable
 
 
@@ -130,11 +131,23 @@ def _cell(table: OutcomeTable, item: str, tier: str) -> Cell:
     return table.cells.get(item, {}).get(tier) or Cell(UNOBSERVED, None)
 
 
+#: The signature every stop rule `evaluate` accepts must have: given the matrix, the member set and the items to
+#: decide over, return `(stopped, escalated)`. `agreement` below is the DEFAULT this project measured, not the only
+#: shape the signature can hold.
+StopRule = Callable[[OutcomeTable, tuple[str, ...], list[str]], tuple[list[str], list[str]]]
+
+
 def agreement(table: OutcomeTable, members: tuple[str, ...], items: list[str]) -> tuple[list[str], list[str]]:
     """Split `items` into the ones the members agree on and the ones they do not.
 
     Agreement requires every member to have produced an answer AND all answers to be identical. See
     the module docstring for why an absent answer escalates rather than being filled in.
+
+    **The default `evaluate` runs, not the only rule the signature can hold.** The module docstring traces this shape
+    to a fold-derived finding ("Escalation does not branch") and `router.Certificate.rules_are_fold_derived=True`
+    disclosed it without making it injectable -- disclosure and injectability are different things, and TB-034 named
+    the gap. `evaluate`'s `stop_rule` parameter is where a different study's stop rule (escalate on a signal instead
+    of on disagreement, stop on a majority rather than on unanimity) can be expressed without editing this function.
     """
     stopped, escalated = [], []
     for item in items:
@@ -169,15 +182,21 @@ def joint_failure(table: OutcomeTable, a: str, b: str, items: list[str]) -> floa
 
 
 def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
-             prices: dict[str, float] | None = None, items: list[str] | None = None) -> QuorumPolicy:
+             prices: dict[str, float] | None = None, items: list[str] | None = None,
+             stop_rule: StopRule = agreement) -> QuorumPolicy:
     """Price and score one policy on the matrix.
 
     `prices` is a per-item cost per tier, overriding the matrix's own recorded cost. That override is
     the whole point of the separation: re-pricing a policy must not require re-running it, so a new
     rate card is an argument here and not a new measurement.
+
+    `stop_rule` decides which items stop and which escalate. Defaults to `agreement` -- unanimity among
+    `members` -- which is the shape this module's own docstring traces to one fold's measurement (TB-034).
+    **Declared here rather than fixed in the function**, so a study whose stop rule is not unanimity (a
+    majority, a signal-gated escalation) can be scored on the same frontier without editing this function.
     """
     subject = list(items if items is not None else table.items)
-    stopped, escalated = agreement(table, members, subject)
+    stopped, escalated = stop_rule(table, members, subject)
 
     def cost_of(item: str, tier: str) -> float | None:
         if prices is not None:
@@ -226,7 +245,8 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
 
 def enumerate_policies(table: OutcomeTable, *, candidates: list[str], escalate_to: list[str],
                        max_members: int = 4, prices: dict[str, float] | None = None,
-                       items: list[str] | None = None, min_stopped: int = 30) -> list[QuorumPolicy]:
+                       items: list[str] | None = None, min_stopped: int = 30,
+                       stop_rule: StopRule = agreement) -> list[QuorumPolicy]:
     """Every policy worth pricing, with the unreadable ones dropped.
 
     A member is never also the escalation tier: escalating to a candidate that already answered and
@@ -235,6 +255,8 @@ def enumerate_policies(table: OutcomeTable, *, candidates: list[str], escalate_t
     `min_stopped` drops policies whose stop set is too small for `accuracy_when_stopped` to mean
     anything. A one-member policy stops on everything so it is never dropped by this, which is
     correct -- its conditional accuracy is just its accuracy.
+
+    `stop_rule` is passed through to `evaluate` unchanged; see its docstring.
     """
     out: list[QuorumPolicy] = []
     for size in range(1, max_members + 1):
@@ -242,7 +264,7 @@ def enumerate_policies(table: OutcomeTable, *, candidates: list[str], escalate_t
             for tier in escalate_to:
                 if tier in members:
                     continue
-                policy = evaluate(table, members, tier, prices=prices, items=items)
+                policy = evaluate(table, members, tier, prices=prices, items=items, stop_rule=stop_rule)
                 if policy.stopped < min_stopped and policy.stopped != policy.items:
                     continue
                 out.append(policy)
@@ -253,7 +275,8 @@ def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
                     signal: dict[str, float], about: str, threshold: float,
                     probe_usd: float = 0.0,
                     prices: dict[str, float] | None = None,
-                    items: list[str] | None = None) -> QuorumPolicy:
+                    items: list[str] | None = None,
+                    subjects: tuple[str, ...] = ()) -> QuorumPolicy:
     """One candidate answers; a per-item confidence signal decides whether to escalate.
 
     This is the third mechanism, and it exists here rather than in its own module so that all three
@@ -278,15 +301,23 @@ def evaluate_signal(table: OutcomeTable, member: str, escalate_to: str, *,
     the signal flags. `threshold` escalates when `signal[item] >= threshold`, so the signal is an
     uncertainty (higher means less sure); `probe_usd` is what reading it costs per item, which is not
     zero when the signal comes from an extra call.
+
+    `subjects` is the vocabulary `about` is checked against. **Declared here rather than fixed in the module**, so a
+    study whose signal is about something `evidence.DEFAULT_SUBJECTS` does not name can still build a policy. Empty
+    falls back to `DEFAULT_SUBJECTS`, which keeps every existing caller working while making the default visibly a
+    default (the same move F141 made for `decide.STATE_VARS`, applied to the one closed vocabulary this module still
+    checked membership against after F140).
     """
-    if about not in SUBJECTS:
+    vocabulary = subjects or DEFAULT_SUBJECTS
+    if about not in vocabulary:
         raise EvidenceError(
-            f"about={about!r} is not one of {SUBJECTS}. The signal has to say what it is about, because a policy built "
-            f"on one thing and reported as built on another is the failure this argument exists to prevent. What it is "
-            f"NOT is a judgement about which of them is worth escalating on: this function used to refuse everything "
-            f"except competence and difficulty, on the strength of one corpus, which made a study measuring topic to "
-            f"predict competence unable to say so. Whether the signal earns its place is decided by what is measured "
-            f"about it, not by which name it carries")
+            f"about={about!r} is not one of {vocabulary}. The signal has to say what it is about, because a policy "
+            f"built on one thing and reported as built on another is the failure this argument exists to prevent. "
+            f"What it is NOT is a judgement about which of them is worth escalating on: this function used to refuse "
+            f"everything except competence and difficulty, on the strength of one corpus, which made a study "
+            f"measuring topic to predict competence unable to say so. Whether the signal earns its place is decided "
+            f"by what is measured about it, not by which name it carries. Pass `subjects` if this signal is about "
+            f"something {DEFAULT_SUBJECTS} does not name")
     item_ids = list(items if items is not None else table.items)
 
     def cost_of(item: str, tier: str) -> float | None:
@@ -338,7 +369,8 @@ def enumerate_signal_policies(table: OutcomeTable, *, candidates: list[str], esc
                               quantiles: tuple[float, ...] = (
                                   0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
                               probe_usd: float = 0.0, prices: dict[str, float] | None = None,
-                              items: list[str] | None = None) -> list[QuorumPolicy]:
+                              items: list[str] | None = None,
+                              subjects: tuple[str, ...] = ()) -> list[QuorumPolicy]:
     """Threshold policies at quantiles of the signal, so the sweep does not depend on its units.
 
     Quantiles rather than raw values because a signal's scale is arbitrary -- an entropy, a margin and
@@ -358,7 +390,7 @@ def enumerate_signal_policies(table: OutcomeTable, *, candidates: list[str], esc
                 if tier == member:
                     continue
                 out.append(evaluate_signal(table, member, tier, signal=signal, about=about, threshold=thr,
-                                           probe_usd=probe_usd, prices=prices, items=items))
+                                           probe_usd=probe_usd, prices=prices, items=items, subjects=subjects))
     return out
 
 

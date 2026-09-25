@@ -223,10 +223,20 @@ class FamilyDeclaration:
 
 @dataclass(frozen=True)
 class Config:
+    """No `throughput_per_family` field, on purpose. One lived here and let a JSON literal --
+    `{"throughput_per_family": {"f": 1000000}}` -- become a valid `Config` with a figure nobody measured
+    (TB-044): SCOPE section 5 names "seats, KV capacity and saturation throughput" as things this project
+    derives continuously, and "a constant that observation could supply is a derived quantity regardless of
+    where it is written; putting it in a configuration file does not cure the defect." Putting the number in
+    a file did not make it derived, and `load_config` now refuses the key rather than silently accepting or
+    ignoring it. A per-invocation override -- measured moments before the compile that uses it -- is still
+    available through `tierbook compile --throughput-per-family`; what is gone is the version that sits in a
+    committed file, unattributed, until somebody remembers to remeasure it.
+    """
+
     candidates: dict[str, Candidate]
     families: dict[str, FamilyDeclaration]      # family -> its declaration
     objective: Objective
-    throughput_per_family: dict[str, float] = field(default_factory=dict)
     source: str = ""
 
     def reference_for(self, family: str) -> str:
@@ -347,6 +357,18 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
     problems: list[str] = []
     if raw_format != CONFIG_FORMAT:
         problems.append(f"{p}: config_format must be {CONFIG_FORMAT}, found {raw_format!r}")
+    if raw.get("throughput_per_family"):
+        # TB-044: this key let a JSON literal stand in for a measurement. Refused rather than silently
+        # ignored or accepted, so a config carried over from before this change fails to load instead of
+        # having its declared figures quietly dropped -- `Config` has no field to drop them into any more.
+        raise ConfigError(
+            f"{p}: throughput_per_family is refused here. A per-family realised rate is exactly what "
+            "SCOPE section 5 lists as 'derived continuously' -- seats, KV capacity and saturation "
+            "throughput -- and 'a constant that observation could supply is a derived quantity regardless "
+            "of where it is written; putting it in a configuration file does not cure the defect.' Pass "
+            "the measured figure at compile time with `--throughput-per-family FAMILY=TASKS_PER_HOUR` "
+            "instead of committing it here, where nothing re-checks it against a fresh measurement."
+        )
     observed = _record_schema_keys(schema)
 
     candidates: dict[str, Candidate] = {}
@@ -571,7 +593,6 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
         )
     return Config(
         candidates=candidates, families=families, objective=objective,
-        throughput_per_family={k: float(v) for k, v in (raw.get("throughput_per_family") or {}).items()},
         source=str(p),
     )
 

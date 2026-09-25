@@ -344,6 +344,33 @@ def test_a_valid_file_still_loads_with_no_error():
     assert cfg.families["family-two"].floor == 0.9
 
 
+# --- TB-044: throughput_per_family is refused rather than accepted as a raw config literal ------------
+
+def test_config_carries_no_throughput_per_family_field():
+    """The defect this closes was structural, not a missing check: `Config` had a field for a raw literal to
+    land in. A caller who declares nothing beyond today's shape must see the same `Config` this always was,
+    minus that field."""
+    from tierbook.config import Config
+    assert "throughput_per_family" not in {f.name for f in __import__("dataclasses").fields(Config)}
+
+
+def test_a_config_declaring_throughput_per_family_is_refused_rather_than_silently_accepted():
+    """TB-044: `{"throughput_per_family": {"f": 1000000}}` used to become a valid `Config` with a figure
+    nobody measured. It must now fail to load, naming the key, rather than loading with the figure dropped
+    (dropping it silently would be a second way to hide the same defect) or loading with it kept."""
+    body = {
+        "config_format": CONFIG_FORMAT,
+        "candidates": {"ref": _candidate("ref")},
+        "families": {"only-family": _full_family("ref")},
+        "objective": {"objective": "cost", "constraints": {"non_inferiority": {"margin": 0.15}}},
+        "throughput_per_family": {"only-family": 1000000},
+    }
+    with tempfile.TemporaryDirectory() as d:
+        p = _write(Path(d), body)
+        with pytest.raises(ConfigError, match="throughput_per_family is refused"):
+            load_config(p)
+
+
 def test_every_ci_checkout_that_runs_the_suite_fetches_the_history_it_needs():
     """The omission that broke CI, made into a failure here rather than there.
 

@@ -43,9 +43,11 @@ from dataclasses import dataclass
 from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, DIGEST_BOUNDARIES, HARNESS_SOURCING,
                               IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING, EvidenceError)
 
-#: The parts of a harness this package can name. Closed, because a part nobody named is a part that changes without the
-#: identity changing, and that is the whole defect.
-HARNESS_PARTS = (
+#: The parts of a harness this package can name, as a DEFAULT rather than a gate (TB-045). A part nobody named is a
+#: part that changes without the identity changing, and that is still the whole defect this vocabulary closes -- what
+#: changed is who names the parts. `PartVocabulary`, below, is what a caller declares to name a different set; these
+#: ten are what perigraph's own spec names today, offered so a caller with the same needs does not retype them.
+DEFAULT_HARNESS_PARTS = (
     "instruction",          # the system prompt / the instruction text
     "tool_schemas",         # what tools were offered, and their declared shapes
     # What a tool actually does, split in two because one classification was covering two different objects. The
@@ -71,13 +73,13 @@ HARNESS_PARTS = (
     "context_partitioning",
 )
 
-#: For each part, the BEST mode that can reach it, as a total classification. Total on purpose: adding a part without
-#: deciding how it is observed breaks a test rather than defaulting the new part to observable.
+#: For each of the default parts, the BEST mode that can reach it, as a total classification. Total on purpose: adding
+#: a part without deciding how it is observed breaks a test rather than defaulting the new part to observable.
 #:
 #: `tool_extension` is the entry that forced this table to exist. Its schema is in the request and its behaviour is not,
 #: so a change to what a tool does behind an unchanged schema is invisible from the request -- and a record that did not
 #: say so would group two different harnesses under one identity.
-BEST_AVAILABLE_SOURCING = {
+DEFAULT_BEST_AVAILABLE_SOURCING = {
     "instruction": "in_the_request",
     "tool_schemas": "in_the_request",
     "tool_extension": "not_observable",
@@ -107,6 +109,44 @@ class Unidentified(EvidenceError):
 
 
 @dataclass(frozen=True)
+class PartVocabulary:
+    """Which harness parts a deployment can name, and the best sourcing mode for each -- a DECLARATION this package
+    receives and checks, never a vocabulary it owns (TB-045).
+
+    `DEFAULT_HARNESS_PARTS`/`DEFAULT_BEST_AVAILABLE_SOURCING` used to be the only ten parts a `Part`, `Absence`,
+    `Harness` or `Manifest` could name, so a new harness construction (a self-hosted loop that retains a part these
+    ten do not cover) could not be represented without editing this module -- the same shape of defect F140/F141 fixed
+    for `evidence.SUBJECTS`/`decide.STATE_VARS`, found here by the same sweep. What this package still owns is the
+    CHECK: `best_sourcing` must be total over `parts` (every part has exactly one best mode) and name nothing else --
+    that totality is a structural property of a manifest, not a judgement about which parts are worth having, and
+    perigraph is the corpus that gets to say what the parts ARE.
+    """
+
+    parts: tuple[str, ...]
+    best_sourcing: dict[str, str]
+
+    def __post_init__(self) -> None:
+        if not self.parts:
+            raise Unidentified("a vocabulary with no parts names nothing a harness could be built from")
+        if len(set(self.parts)) != len(self.parts):
+            raise Unidentified(f"a part is named twice in {self.parts}")
+        missing = sorted(set(self.parts) - set(self.best_sourcing))
+        if missing:
+            raise Unidentified(
+                f"{missing} have no best_sourcing entry. Total on purpose: a part without a decided sourcing mode "
+                f"would default to observable rather than fail a test the moment it is used")
+        extra = sorted(set(self.best_sourcing) - set(self.parts))
+        if extra:
+            raise Unidentified(f"best_sourcing names {extra}, which {self.parts} does not declare as a part")
+
+
+#: The vocabulary a caller gets by declaring nothing: today's ten parts and today's sourcing table. Every existing
+#: caller keeps working exactly as before; a caller whose harness construction this default does not cover declares
+#: its own `PartVocabulary` instead of editing this module.
+DEFAULT_PART_VOCABULARY = PartVocabulary(parts=DEFAULT_HARNESS_PARTS, best_sourcing=DEFAULT_BEST_AVAILABLE_SOURCING)
+
+
+@dataclass(frozen=True)
 class Part:
     """One component of the harness, with how we know it and what that permits.
 
@@ -129,15 +169,19 @@ class Part:
     #: How long before the request this fact was read, for a pulled fact. Required there and refused elsewhere: a fetched
     #: copy describes a different moment than the request, and a lag nobody wrote down is a lag nobody can bound.
     read_lag_seconds: float | None = None
+    #: Which parts this `kind` is checked against, and each one's best sourcing mode. Declared here rather than fixed
+    #: in the module (TB-045); empty callers get `DEFAULT_PART_VOCABULARY`, so every existing caller works unchanged.
+    vocabulary: PartVocabulary = DEFAULT_PART_VOCABULARY
 
     def __post_init__(self) -> None:
-        if self.kind not in HARNESS_PARTS:
+        if self.kind not in self.vocabulary.parts:
             raise Unidentified(
-                f"{self.kind!r} is not one of {HARNESS_PARTS}. A part nobody named is a part that can change without "
-                f"the identity changing, which is the defect this vocabulary exists to close")
+                f"{self.kind!r} is not one of {self.vocabulary.parts}. A part nobody named is a part that can change "
+                f"without the identity changing, which is the defect this vocabulary exists to close. Declare a "
+                f"`vocabulary` if this harness has a part {DEFAULT_HARNESS_PARTS} does not name")
         if self.sourcing not in HARNESS_SOURCING:
             raise Unidentified(f"{self.sourcing!r} is not one of {HARNESS_SOURCING}")
-        best = BEST_AVAILABLE_SOURCING[self.kind]
+        best = self.vocabulary.best_sourcing[self.kind]
         if self.sourcing == "in_the_request" and best != "in_the_request":
             raise Unidentified(
                 f"{self.kind!r} is claimed as being in the request, and the best any mode can do for it is {best!r}. "
@@ -216,6 +260,9 @@ class Harness:
     """
 
     parts: tuple[Part, ...]
+    #: Which parts this harness's `missing` is read against. See `Part.vocabulary` (TB-045); empty callers get
+    #: `DEFAULT_PART_VOCABULARY`, so every existing caller works unchanged.
+    vocabulary: PartVocabulary = DEFAULT_PART_VOCABULARY
 
     def __post_init__(self) -> None:
         if not self.parts:
@@ -223,6 +270,12 @@ class Harness:
         kinds = [p.kind for p in self.parts]
         if len(set(kinds)) != len(kinds):
             raise Unidentified(f"two parts share a kind in {sorted(kinds)}, so nothing says which one applied")
+        mismatched = sorted(p.kind for p in self.parts if p.vocabulary != self.vocabulary)
+        if mismatched:
+            raise Unidentified(
+                f"{mismatched} were built against a different vocabulary than this harness declares. A harness and "
+                f"the parts inside it have to agree on what a part IS, or `missing` and a part's own admissibility "
+                f"check would be reading two different vocabularies for the same record")
 
     @property
     def has_identity(self) -> bool:
@@ -258,7 +311,7 @@ class Harness:
     @property
     def missing(self) -> tuple[str, ...]:
         """Which parts of a harness this record says nothing at all about."""
-        return tuple(k for k in HARNESS_PARTS if k not in {p.kind for p in self.parts})
+        return tuple(k for k in self.vocabulary.parts if k not in {p.kind for p in self.parts})
 
     def comparable_with(self, other: Harness) -> bool:
         """Whether two runs measured what is otherwise the same thing.
@@ -323,16 +376,20 @@ class Absence:
     #: What the collector was doing when it failed, for a `collector` absence. Required there, because a measurement
     #: failure nobody described is one nobody can fix, and refused elsewhere: the sender's silence has no detail we hold.
     detail: str = ""
+    #: Which parts this `kind` is checked against. See `Part.vocabulary` (TB-045); empty callers get
+    #: `DEFAULT_PART_VOCABULARY`, so every existing caller works unchanged.
+    vocabulary: PartVocabulary = DEFAULT_PART_VOCABULARY
 
     def __post_init__(self) -> None:
-        if self.kind not in HARNESS_PARTS:
+        if self.kind not in self.vocabulary.parts:
             raise Unidentified(
-                f"{self.kind!r} is not one of {HARNESS_PARTS}. An absence of something the vocabulary does not name is "
-                f"not a hole in the record; it is a hole in the vocabulary, and counting it as the first would report a "
-                f"record as complete about a part nobody can ask for")
+                f"{self.kind!r} is not one of {self.vocabulary.parts}. An absence of something the vocabulary does not "
+                f"name is not a hole in the record; it is a hole in the vocabulary, and counting it as the first would "
+                f"report a record as complete about a part nobody can ask for. Declare a `vocabulary` if this harness "
+                f"has a part {DEFAULT_HARNESS_PARTS} does not name")
         if self.reason not in ABSENCE_REASONS:
             raise Unidentified(f"{self.reason!r} is not one of {ABSENCE_REASONS}")
-        best = BEST_AVAILABLE_SOURCING[self.kind]
+        best = self.vocabulary.best_sourcing[self.kind]
         if self.reason == "not_observable" and best != "not_observable":
             raise Unidentified(
                 f"{self.kind!r} is absent as {self.reason!r} and the best any mode can do for it is {best!r}, so "
@@ -377,18 +434,21 @@ class Manifest:
     collector: str
     version: str
     reaches: tuple[str, ...]
+    #: Which parts `reaches` is checked against, and `Collection.unaccounted`'s reference set. See `Part.vocabulary`
+    #: (TB-045); empty callers get `DEFAULT_PART_VOCABULARY`, so every existing caller works unchanged.
+    vocabulary: PartVocabulary = DEFAULT_PART_VOCABULARY
 
     def __post_init__(self) -> None:
         if not self.collector or not self.version:
             raise Unidentified(
                 "a manifest without a collector and a version cannot be compared against another run's, so a part that "
                 "stopped being readable between two versions is a change nobody can attribute")
-        unknown = sorted(set(self.reaches) - set(HARNESS_PARTS))
+        unknown = sorted(set(self.reaches) - set(self.vocabulary.parts))
         if unknown:
-            raise Unidentified(f"the manifest claims to reach {unknown}, which are not parts in {HARNESS_PARTS}")
+            raise Unidentified(f"the manifest claims to reach {unknown}, which are not parts in {self.vocabulary.parts}")
         if len(set(self.reaches)) != len(self.reaches):
             raise Unidentified(f"the manifest lists a part twice in {sorted(self.reaches)}")
-        impossible = sorted(k for k in self.reaches if BEST_AVAILABLE_SOURCING[k] == "not_observable")
+        impossible = sorted(k for k in self.reaches if self.vocabulary.best_sourcing[k] == "not_observable")
         if impossible:
             raise Unidentified(
                 f"the manifest claims to reach {impossible}, which no mode reaches. A collector that claims an "
@@ -432,6 +492,10 @@ class Collection:
             raise Unidentified(
                 f"{both} are recorded as held and as absent at once, so this record answers 'was this collected' two "
                 f"ways and a consumer reads whichever it happened to check first")
+        if self.harness is not None and self.harness.vocabulary != self.manifest.vocabulary:
+            raise Unidentified(
+                "the harness and the manifest declare different vocabularies, so `unaccounted` (read against the "
+                "manifest's) and the harness's own `missing` would disagree about which parts exist for the same run")
 
     @property
     def unaccounted(self) -> tuple[str, ...]:
@@ -442,7 +506,7 @@ class Collection:
         record of a bare harness and is a record of a collector nobody finished.
         """
         named = ({p.kind for p in self.harness.parts} if self.harness else set()) | {a.kind for a in self.absences}
-        return tuple(k for k in HARNESS_PARTS if k not in named)
+        return tuple(k for k in self.manifest.vocabulary.parts if k not in named)
 
     @property
     def contradictions(self) -> tuple[str, ...]:

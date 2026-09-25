@@ -202,7 +202,10 @@ def cmd_compile(args) -> int:
         floors = {}
         staleness_limits = {}
         exploration_rates = {}
-    tp = dict(cfg.throughput_per_family) if cfg else {}
+    # `Config` carries no `throughput_per_family` (TB-044): a per-family realised rate is a measurement, not a
+    # policy input, so the only way to supply one is at this compile invocation -- measured moments before it
+    # is used -- rather than from a committed file nothing re-checks against a fresh measurement.
+    tp = {}
     tp.update((k, float(v)) for k, v in (p.split("=", 1) for p in args.throughput_per_family or []))
     o = cfg.objective if cfg else None
     table = compile_to_file(tiers, families, args.out, margin=args.margin, alpha=args.alpha,
@@ -1130,9 +1133,11 @@ def cmd_admissible_quantities(args) -> int:
         print(f"refused: --elicitation-template could not be read ({e})", file=sys.stderr)
         return 1
     except ValueError as e:
-        # PASSES or FRESH_DAYS not a number. Caught for the same reason the field count is: the operator gets a
-        # sentence naming what to fix, because argparse cannot check inside a positional string.
-        print(f"refused: --quantity needs a whole number of PASSES and a numeric FRESH_DAYS ({e})", file=sys.stderr)
+        # PASSES, PRICE_PER_PASS_GPU_SECONDS or FRESH_DAYS not a number. Caught for the same reason the field count
+        # is: the operator gets a sentence naming what to fix, because argparse cannot check inside a positional
+        # string.
+        print(f"refused: --quantity needs a whole number of PASSES and numeric PRICE_PER_PASS_GPU_SECONDS and "
+              f"FRESH_DAYS ({e})", file=sys.stderr)
         return 1
     by_name = {q.name: q for q in declared}
     stratified = dict(_stratified_from_spec(spec, by_name) for spec in args.stratified)
@@ -1170,16 +1175,30 @@ def cmd_admissible_quantities(args) -> int:
 
 
 def _quantity_from_spec(spec: str, *, served, elicitation, performance=None):
-    """NAME:KIND:AVAILABILITY:REGISTER:SUBJECT:PASSES:FRESH_DAYS:READOUT_VERSION.
+    """NAME:KIND:AVAILABILITY:REGISTER:SUBJECT:PASSES:PRICE_PER_PASS_GPU_SECONDS:FRESH_DAYS:READOUT_VERSION.
 
     The digest and the elicitation are not in the spec on purpose: they are what the SERVED model and the declared
     template say, so letting a manifest line assert them would let it assert a match instead of being checked for one.
+
+    `PRICE_PER_PASS_GPU_SECONDS` is required and has no default. This door used to fix every pass at 0.109 GPU-seconds
+    -- the prefill this project measured on its own box (docs/EXPERIMENT-FEEDBACK.md, F13) -- and record that number
+    for a quantity registered against any GPU, any model, on the strength of nobody's measurement of THIS one
+    (TB-026). A pass measured on one box is not a pass measured on another, so there is no environment-independent
+    number to default to; the caller states what they measured, or the door refuses rather than guessing on their
+    behalf.
     """
-    name, kind, availability, register, subject, passes, fresh, version = _fields(
-        spec, ("name", "kind", "availability", "register", "subject", "passes", "fresh_days", "readout_version"),
+    name, kind, availability, register, subject, passes, price_per_pass, fresh, version = _fields(
+        spec, ("name", "kind", "availability", "register", "subject", "passes",
+               "price_per_pass_gpu_seconds", "fresh_days", "readout_version"),
         option="--quantity")
+    if not price_per_pass.strip():
+        raise EvidenceError(
+            f"--quantity {spec!r} has an empty PRICE_PER_PASS_GPU_SECONDS. There is no default: 0.109 GPU-seconds was "
+            f"this project's own box, hardcoded once and then recorded for every environment regardless of what it "
+            f"actually measured (TB-026). State what a pass costs on the box this quantity was measured against.")
     price = sp_mod.SignalPrice(passes=int(passes),
-                               per_pass=sp_mod.Spend(prefill=0.109, generation=0.0, unit="gpu_seconds"))
+                               per_pass=sp_mod.Spend(prefill=float(price_per_pass), generation=0.0,
+                                                     unit="gpu_seconds"))
     return qt.Quantity(name=name, kind=kind, availability=availability, register=register, subject=subject,
                        price=price,
                        measured_on=served, elicitation=elicitation,
@@ -1342,7 +1361,11 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--margin", type=float, default=None,
                    help="non-inferiority margin in solve-rate points, fixed BEFORE looking at outcomes")
     c.add_argument("--alpha", type=float, default=0.05)
-    c.add_argument("--throughput-per-family", action="append", metavar="FAMILY=TASKS_PER_HOUR")
+    c.add_argument("--throughput-per-family", action="append", metavar="FAMILY=TASKS_PER_HOUR",
+                   help="a realised rate you measured for this family, moments before this compile. Not a "
+                        "config key any more (TB-044): a rate that observation can supply is a derived "
+                        "quantity wherever it is written, and a committed file never re-checks it against a "
+                        "fresh measurement")
     c.add_argument("--max-age-days", type=int, default=90)
     c.add_argument("--min-items", type=int, default=100,
                    help="warn below this many measured items per family; 20 produced a wrong answer here")
@@ -1585,9 +1608,12 @@ def main(argv: list[str] | None = None) -> int:
     aq.add_argument("--elicitation-template", required=True,
                     help="a file holding the prompt template; its text is the key, not its name")
     aq.add_argument("--quantity", action="append", default=[], required=True,
-                    metavar="NAME:KIND:AVAILABILITY:REGISTER:SUBJECT:PASSES:FRESH_DAYS:READOUT_VERSION",
+                    metavar="NAME:KIND:AVAILABILITY:REGISTER:SUBJECT:PASSES:PRICE_PER_PASS_GPU_SECONDS:"
+                            "FRESH_DAYS:READOUT_VERSION",
                     help="a declared quantity, repeatable. The digest and the condition are NOT in the spec: they come "
-                         "from --served and --elicitation-template, so a manifest line cannot assert a match")
+                         "from --served and --elicitation-template, so a manifest line cannot assert a match. "
+                         "PRICE_PER_PASS_GPU_SECONDS has no default -- state what a pass measured on this box, not "
+                         "this project's own 0.109 GPU-seconds (TB-026)")
     aq.add_argument("--price", type=float, default=None,
                     help="a price of accuracy at which to report each quantity's measured value and the baselines it "
                          "loses to. Must be one the curve was measured at: a value between two measured prices would "

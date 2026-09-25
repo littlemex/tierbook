@@ -202,9 +202,9 @@ def _run(tmp_path, capsys, quantities):
 
 
 def test_the_door_reports_which_are_usable(tmp_path, capsys):
-    code, text = _run(tmp_path, capsys, ["prefill_entropy:scalar:after_prefill:passive_observation:own_competence:1:30:r1",
-                                         "jlens:vector:during_compute:active_probe:own_competence:2:30:r1",
-                                         "answer_length:scalar:after_generation:passive_observation:own_competence:1:30:r1"])
+    code, text = _run(tmp_path, capsys, ["prefill_entropy:scalar:after_prefill:passive_observation:own_competence:1:0.109:30:r1",
+                                         "jlens:vector:during_compute:active_probe:own_competence:2:0.109:30:r1",
+                                         "answer_length:scalar:after_generation:passive_observation:own_competence:1:0.109:30:r1"])
     assert code == 0
     assert "2 of 3 quantities are admissible" in text
     assert "not usable: answer_length" in text
@@ -213,21 +213,52 @@ def test_the_door_reports_which_are_usable(tmp_path, capsys):
 def test_the_door_exits_two_when_the_gate_has_nothing(tmp_path, capsys):
     """Nothing is malformed and the gate cannot decide, which is a different problem from a declaration that could not
     be read -- so a different exit code from the 1 that gets."""
-    code, text = _run(tmp_path, capsys, ["answer_length:scalar:after_generation:passive_observation:own_competence:1:30:r1"])
+    code, text = _run(tmp_path, capsys, ["answer_length:scalar:after_generation:passive_observation:own_competence:1:0.109:30:r1"])
     assert code == 2
     assert "0 of 1" in text
 
 
 @pytest.mark.parametrize("spec,expect", [
-    ("jlens:vector:during_compute:active_probe:own_competence:1:30:r1", "it is a passive observation"),
-    ("jlens:vector:layer_22:active_probe:own_competence:2:30:r1", "A layer number is not an availability"),
-    ("steer:vector:during_compute:control_action:own_competence:2:30:r1", "may not be registered as a control action"),
+    ("jlens:vector:during_compute:active_probe:own_competence:1:0.109:30:r1", "it is a passive observation"),
+    ("jlens:vector:layer_22:active_probe:own_competence:2:0.109:30:r1", "A layer number is not an availability"),
+    ("steer:vector:during_compute:control_action:own_competence:2:0.109:30:r1", "may not be registered as a control action"),
     ("short:spec", "NAME:KIND"),
 ])
 def test_the_door_refuses_a_bad_declaration_with_a_readable_sentence(tmp_path, capsys, spec, expect):
     code, text = _run(tmp_path, capsys, [spec])
     assert code == 1, text
     assert expect in text
+
+
+# --- TB-026: the per-pass price has no default -----------------------------------------------------------------------
+
+def test_a_spec_with_no_price_field_is_refused_naming_the_new_shape(tmp_path, capsys):
+    """The pre-TB-026 shape (8 fields, no price) must be refused rather than quietly priced at 0.109 GPU-seconds."""
+    code, text = _run(tmp_path, capsys,
+                      ["prefill_entropy:scalar:after_prefill:passive_observation:own_competence:1:30:r1"])
+    assert code == 1, text
+    assert "PRICE_PER_PASS_GPU_SECONDS" in text
+
+
+def test_an_empty_price_field_is_refused_rather_than_defaulted(tmp_path, capsys):
+    code, text = _run(tmp_path, capsys,
+                      ["prefill_entropy:scalar:after_prefill:passive_observation:own_competence:1::30:r1"])
+    assert code == 1, text
+    assert "no default" in text
+
+
+def test_a_declared_price_is_carried_rather_than_the_old_hardcoded_0_109():
+    """TB-026's fix: two quantities declaring two different measured prices must not both come out at 0.109."""
+    from tierbook.cli import _quantity_from_spec
+    q_cheap = _quantity_from_spec(
+        "a:scalar:after_prefill:passive_observation:own_competence:1:0.002:30:r1",
+        served=DIG, elicitation=TERSE)
+    q_dear = _quantity_from_spec(
+        "b:scalar:after_prefill:passive_observation:own_competence:1:0.109:30:r1",
+        served=DIG, elicitation=TERSE)
+    assert q_cheap.price.per_pass.prefill == 0.002
+    assert q_dear.price.per_pass.prefill == 0.109
+    assert q_cheap.price.per_pass.prefill != q_dear.price.per_pass.prefill
 
 
 # --- the curve, and the baselines it is answerable to -----------------------------------------------------------------
@@ -342,7 +373,7 @@ def _run_perf(tmp_path, capsys, extra):
     tmpl.write_text("Answer with one letter.")
     argv = ["admissible-quantities", "--served", str(served), "--elicitation-name", "terse",
             "--elicitation-template", str(tmpl),
-            "--quantity", "jlens:scalar:after_prefill:passive_observation:own_competence:1:30:r1", *extra]
+            "--quantity", "jlens:scalar:after_prefill:passive_observation:own_competence:1:0.109:30:r1", *extra]
     code = cli.main(argv)
     cap = capsys.readouterr()
     return code, cap.out + cap.err
@@ -514,9 +545,9 @@ def _run_strat(tmp_path, capsys, stratified):
     tmpl.write_text("Answer with one letter.")
     code = cli.main(["admissible-quantities", "--served", str(served), "--elicitation-name", "terse",
                      "--elicitation-template", str(tmpl),
-                     "--quantity", "jlens:scalar:after_prefill:passive_observation:own_competence:1:30:r1",
-                     "--quantity", "settling_depth:scalar:after_generation:passive_observation:own_competence:1:30:r1",
-                     "--quantity", "entropy:scalar:after_prefill:passive_observation:own_competence:1:30:r1",
+                     "--quantity", "jlens:scalar:after_prefill:passive_observation:own_competence:1:0.109:30:r1",
+                     "--quantity", "settling_depth:scalar:after_generation:passive_observation:own_competence:1:0.109:30:r1",
+                     "--quantity", "entropy:scalar:after_prefill:passive_observation:own_competence:1:0.109:30:r1",
                      "--stratified", stratified])
     cap = capsys.readouterr()
     return code, cap.out + cap.err
@@ -627,7 +658,18 @@ def test_there_is_no_list_of_privileged_subjects_anywhere():
     assert not hasattr(qt, "ESCALATION_SUBJECTS")
     from tierbook import evidence
     assert not hasattr(evidence, "ESCALATION_SUBJECTS")
-    assert "own_competence" in qt.SUBJECTS and "topic" in qt.SUBJECTS
+    assert "own_competence" in qt.DEFAULT_SUBJECTS and "topic" in qt.DEFAULT_SUBJECTS
+
+
+def test_the_subject_vocabulary_is_declarable_and_the_default_reproduces_todays_behaviour():
+    """F141's move applied to the one closed vocabulary evidence.py kept: a caller who declares nothing gets exactly
+    today's four subjects, and a caller who declares more can register a `Quantity` about something new."""
+    assert q().subjects == qt.DEFAULT_SUBJECTS
+    with pytest.raises(qt.Inadmissible, match="is not one of"):
+        q(subject="latency_bucket")
+    declared = q(subject="latency_bucket", declared_subjects=("latency_bucket", *qt.DEFAULT_SUBJECTS))
+    assert declared.subject == "latency_bucket"
+    assert declared.subjects == ("latency_bucket", *qt.DEFAULT_SUBJECTS)
 
 
 def test_the_printed_form_says_what_it_is_about():
@@ -637,8 +679,8 @@ def test_the_printed_form_says_what_it_is_about():
 def test_the_door_admits_a_topic_quantity_like_any_other(tmp_path, capsys):
     """Rewritten with the rule it encoded. The door used to print "not usable: field_name" for a topic signal, which put
     the same hardcoded judgement in the operator's face."""
-    code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:30:r1",
-                                        "entropy:scalar:after_prefill:passive_observation:own_competence:1:30:r1"])
+    code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:0.109:30:r1",
+                                        "entropy:scalar:after_prefill:passive_observation:own_competence:1:0.109:30:r1"])
     assert code == 0
     assert "usable: field_name" in text
     assert "usable: entropy" in text
@@ -649,13 +691,13 @@ def test_the_door_exits_two_when_nothing_is_readable_in_time(tmp_path, capsys):
     """Rewritten with the rule it encoded: it used to exit 2 for a fleet of topic signals, which is the mechanism deciding
     that topic is the wrong thing. What still leaves a gate with nothing is a quantity it cannot read before the cost it
     exists to avoid has been paid -- a property of the record rather than a judgement about the subject."""
-    code, text = _run(tmp_path, capsys, ["late_score:scalar:after_generation:passive_observation:own_competence:1:30:r1"])
+    code, text = _run(tmp_path, capsys, ["late_score:scalar:after_generation:passive_observation:own_competence:1:0.109:30:r1"])
     assert code == 2
     assert "0 of 1" in text
 
 
 def test_the_door_admits_a_topic_signal_that_is_readable_in_time(tmp_path, capsys):
-    code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:30:r1"])
+    code, text = _run(tmp_path, capsys, ["field_name:scalar:after_prefill:passive_observation:topic:1:0.109:30:r1"])
     assert code == 0
     assert "1 of 1" in text
 
