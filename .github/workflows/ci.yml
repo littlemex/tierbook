@@ -98,3 +98,37 @@ jobs:
           grep -q "no load probe has been run" /tmp/exp.txt
           grep -q "tool-agent-user-retail" /tmp/exp.txt
           test ! -f /tmp/router.json
+
+  # The export to vLLM Semantic Router is only as good as the router's own loader reading it back. Locally those
+  # tests skip without a router checkout; here they run in strict mode against exactly the commits SR_TARGETS
+  # declares, so a change to a target cannot pass by never being read.
+  sr-readback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: check out the router at each declared commit
+        run: |
+          python3 - <<'PY' > /tmp/sr_targets.txt
+          import sys; sys.path.insert(0, "src")
+          from tierbook.export_vsr import SR_TARGETS
+          for name, t in SR_TARGETS.items():
+              print(name, t.sr_commit)
+          PY
+          git clone -q https://github.com/vllm-project/semantic-router.git /tmp/sr
+          while read -r name commit; do
+            git -C /tmp/sr worktree add -q "/tmp/sr-$name" "$commit"
+          done < /tmp/sr_targets.txt
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: /tmp/sr-main-867155c9/src/semantic-router/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - run: pytest -q tests/test_export_vsr_targets.py -rs
+        env:
+          TIERBOOK_REQUIRE_SR_READBACK: "1"
+          TIERBOOK_SR_CHECKOUT_V0_3_0: /tmp/sr-v0.3.0
+          TIERBOOK_SR_CHECKOUT_MAIN: /tmp/sr-main-867155c9

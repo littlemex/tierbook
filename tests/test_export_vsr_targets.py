@@ -64,9 +64,15 @@ def _go_available() -> bool:
     return shutil.which("go") is not None
 
 
-def _git(root: Path, *args: str) -> str:
+def _git(root: Path, *args: str) -> tuple[str, str | None]:
+    """(stdout, None), or ("", the reason) when git is missing or the command failed -- an empty stdout from a
+    failed `git status` would otherwise read as a clean checkout."""
+    if shutil.which("git") is None:
+        return "", "git not found on PATH; the read-back cannot check which commit the checkout is at"
     got = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=30)
-    return got.stdout.strip()
+    if got.returncode != 0:
+        return "", f"`git {' '.join(args)}` failed in {root}: {got.stderr.strip()}"
+    return got.stdout.strip(), None
 
 
 def _checkout_problem(target: str) -> str | None:
@@ -88,12 +94,16 @@ def _checkout_problem(target: str) -> str | None:
     if not (mod_dir / "go.mod").is_file():
         return f"{root} has no src/semantic-router/go.mod; not a semantic-router checkout"
     want = SR_TARGETS[target].sr_commit
-    head = _git(root, "rev-parse", "HEAD")
+    head, problem = _git(root, "rev-parse", "HEAD")
+    if problem:
+        return problem
     if head != want:
         return (f"{root} is checked out at {head or '<unknown>'}, not the commit "
                 f"{SR_TARGETS[target].sr_commit!r} target {target!r} declares; `git checkout {want}` there "
                 "before the read-back can claim anything about this row")
-    status = _git(root, "status", "--porcelain")
+    status, problem = _git(root, "status", "--porcelain")
+    if problem:
+        return problem
     if status:
         return f"{root} has uncommitted changes; the read-back needs a clean checkout at the declared commit"
     return None
@@ -212,10 +222,12 @@ def _normalised_onto_new_shape(conf: dict) -> dict:
     conf = copy.deepcopy(conf)
     defaults = conf["providers"]["defaults"]
     if "default_model" in defaults:
+        assert "model" not in defaults, ("both the old and the new name for the default model were emitted", defaults)
         defaults["model"] = defaults.pop("default_model")
     for model in conf["providers"]["models"]:
         for ref in model["backend_refs"]:
             if "type" in ref:
+                assert "provider" not in ref, ("both the old and the new name for the backend kind were emitted", ref)
                 ref["provider"] = ref.pop("type")
     for card in conf["routing"]["modelCards"]:
         card.pop("quality_score", None)
