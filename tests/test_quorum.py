@@ -39,12 +39,8 @@ def test_agreement_is_not_derivable_from_correctness():
     This is the reason `Cell.answer` exists. A table carrying correctness alone can express "both
     failed" but not "both failed the same way", and the second is what a stopping rule reads.
     """
-    t = _table({
-        "same-wrong": {"a": (INCORRECT, "B", 1.0), "b": (INCORRECT, "B", 1.0)},
-        "diff-wrong": {"a": (INCORRECT, "B", 1.0), "b": (INCORRECT, "C", 1.0)},
-    })
-    stopped = agreement(t, ("a", "b"), ["same-wrong", "diff-wrong"])
-    assert stopped == {"same-wrong": "B"}, "the selected answer travels with the stopped item now (round 3)"
+    assert agreement({"a": "B", "b": "B"}) == "B"
+    assert agreement({"a": "B", "b": "C"}) is None
 
 
 def test_an_absent_answer_escalates_and_is_never_recovered():
@@ -54,12 +50,8 @@ def test_an_absent_answer_escalates_and_is_never_recovered():
     could be recovered were graded incorrect in every case, so recovering them moves wrong answers
     into the set the policy stops on and costs 1.1 points of accuracy on that set.
     """
-    t = _table({
-        "one-silent": {"a": (SOLVED, "B", 1.0), "b": (INCORRECT, None, 1.0)},
-        "both-spoke": {"a": (SOLVED, "B", 1.0), "b": (SOLVED, "B", 1.0)},
-    })
-    stopped = agreement(t, ("a", "b"), ["one-silent", "both-spoke"])
-    assert stopped == {"both-spoke": "B"}, "two answers of which one is missing is not agreement"
+    assert agreement({"a": "B", "b": None}) is None, "two answers of which one is missing is not agreement"
+    assert agreement({"a": "B", "b": "B"}) == "B"
 
 
 def test_the_stop_rule_defaults_to_agreement_and_a_declared_rule_is_carried():
@@ -72,8 +64,8 @@ def test_the_stop_rule_defaults_to_agreement_and_a_declared_rule_is_carried():
     default = evaluate(t, ("a", "b"), "dear")
     assert (default.stopped, default.items) == (1, 2), "unchanged: unanimity stops on the agreeing item only"
 
-    def never_stop(table, members, items):
-        return {}
+    def never_stop(answers):
+        return None
 
     everything_escalates = evaluate(t, ("a", "b"), "dear", stop_rule=never_stop)
     assert everything_escalates.stopped == 0, "a declared rule overrides agreement entirely"
@@ -87,13 +79,11 @@ def test_evaluate_scores_the_rules_selected_answer_not_any_member_solved():
     t = _table({"x": {"a": (INCORRECT, "W", 1.0), "b": (INCORRECT, "W", 1.0), "c": (SOLVED, "C", 1.0),
                      "dear": (SOLVED, "C", 5.0)}})
 
-    def majority_of_three(table, members, items):
-        out = {}
-        for item in items:
-            answers = [_cell_answer(table, item, m) for m in members]
-            majority = max(set(answers), key=answers.count)
-            out[item] = majority
-        return out
+    def majority_of_three(answers):
+        values = [v for v in answers.values() if v is not None]
+        if not values:
+            return None
+        return max(set(values), key=values.count)
 
     p = evaluate(t, ("a", "b", "c"), "dear", stop_rule=majority_of_three)
     assert p.stopped == 1, "the item stopped (a majority was reached)"
@@ -106,13 +96,11 @@ def test_evaluate_scores_a_majority_rule_correctly_when_the_majority_is_right():
     t = _table({"x": {"a": (SOLVED, "C", 1.0), "b": (SOLVED, "C", 1.0), "c": (INCORRECT, "W", 1.0),
                      "dear": (INCORRECT, "W", 5.0)}})
 
-    def majority_of_three(table, members, items):
-        out = {}
-        for item in items:
-            answers = [_cell_answer(table, item, m) for m in members]
-            majority = max(set(answers), key=answers.count)
-            out[item] = majority
-        return out
+    def majority_of_three(answers):
+        values = [v for v in answers.values() if v is not None]
+        if not values:
+            return None
+        return max(set(values), key=values.count)
 
     p = evaluate(t, ("a", "b", "c"), "dear", stop_rule=majority_of_three)
     assert p.stopped == 1
@@ -128,8 +116,8 @@ def test_a_selected_answer_no_member_produced_is_refused_not_scored_wrong():
     ambiguity a reviewer found `_answer_is_correct` used to resolve silently."""
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 
-    def invents_an_answer(table, members, items):
-        return {i: "Z" for i in items}  # "Z" is nobody's answer
+    def invents_an_answer(answers):
+        return "Z"  # "Z" is nobody's answer
 
     with pytest.raises(EvidenceError, match="no member's cell recorded"):
         evaluate(t, ("a",), "dear", stop_rule=invents_an_answer)
@@ -140,57 +128,58 @@ def test_two_members_recording_the_same_answer_with_different_verdicts_is_refuse
     itself about whether that string is correct -- `any(...)` used to pick a side silently."""
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "b": (INCORRECT, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 
-    def always_stop_on_b(table, members, items):
-        return {i: "B" for i in items}
+    def always_stop_on_b(answers):
+        return "B"
 
     with pytest.raises(EvidenceError, match="different solved verdicts"):
         evaluate(t, ("a", "b"), "dear", stop_rule=always_stop_on_b)
 
 
-def test_an_old_two_list_shaped_rule_is_refused_by_name_not_a_typeerror():
-    """A reviewer found that a rule still returning the pre-round-3 `(stopped, escalated)` two-list shape reaches
-    `set(<the returned tuple>)` inside the structural check and raises a bare `TypeError`
-    (`unhashable type: 'list'`) instead of a readable `EvidenceError`. `evaluate` must recognise a non-mapping
-    return and refuse it by name before anything downstream touches it."""
+def test_an_old_multi_arg_shaped_rule_is_refused_with_a_readable_typeerror():
+    """Round 5 narrowed `ItemStopRule` from `(table, members, items) -> {item: answer}` to
+    `(answers) -> answer | None`. A rule still written to the OLD three-argument shape is called with only one
+    argument now and fails with Python's own, already-readable `missing N required positional arguments` --
+    pinned here so a future change does not quietly swallow that failure into something more confusing."""
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 
     def old_shaped(table, members, items):
-        return list(items), []
+        return {i: "B" for i in items}, []
 
-    with pytest.raises(EvidenceError, match="not a mapping"):
+    with pytest.raises(TypeError, match="positional argument"):
         evaluate(t, ("a",), "dear", stop_rule=old_shaped)
 
 
-def test_rule_identity_and_check_stopped_answers_are_public_deprecated_names():
-    """Round 4 restores `quorum.rule_identity` (deleted with no shim in round 3) as a public, explicitly
-    deprecated-for-equivalence-checking name, and exposes `check_stopped_answers` so `router.py`'s runtime
-    derivation can reuse the identical structural check rather than a second, drifting copy of it."""
+def test_rule_identity_and_check_selected_answer_are_public_names():
+    """`quorum.rule_identity` (restored in round 4 after round 3 deleted it with no shim) is display-only and
+    deprecated for anything else. `check_selected_answer` is round 5's structural check -- renamed from
+    `check_stopped_answers` because the per-item contract no longer returns a whole mapping to validate, only
+    one value per call -- and is public so `router.decide_from_score` shares the identical check."""
     import tierbook.quorum as quorum_mod
     assert callable(quorum_mod.rule_identity)
-    assert callable(quorum_mod.check_stopped_answers)
+    assert callable(quorum_mod.check_selected_answer)
     assert quorum_mod.rule_identity(agreement) == "agreement"
 
 
-def test_an_injected_rule_that_invents_an_item_id_is_refused():
+def test_an_injected_rule_that_selects_a_non_string_is_refused():
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 
-    def invents(table, members, items):
-        return {i: "B" for i in items} | {"nonexistent": "B"}
+    def selects_a_number(answers):
+        return 1
 
-    with pytest.raises(EvidenceError, match="not among the"):
-        evaluate(t, ("a",), "dear", stop_rule=invents)
+    with pytest.raises(EvidenceError, match="neither None"):
+        evaluate(t, ("a",), "dear", stop_rule=selects_a_number)
 
 
 def test_an_injected_rule_that_stops_with_no_answer_is_refused():
-    """Stopping on an item means committing to an answer for it; a falsy answer (empty string, None) is not a
+    """Stopping on an item means committing to an answer for it; a falsy answer (empty string) is not a
     commitment, and letting it through would make `_answer_is_correct` silently read as 'wrong' for a reason
     that has nothing to do with correctness."""
     t = _table({"x": {"a": (SOLVED, "B", 1.0), "dear": (SOLVED, "B", 5.0)}})
 
-    def stops_with_nothing(table, members, items):
-        return {i: "" for i in items}
+    def stops_with_nothing(answers):
+        return ""
 
-    with pytest.raises(EvidenceError, match="no answer"):
+    with pytest.raises(EvidenceError, match="neither None"):
         evaluate(t, ("a",), "dear", stop_rule=stops_with_nothing)
 
 
@@ -372,10 +361,8 @@ def test_cheapest_meeting_returns_none_when_the_floor_is_unreachable():
 
 def test_an_unobserved_cell_is_an_absent_answer():
     """A tier that was never run on an item has no answer, so it cannot complete a quorum."""
-    t = _table({"i1": {"a": (SOLVED, "B", 1.0)}})
-    stopped = agreement(t, ("a", "missing"), ["i1"])
-    assert stopped == {}
     assert Cell(UNOBSERVED, None).answer is None
+    assert agreement({"a": "B", "missing": None}) is None
 
 
 # --- the third mechanism, on the same frontier ----------------------------------------------------

@@ -78,9 +78,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Literal, Sequence
 
-from tierbook.evidence import UNOBSERVED, EvidenceError
-from tierbook.outcomes import Cell, OutcomeTable
-from tierbook.quorum import (ItemStopRule, QuorumPolicy, agreement, canonical, check_stopped_answers,
+from tierbook.evidence import EvidenceError
+from tierbook.outcomes import OutcomeTable
+from tierbook.quorum import (ItemStopRule, QuorumPolicy, agreement, canonical, check_selected_answer,
                             enumerate_policies, rule_identity)
 from tierbook.reproduce import simultaneous_wilson, wilson
 
@@ -215,15 +215,21 @@ def decide_from_score(score: ItemStopRule, certificate: Certificate, ladder: tup
 
     **Why this exists.** Round 2 took a batch scorer and a runtime decider as two SEPARATELY injected callables
     and cross-checked them by a shared `rule_id` string. Round 3 bundled both onto one `Rule` object instead of
-    two parameters, but a reviewer found that bundling is not equivalence either: nothing stopped `score` and
-    `runtime` on one `Rule` from disagreeing, because they were still two independently-supplied callables, just
-    stapled together. There is now exactly ONE callable a caller injects (`score`, `quorum.ItemStopRule`'s own
-    shape), and the runtime decision is DERIVED from it generically, so there is nothing left that could diverge.
+    two parameters; two reviewers then showed that even a `decide_from_score` calling ONE object's `score` on a
+    synthetic one-item TABLE still let a rule read something (cell status, an item id, the escalation tier's own
+    cell, the rest of the batch) that fit-time and runtime could not supply identically -- a rule reading beyond
+    the member answers for this one item saw different input on the two sides even with a single callable.
 
-    **How.** Once every member has answered, `score` is called on a table holding just THIS ONE request as a
-    single synthetic item. If `score` stops on it, its selected answer is the decision. If `score` does not stop,
-    escalate along `ladder` in the declared order; once the ladder is exhausted with nothing parseable, abandon
-    at the fixed depth `certificate.abandon_depth`.
+    Round 5 closes that at the type, not with another check: `score` is a `quorum.ItemStopRule`
+    (`Mapping[member, answer] -> answer | None`), and there is nothing else in that signature for a rule to
+    read. Calling it here on `{m: answers[m] for m in members}` and calling it inside `quorum.evaluate` on
+    `{m: cell(item, m).answer for m in members}` for the SAME item are the identical call on the identical
+    shape of input -- there is no batch, no item id, no other item, no escalation cell left to diverge on.
+
+    **How.** Once every member has answered, `score` is called on exactly those members' answers. If it selects
+    an answer, that is the decision. If it returns `None` (does not stop), escalate along `ladder` in the
+    declared order; once the ladder is exhausted with nothing parseable, abandon at the fixed depth
+    `certificate.abandon_depth`.
 
     **`quorum.agreement` through this derivation reproduces `default_stop_rule`'s old, hand-written logic exactly
     -- pinned by `tests/test_router.py::test_decide_from_score_reproduces_default_stop_rule_exactly`,** which runs
@@ -235,13 +241,11 @@ def decide_from_score(score: ItemStopRule, certificate: Certificate, ladder: tup
     if missing:
         return Decision("call", tiers=missing, reason="the members have not all answered")
 
-    request = "_request"
-    table = OutcomeTable(suite="_runtime", manifest_digest="_runtime")
-    table.cells[request] = {m: Cell(UNOBSERVED, None, answer=answers[m]) for m in members}
-    stopped_answers = score(table, members, [request])
-    check_stopped_answers(stopped_answers, [request], score)
-    if request in stopped_answers:
-        return Decision("answer", answer=stopped_answers[request], reason="the rule selected an answer")
+    member_answers = {m: answers[m] for m in members}
+    selected = score(member_answers)
+    check_selected_answer(selected, score)
+    if selected is not None:
+        return Decision("answer", answer=selected, reason="the rule selected an answer")
 
     vals = [answers[m] for m in members]
     parsed = [v for v in vals if v is not None]
@@ -324,16 +328,17 @@ class Router:
             stop_rule: ItemStopRule = AGREEMENT) -> "Router":
         """Keep only policies whose adjusted bound clears the floor, then take the cheapest, or raise.
 
-        `stop_rule` is the ONE callable (`quorum.ItemStopRule`'s shape: given the matrix, the members and the
-        items to decide over, return `{item: selected_answer}` for the ones it stops on) both this fit's
-        certificate and the returned `Router.decide` are computed from -- `decide()` derives its runtime
-        behaviour from this SAME object generically (`decide_from_score`), so there is no second,
-        independently-injectable callable that could disagree with what was scored. Round 2 took a batch callable
-        and a runtime callable as two SEPARATE arguments and cross-checked them by a `rule_id` string; round 3
-        bundled both onto one object instead, which two more reviews found is still not equivalence, since
-        nothing forced the two callables on that object to agree either. There being only ONE callable, with the
-        runtime derived rather than separately declared, is what actually closes it. Declaring nothing reproduces
-        today's behaviour exactly (`AGREEMENT` is `quorum.agreement` itself).
+        `stop_rule` is the ONE callable (`quorum.ItemStopRule`'s shape: given ONE item's `{member: answer}`,
+        return the answer to stop on or `None` to escalate) both this fit's certificate and the returned
+        `Router.decide` are computed from -- `decide()` derives its runtime behaviour from this SAME object
+        generically (`decide_from_score`), applying it to exactly the same shape of input, so there is no second,
+        independently-injectable callable that could disagree with what was scored, and no batch/item-id/cell
+        context for a rule to read differently on the two sides even if it tried (see `quorum.ItemStopRule`'s
+        docstring). Round 2 took a batch callable and a runtime callable as two SEPARATE arguments and
+        cross-checked them by a `rule_id` string; round 3 bundled both onto one object instead, which two more
+        reviews found still let the SAME object's two callables disagree, because each still read more than one
+        item's member answers. Narrowing what a rule may read is what actually closes it. Declaring nothing
+        reproduces today's behaviour exactly (`AGREEMENT` is `quorum.agreement` itself).
         """
         if not callable(stop_rule):
             raise EvidenceError(

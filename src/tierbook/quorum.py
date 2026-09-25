@@ -132,51 +132,62 @@ def _cell(table: OutcomeTable, item: str, tier: str) -> Cell:
     return table.cells.get(item, {}).get(tier) or Cell(UNOBSERVED, None)
 
 
-#: The signature every stop rule `evaluate` accepts must have: given the matrix, the member set and the items to
-#: decide over, return a mapping from each item this rule decides to STOP on to the ANSWER it selects for that
-#: item. An item absent from the returned mapping escalates. `agreement` below is the DEFAULT this project
+#: The signature every per-item stop rule accepts: given ONE item's per-member answers (`None` for a member
+#: that abstained or produced nothing parseable), decide whether to stop and, if so, which answer to select.
+#: Returns the SELECTED ANSWER to stop, or `None` to escalate. `agreement` below is the DEFAULT this project
 #: measured, not the only shape the signature can hold.
 #:
-#: **Round 3 changed what this returns.** It used to be `(stopped, escalated)` -- two lists, membership only. That
-#: was enough to bill a policy but not to SCORE one honestly: `evaluate` read a stopped item's correctness as "did
-#: any member solve it", which is only a safe reading when the stoppers are unanimous, as `agreement`'s stop set
-#: always is by construction. A rule that stops on some OTHER agreement notion (a majority, say) could report an
-#: item as stopped without the members agreeing, and the old signature gave `evaluate` no way to know WHICH answer
-#: the rule actually meant to return -- so it kept reading "any member correct", scoring "did the majority side
-#: happen to include a correct member" where it meant to score "was the majority's own answer correct". Returning
-#: the selected answer closes that gap: `evaluate` now scores the answer itself, and `agreement`'s own behaviour
-#: (below) is unchanged by the wider signature -- unanimity means the "selected answer" IS the one answer all
-#: members gave, so today's accuracy comes out identical.
+#: **Round 5 narrowed this contract, and the narrowing is the whole fix.** Round 4's `decide_from_score` still
+#: let a rule read the WHOLE matrix (`table, members, items`), and two reviewers showed that a rule reading
+#: anything beyond this one item's member answers sees DIFFERENT input at fit time (the real table: real item
+#: ids, real cell status/cost, the escalation tier's own cell, every other item) than at runtime (a synthetic
+#: one-item table built from nothing but the answers heard so far). A rule that reads cell status, an item id,
+#: a batch-wide quantile, or the escalation tier's cell can therefore certify one accuracy and execute a
+#: different policy -- not because either call site has a bug, but because the CONTRACT let a rule depend on
+#: something the two call sites could not agree to supply identically.
 #:
-#: Named `ItemStopRule` rather than the bare `StopRule` an earlier version used, because `router.py` declares a
-#: SECOND stop rule under that name with an incompatible signature -- one partitions a whole item set at once for
-#: scoring, the other decides one streaming request's next action given partial answers -- and one name for two
-#: shapes is how the wrong one gets imported. `StopRule` below is a deprecated alias for any importer who held
-#: that name.
-ItemStopRule = Callable[[OutcomeTable, tuple[str, ...], list[str]], dict[str, str]]
-#: Deprecated alias, kept for any importer who held `quorum.StopRule` before round 2 renamed it to `ItemStopRule`
-#: to stop colliding with `router.StopRule`'s (also renamed) incompatible signature.
+#: Narrowing the signature to exactly `Mapping[member, answer] -> answer | None` removes that possibility
+#: structurally rather than testing for its absence: there is no batch, no item id, no escalation cell, no
+#: OTHER item for a rule to read even if it wanted to, so applying the SAME function to the SAME per-item
+#: answers dict *is* the same computation whether `evaluate` calls it while scoring the fitting table or
+#: `router.decide_from_score` calls it while deciding one live request. Equivalence is not verified after the
+#: fact; the type signature is what makes it true.
+#:
+#: **What this deliberately leaves out.** A rule that genuinely needs the whole batch -- a quantile over the
+#: corpus, a signal keyed by item id, anything that is a property of the CORPUS rather than of one question --
+#: is out of scope for this injection point. That is a real and different kind of policy, and this project
+#: already has a place for it: `evaluate_signal`/`enumerate_signal_policies`, which take a `signal: dict[item,
+#: float]` computed once over the whole corpus ahead of time and read it per item. A caller whose rule needs
+#: batch context builds that signal separately and uses THAT mechanism; it does not belong behind
+#: `ItemStopRule`, which promises a per-item determinism this project can only actually enforce by refusing to
+#: let a rule see more than one item at a time.
+#:
+#: Named `ItemStopRule` rather than the bare `StopRule` an earlier version used, because `router.py` used to
+#: declare a SECOND stop rule under that name with an incompatible signature; `router.py`'s runtime derivation
+#: now shares this exact signature instead of a separate one, so there is only one shape left in the whole
+#: project. `StopRule` below is a deprecated alias for any importer who held the pre-round-2 bare name.
+ItemStopRule = Callable[[Mapping[str, "str | None"]], "str | None"]
+#: Deprecated alias, kept for any importer who held `quorum.StopRule` before round 2 renamed it to `ItemStopRule`.
 StopRule = ItemStopRule
 
 
-def agreement(table: OutcomeTable, members: tuple[str, ...], items: list[str]) -> dict[str, str]:
-    """Map each item the members agree on to the answer they agree on; leave the rest out (they escalate).
+def agreement(answers: Mapping[str, str | None]) -> str | None:
+    """Select the answer every member gave, when they all gave one and it is the same one; otherwise escalate.
 
     Agreement requires every member to have produced an answer AND all answers to be identical. See
     the module docstring for why an absent answer escalates rather than being filled in.
 
-    **The default `evaluate` runs, not the only rule the signature can hold.** The module docstring traces this shape
-    to a fold-derived finding ("Escalation does not branch") and `router.Certificate.rules_are_fold_derived=True`
-    disclosed it without making it injectable -- disclosure and injectability are different things, and TB-034 named
-    the gap. `evaluate`'s `stop_rule` parameter is where a different study's stop rule (escalate on a signal instead
-    of on disagreement, stop on a majority rather than on unanimity) can be expressed without editing this function.
+    **The default this project measured, not the only rule the signature can hold.** The module docstring traces
+    this shape to a fold-derived finding ("Escalation does not branch") and
+    `router.Certificate.rules_are_fold_derived=True` discloses that it was chosen by reading this project's own
+    fold. `evaluate`'s `stop_rule` parameter (and `router.decide_from_score`, which calls the SAME function) is
+    where a different study's per-item rule -- a majority, a tie-breaking preference -- can be expressed
+    without editing this function.
     """
-    out: dict[str, str] = {}
-    for item in items:
-        answers = [_cell(table, item, m).answer for m in members]
-        if all(a is not None for a in answers) and len(set(answers)) == 1:
-            out[item] = answers[0]
-    return out
+    values = list(answers.values())
+    if all(v is not None for v in values) and len(set(values)) == 1:
+        return values[0]
+    return None
 
 
 def joint_failure(table: OutcomeTable, a: str, b: str, items: list[str]) -> float | None:
@@ -211,37 +222,25 @@ def rule_identity(rule: Callable) -> str:
     return getattr(rule, "__qualname__", repr(rule))
 
 
-def check_stopped_answers(stopped_answers: object, subject: list[str], stop_rule: Callable) -> None:
-    """Refuse an injected rule whose output cannot be scored honestly.
+def check_selected_answer(selected: object, stop_rule: Callable, *, item: str = "") -> None:
+    """Refuse a per-item stop rule's return value that is neither `None` (escalate) nor a genuine, non-empty
+    answer string (stop, and select this one).
 
-    Trusting the rule's output unchecked is how a rule returning the OLD `(stopped, escalated)` two-list shape
-    (or any other non-mapping), or one inventing an id nobody asked about, or one "stopping" on an empty answer,
-    would corrupt `evaluate`'s bill, its accuracy, and `enumerate_policies`'s `min_stopped` logic silently. The
-    check is purely structural: it says nothing about whether the PARTITION or the ANSWERS are good, only that
-    the shape is right, every key is one of the items asked for, and every value is an answer the rule is
-    actually selecting.
+    Trusting the rule's output unchecked is how a rule returning the OLD `(stopped, escalated)` two-list shape,
+    or one "stopping" on an empty answer, would corrupt `evaluate`'s bill and its accuracy silently. Round 5
+    narrowed `ItemStopRule` to one item at a time, so there is no longer an item id or a partition for a rule to
+    get wrong -- only the one value it returns for THIS item, which is what this checks.
 
-    Public (not `_`-prefixed) because `router.py`'s runtime derivation calls the same `stop_rule` on a
-    synthetic one-item table and needs the identical check, rather than a second, drifting copy of it.
+    Public (not `_`-prefixed) because `router.decide_from_score` calls the same `stop_rule` on this project's
+    own live per-request answers and needs the identical check, rather than a second, drifting copy of it.
     """
-    if not isinstance(stopped_answers, Mapping):
+    if selected is None:
+        return
+    if not isinstance(selected, str) or not selected:
+        where = f" for item {item!r}" if item else ""
         raise EvidenceError(
-            f"stop_rule {rule_identity(stop_rule)!r} returned {type(stopped_answers).__name__}, not a mapping of "
-            f"item -> selected answer. This is the pre-round-3 `(stopped, escalated)` two-list contract if it "
-            f"looks like a tuple of two lists -- that shape was replaced because it could not carry which ANSWER "
-            f"a non-unanimous rule selected; return `{{item: answer, ...}}` and leave an item out entirely to "
-            f"escalate it")
-    invalid_keys = sorted(set(stopped_answers) - set(subject))
-    if invalid_keys:
-        raise EvidenceError(
-            f"stop_rule {rule_identity(stop_rule)!r} returned {invalid_keys} as stopped, which were not among the "
-            f"{len(subject)} items asked for")
-    empty = sorted(k for k, v in stopped_answers.items() if not v)
-    if empty:
-        raise EvidenceError(
-            f"stop_rule {rule_identity(stop_rule)!r} returned {empty} as stopped with no answer (falsy). Stopping "
-            f"on an item means committing to an answer for it; a rule with nothing to commit should leave that "
-            f"item out of the mapping so it escalates instead")
+            f"stop_rule {rule_identity(stop_rule)!r} returned {selected!r}{where}, which is neither None "
+            f"(escalate) nor a non-empty answer string (stop, and select this one)")
 
 
 def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
@@ -253,12 +252,14 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
     the whole point of the separation: re-pricing a policy must not require re-running it, so a new
     rate card is an argument here and not a new measurement.
 
-    `stop_rule` maps each item it stops on to the answer it selects; an item it leaves out escalates. Defaults to
+    `stop_rule` decides ONE item at a time (`quorum.ItemStopRule`: `{member: answer} -> answer | None`).
+    `evaluate` calls it once per item, applying it to exactly this policy's members' answers for that item --
+    this is the BATCH half of the same per-item computation `router.decide_from_score` performs at runtime, so
+    a rule scored here and the identical rule executed there are provably the same function seeing the same
+    shape of input, item by item (see `ItemStopRule`'s docstring for why the signature stops there). Defaults to
     `agreement` -- unanimity among `members` -- which is the shape this module's own docstring traces to one
-    fold's measurement (TB-034). **Declared here rather than fixed in the function**, so a study whose stop rule
-    is not unanimity (a majority, a signal-gated escalation) can be scored on the same frontier without editing
-    this function, and scored HONESTLY: a stopped item's correctness is read off the SELECTED ANSWER (below), not
-    off "did any member happen to solve it" -- the two coincide exactly when the rule is unanimous, which is why
+    fold's measurement (TB-034). A stopped item's correctness is read off the SELECTED ANSWER (below), not off
+    "did any member happen to solve it" -- the two coincide exactly when the rule is unanimous, which is why
     `agreement`'s own numbers do not move, and diverge for a rule that is not, which is the gap round 2 left open.
     """
     subject = list(items if items is not None else table.items)
@@ -268,8 +269,13 @@ def evaluate(table: OutcomeTable, members: tuple[str, ...], escalate_to: str, *,
         dupes = sorted({i for i in subject if subject.count(i) > 1})
         raise EvidenceError(f"items contains duplicate id(s) {dupes}, so scoring it would count that item more "
                            f"than once regardless of what any stop_rule returns")
-    stopped_answers = stop_rule(table, members, subject)
-    check_stopped_answers(stopped_answers, subject, stop_rule)
+    stopped_answers: dict[str, str] = {}
+    for item in subject:
+        answers = {m: _cell(table, item, m).answer for m in members}
+        selected = stop_rule(answers)
+        check_selected_answer(selected, stop_rule, item=item)
+        if selected is not None:
+            stopped_answers[item] = selected
     stopped = list(stopped_answers)
     escalated = [i for i in subject if i not in stopped_answers]
 

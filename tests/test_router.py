@@ -180,8 +180,8 @@ def test_swapping_the_rule_without_refitting_is_refused():
     rule`), not a name: a reviewer showed round 3's name check let `Rule(name="agreement", score=agreement,
     runtime=always_abandon)` straight through `replace`, because a name is self-declared and a caller can put
     ANY name on ANY callable. A same-named, differently-behaving callable must fail here too."""
-    def always_abandon_score(table, members, items):
-        return {}
+    def always_abandon_score(answers):
+        return None
 
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.80)
@@ -202,8 +202,8 @@ def test_a_declared_rule_is_carried_and_used_in_place_of_the_default():
     scorer), and the runtime behaviour is DERIVED from it generically (`decide_from_score`), so there is no
     second, independently-injectable callable that could disagree with it -- unlike round 3's `Rule`, which
     bundled two callables that were still free to disagree."""
-    def never_stop_score(table, members, items):
-        return {}
+    def never_stop_score(answers):
+        return None
 
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
@@ -233,15 +233,11 @@ def test_a_rule_certifies_a_majority_stop_correctly():
     misjudged, see `test_quorum.py`) certifies through `Router.fit` at the accuracy it actually earns. Round 4
     adds: its RUNTIME needs no separate declaration at all -- `decide_from_score` derives it from the same
     scorer, and this test checks that the derived runtime actually answers with the majority's own answer."""
-    def majority_of_three(table, members, items):
-        out = {}
-        for item in items:
-            cells = table.cells.get(item, {})
-            answers = [cells[m].answer for m in members if m in cells and cells[m].answer is not None]
-            if not answers:
-                continue
-            out[item] = max(set(answers), key=answers.count)
-        return out
+    def majority_of_three(answers):
+        values = [v for v in answers.values() if v is not None]
+        if not values:
+            return None
+        return max(set(values), key=values.count)
 
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
@@ -270,8 +266,8 @@ def test_a_rule_certifies_a_majority_stop_correctly():
 def test_verify_rescores_under_the_certificates_own_rule_not_the_module_default():
     """A router fitted under an injected rule must be re-checked against THAT rule on a second collection, not
     against `agreement` -- otherwise `verify` would silently score something the certificate does not describe."""
-    def never_stop_score(table, members, items):
-        return {}
+    def never_stop_score(answers):
+        return None
 
     t = _table()
     r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
@@ -354,6 +350,40 @@ def test_decide_from_score_reproduces_default_stop_rule_exactly():
             assert got.reason == want.reason, f"{label}: reason differs unexpectedly -- {got.reason!r} vs {want.reason!r}"
         # And the named entry point (what a caller actually calls) matches the derivation for every case.
         assert default_stop_rule(cert, ladder, answers) == decide_from_score(agreement, cert, ladder, answers), label
+
+
+def test_a_rule_reading_beyond_member_answers_cannot_even_be_expressed():
+    """Round 4's `decide_from_score` called `score(table, members, [request])` -- a rule COULD read cell status,
+    an item id, the escalation tier's cell, or the rest of the batch, and two reviewers showed exactly that kind
+    of rule certifying one accuracy at fit time and executing a different policy at runtime, because the two
+    call sites could not supply that context identically. Round 5's fix is not a new check for that shape of
+    rule; it is that `ItemStopRule` no longer HAS a parameter to read any of it from. A rule signature that
+    tries reads them anyway simply cannot receive them -- this is checked here by confirming `evaluate` and
+    `decide_from_score` both call any stop rule with exactly one dict argument, so a rule written to expect a
+    table/members/items no longer receives what it is asking for even if it still declares those parameters."""
+    seen_call_args = []
+
+    def records_its_call(*args, **kwargs):
+        seen_call_args.append((args, kwargs))
+        return None
+
+    t = _table()
+    r = Router.fit(t, candidates=["cheap", "cheap2", "dear"], escalate_to=["dear"], accuracy_floor=0.10,
+                   min_stopped=0, stop_rule=records_its_call)
+    assert seen_call_args, "evaluate must have called the rule at least once while fitting"
+    for args, kwargs in seen_call_args:
+        assert len(args) == 1 and not kwargs, "the rule receives exactly one positional argument"
+        assert isinstance(args[0], dict), "that argument is a plain per-member answers mapping"
+        assert set(args[0]) <= {"cheap", "cheap2", "dear"}, (
+            "the argument names only candidate members -- no item id, no table, no escalation tier")
+
+    seen_call_args.clear()
+    members = r.certificate.members
+    r.decide({m: "B" for m in members})
+    assert len(seen_call_args) == 1
+    args, kwargs = seen_call_args[0]
+    assert len(args) == 1 and not kwargs
+    assert args[0] == {m: "B" for m in members}, "runtime passes the SAME shape: member -> answer, nothing else"
 
 
 def test_everything_silent_abandons_rather_than_guessing():

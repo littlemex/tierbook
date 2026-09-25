@@ -142,30 +142,42 @@ class PartVocabulary:
     version: str = "unversioned"
 
     def __post_init__(self) -> None:
-        # Normalise FIRST, before any check reads `best_sourcing`. A round-3 review found the check order the
-        # other way around: once this constructor canonicalises `best_sourcing` into a tuple of pairs (below),
-        # `dataclasses.replace(some_vocabulary, name="x")` and `PartVocabulary(parts=v.parts,
+        # Read `best_sourcing` into a list of (kind, mode) pairs EXACTLY ONCE, before any check, and never read
+        # `self.best_sourcing` again after this -- every later line in this method reads the local `pairs`/
+        # `sourcing` instead. A round-4 review found the previous version read `self.best_sourcing` TWICE (once
+        # with `list(...)` to check for duplicates, again with `dict(...)` to build the checked mapping), which
+        # silently produced an EMPTY vocabulary for a one-shot iterator: the first read exhausts it, so the
+        # second sees nothing and the totality check fails with a misleading "have no best_sourcing entry"
+        # instead of naming the real problem. Reading once and normalising to ONE canonical form here is also
+        # what makes `dataclasses.replace(some_vocabulary, name="x")` and `PartVocabulary(parts=v.parts,
         # best_sourcing=v.best_sourcing)` -- both ordinary ways to build one `PartVocabulary` from another's own
-        # fields -- fed that tuple BACK into this same constructor, where `set(self.best_sourcing)` yields pairs
-        # rather than part names and the totality check breaks. `dict(...)` accepts a mapping or a sequence of
-        # pairs identically, so normalising through it first makes every check below correct for either input,
-        # and makes `replace`/reconstruction-from-fields round-trip.
-        #
-        # But `dict(...)` on a sequence of pairs SILENTLY COLLAPSES a duplicate key, keeping only the last
-        # entry -- a reviewer found `best_sourcing=(("instruction", "in_the_request"), ("instruction",
-        # "not_observable")))` passes with the second value winning and no sign that two contradictory
-        # declarations were made for the same part. Checked here, before the collapse, and only for the
-        # sequence-of-pairs input: a `Mapping` cannot carry a duplicate key at all (its own `__setitem__` already
-        # resolved that before this constructor ever saw it).
-        if not isinstance(self.best_sourcing, Mapping):
-            pairs = list(self.best_sourcing)
-            keys = [k for k, _ in pairs]
-            if len(keys) != len(set(keys)):
-                dupes = sorted({k for k in keys if keys.count(k) > 1})
-                raise Unidentified(
-                    f"best_sourcing names {dupes} more than once. dict(...) would silently keep only the last "
-                    f"entry, hiding a contradiction between two declared sourcing modes for the same part")
-        sourcing = dict(self.best_sourcing)
+        # fields -- round-trip: the canonical form (a sorted tuple of pairs, below) is itself a valid sequence of
+        # pairs, so feeding it back in here is unpacked the same way as a caller's original mapping.
+        if isinstance(self.best_sourcing, Mapping):
+            pairs = list(self.best_sourcing.items())
+        else:
+            pairs = []
+            for entry in self.best_sourcing:
+                try:
+                    k, v = entry
+                except (TypeError, ValueError) as exc:
+                    raise Unidentified(
+                        f"best_sourcing contains {entry!r}, which is not a (kind, mode) pair ({exc}). Every "
+                        f"entry of a sequence-of-pairs best_sourcing must unpack to exactly two values") from None
+                pairs.append((k, v))
+        # `dict(pairs)` SILENTLY COLLAPSES a duplicate key, keeping only the last entry -- a reviewer found
+        # `best_sourcing=(("instruction", "in_the_request"), ("instruction", "not_observable"))` passes with the
+        # second value winning and no sign that two contradictory declarations were made for the same part.
+        # Checked against `pairs` (the one, already-materialised read) before that collapse; a `Mapping` input
+        # cannot carry a duplicate key at all, so this only ever fires for the sequence-of-pairs case, and
+        # checking it here rather than after `dict(pairs)` is what makes the check able to fire at all.
+        keys = [k for k, _ in pairs]
+        if len(keys) != len(set(keys)):
+            dupes = sorted({k for k in keys if keys.count(k) > 1})
+            raise Unidentified(
+                f"best_sourcing names {dupes} more than once. dict(...) would silently keep only the last "
+                f"entry, hiding a contradiction between two declared sourcing modes for the same part")
+        sourcing = dict(pairs)
         if not self.parts:
             raise Unidentified("a vocabulary with no parts names nothing a harness could be built from")
         if len(set(self.parts)) != len(self.parts):
@@ -184,13 +196,18 @@ class PartVocabulary:
                 f"best_sourcing names sourcing mode(s) {bad_modes}, not one of {HARNESS_SOURCING}. A typo here (a "
                 f"misspelled 'not_observable', say) would not equal the string `Manifest`/`Absence` compare it "
                 f"against, so an invalid mode would silently count as reachable instead of refusing")
-        # Canonicalised into an immutable, hashable snapshot -- decoupled from whatever mapping the caller passed in,
-        # not merely copied from it. Two things this fixes at once: a `dict` field makes every frozen dataclass that
+        # Canonicalised into ONE hashable form -- a sorted tuple of pairs -- decoupled from whatever mapping the
+        # caller passed in, not merely copied from it, and set with `object.__setattr__` because this is a
+        # frozen dataclass. Three things this fixes at once: a `dict` field makes every frozen dataclass that
         # carries a `PartVocabulary` (`Part`, `Absence`, `Harness`, `Manifest`) unhashable, breaking any existing
-        # caller that put one in a set or a dict key; and `DEFAULT_PART_VOCABULARY` aliasing the module-level
+        # caller that put one in a set or a dict key; `DEFAULT_PART_VOCABULARY` aliasing the module-level
         # `DEFAULT_BEST_AVAILABLE_SOURCING` dict would let a later mutation of that module dict change this
-        # vocabulary's answers silently, after the totality check above had already run against the un-mutated copy.
-        object.__setattr__(self, "best_sourcing", tuple(sorted(sourcing.items())))
+        # vocabulary's answers silently; and the auto-generated `__eq__`/`__hash__` a frozen dataclass gets read
+        # `self.best_sourcing` at call time, so canonicalising it to ONE sorted form here -- regardless of
+        # whether the caller passed a mapping or pairs, in whatever order -- is what makes two vocabularies with
+        # the same content compare equal and hash equal, which a caller-declared pairs-form default vocabulary
+        # relies on to equal `DEFAULT_PART_VOCABULARY`.
+        object.__setattr__(self, "best_sourcing", tuple(sorted(pairs)))
 
     def sourcing_of(self, kind: str) -> str:
         """The best sourcing mode for one part -- the lookup `best_sourcing` offered before it became a hashable
@@ -202,8 +219,30 @@ class PartVocabulary:
 
     @property
     def identity(self) -> str:
-        """Which vocabulary this is, for a reader who has to tell one caller's declaration from another's."""
+        """Which vocabulary this is, for a reader who has to tell one caller's declaration from another's.
+
+        Self-declared, and known to be foolable: two vocabularies that both leave `name`/`version` at their
+        defaults (`"custom"`/`"unversioned"`) share this string even when their actual `parts`/`best_sourcing`
+        differ. `content_digest` below is the content-based alternative for anywhere that distinction matters.
+        """
         return f"{self.name}/{self.version}"
+
+    @property
+    def content_digest(self) -> str:
+        """A hash over this vocabulary's actual content (`parts` and `best_sourcing`) -- never its self-declared
+        `name`/`version`.
+
+        `identity` is a label; a caller who forgets to declare a distinct one (or declares a misleading one)
+        makes `identity` say nothing true about the content behind it -- the same lesson this project already
+        learned about a rule's name not proving anything about its behaviour. Used wherever a non-default
+        vocabulary's CONTENT, not its self-declared name, has to enter a hash (see `Harness.identity`).
+        """
+        h = hashlib.sha256()
+        h.update(",".join(self.parts).encode())
+        h.update(b";")
+        for k, v in self.best_sourcing:  # already canonical: a sorted tuple of pairs
+            h.update(f"{k}={v};".encode())
+        return h.hexdigest()[:16]
 
     @property
     def conforms_to_perigraph(self) -> bool:
@@ -413,18 +452,22 @@ class Harness:
         saying nothing about a part it claimed. The parts are not the problem. The identity is, and it is missing exactly
         where it is read.
 
-        **The vocabulary enters the hash for any vocabulary other than perigraph's own default.** A reviewer found
-        that two harnesses declared against DIFFERENT vocabularies, but built from identifying parts of the same
-        kind and digest, hash to the SAME identity -- `comparable_with`/`refuse_incomparable` already catch that
-        for a direct comparison, but any OTHER grouping keyed on `identity` alone (a set, a dict key, a persisted
-        identity) would still silently merge them. Folding the vocabulary in closes that, but NOT for the default
-        vocabulary: `identity`'s bytes for perigraph's own ten parts are pinned to a cross-language digest
-        algorithm a second, TypeScript implementation was built against (see the spec conformance test), and
-        changing those bytes for every perigraph-conforming harness would break interoperability with every
+        **The vocabulary's CONTENT enters the hash for any vocabulary other than perigraph's own default.** A
+        reviewer found that two harnesses declared against DIFFERENT vocabularies, but built from identifying
+        parts of the same kind and digest, hash to the SAME identity -- `comparable_with`/`refuse_incomparable`
+        already catch that for a direct comparison, but any OTHER grouping keyed on `identity` alone (a set, a
+        dict key, a persisted identity) would still silently merge them. A second reviewer then found that
+        folding in `vocabulary.identity` (the SELF-DECLARED name/version string) does not fully close it either:
+        two vocabularies that both forgot to declare a name share `"custom/unversioned"` and would still
+        collide even though their actual `parts`/`best_sourcing` differ. Folding in `vocabulary.content_digest`
+        (a hash over the actual content, never the self-declared label) closes that too. NOT for the default
+        vocabulary, though: `identity`'s bytes for perigraph's own ten parts are pinned to a cross-language
+        digest algorithm a second, TypeScript implementation was built against (see the spec conformance test),
+        and changing those bytes for every perigraph-conforming harness would break interoperability with every
         compliant consumer to fix a collision that, for the default vocabulary alone, `comparable_with` already
         prevents from being misread. So: unchanged, byte-for-byte, when `self.vocabulary == DEFAULT_PART_VOCABULARY`
         (value equality -- a caller's own default-shaped `PartVocabulary` counts, not only the literal module
-        object); prefixed with the vocabulary's own identity for anything else.
+        object); prefixed with the vocabulary's own CONTENT digest for anything else.
         """
         if not self.has_identity:
             raise Unidentified(
@@ -433,7 +476,7 @@ class Harness:
                 "record without it describes somebody's account of a run rather than the run")
         h = hashlib.sha256()
         if self.vocabulary != DEFAULT_PART_VOCABULARY:
-            h.update(f"vocabulary={self.vocabulary.identity};".encode())
+            h.update(f"vocabulary={self.vocabulary.content_digest};".encode())
         for p in sorted((p for p in self.parts if p.identifying), key=lambda p: p.kind):
             h.update(f"{p.kind}={p.digest};".encode())
         return h.hexdigest()[:24]

@@ -311,6 +311,56 @@ def test_replace_and_reconstruction_from_another_vocabularys_fields_round_trip()
     assert widened_renamed.sourcing_of("context_window_policy") == "pushed_by_owner"
 
 
+def test_a_pairs_form_default_vocabulary_equals_the_default_and_keeps_its_identity():
+    """The coordinator's own requirement: a default vocabulary passed in PAIRS form (a tuple of `(kind, mode)`
+    pairs, e.g. `tuple(DEFAULT_BEST_AVAILABLE_SOURCING.items())`) must equal `DEFAULT_PART_VOCABULARY` and
+    produce the SAME, byte-pinned `Harness.identity` -- equality and the identity fix both have to key off the
+    canonicalised CONTENT, not off which shape the caller happened to pass in."""
+    pairs_form = hn.PartVocabulary(parts=hn.DEFAULT_HARNESS_PARTS,
+                                   best_sourcing=tuple(hn.DEFAULT_BEST_AVAILABLE_SOURCING.items()),
+                                   name="perigraph", version="1")
+    assert pairs_form == hn.DEFAULT_PART_VOCABULARY
+    assert hash(pairs_form) == hash(hn.DEFAULT_PART_VOCABULARY)
+
+    h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
+                                 vocabulary=pairs_form),), vocabulary=pairs_form)
+    expected = hashlib.sha256(b"instruction=" + b"a" * 64 + b";").hexdigest()[:24]
+    assert h.identity == expected, "a pairs-form default must not trigger the non-default prefix"
+
+
+def test_an_iterator_input_is_not_exhausted_before_it_is_used():
+    """A reviewer found that reading `self.best_sourcing` TWICE (once to check for duplicate keys, again to
+    build the checked mapping) silently produced an EMPTY vocabulary when the input was a one-shot iterator:
+    the first read exhausts it, so the second sees nothing. `best_sourcing` is now read into a list exactly
+    once, so a genuine iterator (not just a list or a dict) works correctly."""
+    v = hn.PartVocabulary(parts=("instruction",), best_sourcing=iter([("instruction", "in_the_request")]))
+    assert v.sourcing_of("instruction") == "in_the_request"
+    assert v.parts == ("instruction",)
+
+
+def test_a_malformed_pair_is_refused_with_unidentified_not_a_raw_exception():
+    """A single element that does not unpack to exactly two values used to raise a bare `ValueError`
+    ('too many values to unpack') instead of this module's own `Unidentified`."""
+    with pytest.raises(hn.Unidentified, match="not a \\(kind, mode\\) pair"):
+        hn.PartVocabulary(parts=("instruction",),
+                          best_sourcing=[("instruction", "in_the_request", "extra")])
+    with pytest.raises(hn.Unidentified, match="not a \\(kind, mode\\) pair"):
+        hn.PartVocabulary(parts=("instruction",), best_sourcing=[42])
+
+
+def test_grouping_key_is_actually_hashable():
+    """Put beyond doubt rather than only implied by `len({...})` elsewhere: `grouping_key` -- a `(PartVocabulary,
+    str)` tuple -- must itself be hashable, which requires `PartVocabulary` to be hashable, which requires
+    `best_sourcing` to have been canonicalised into a hashable form rather than left as a `dict` or a
+    `MappingProxyType`."""
+    h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64),))
+    key = h.grouping_key
+    assert isinstance(hash(key), int)
+    assert hash(h.vocabulary) == hash(hn.DEFAULT_PART_VOCABULARY)
+    d = {key: "marker"}
+    assert d[key] == "marker"
+
+
 def test_the_module_sourcing_table_is_immutable():
     """Round 2 fixed `DEFAULT_PART_VOCABULARY` aliasing the module dict; a reviewer found `conforms_to_perigraph`
     still read that same module "constant" LIVE, so mutating it from outside this module would have flipped which
@@ -333,17 +383,17 @@ def test_two_harnesses_under_different_vocabularies_are_never_comparable():
     """Comparing identities across two DIFFERENT vocabularies would read `missing` and a part's own admissibility
     against two different definitions of what a part IS, attributing a declaration difference to the arms.
     `comparable_with`/`refuse_incomparable` check the vocabulary explicitly rather than relying on `identity`
-    alone to differ (defense in depth: see the next test for the one case `identity` cannot always tell apart
-    on its own)."""
+    alone to differ -- defense in depth, on top of `identity` itself now also differing (see the next tests for
+    what folding the vocabulary's CONTENT into the hash does and does not tell apart on its own)."""
     widened = hn.PartVocabulary(
         parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
         best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING, "context_window_policy": "pushed_by_owner"})
     a = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64),))
     b = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
                                  vocabulary=widened),), vocabulary=widened)
-    # Round 4: a NON-default vocabulary's own identity now enters `identity`'s hash (see `Harness.identity`), so
-    # these two no longer even share a hash -- the collision a round-3 review found is closed for the default
-    # case specifically, and the vocabulary check below still catches it independently either way.
+    # A NON-default vocabulary's own CONTENT now enters `identity`'s hash (see `Harness.identity`), so these two
+    # no longer even share a hash -- the collision a round-3 review found is closed for the default case
+    # specifically, and the vocabulary check below still catches it independently either way.
     assert a.identity != b.identity
     assert a.comparable_with(b) is False
     with pytest.raises(hn.Unidentified, match="different vocabularies"):
@@ -351,9 +401,10 @@ def test_two_harnesses_under_different_vocabularies_are_never_comparable():
 
 
 def test_identity_is_unchanged_for_the_default_vocabulary_but_folds_in_any_other():
-    """Pins the round-4 fix precisely: perigraph's own cross-language digest bytes (the default vocabulary) are
-    untouched -- `test_the_digest_rules_the_second_implementation_forced_into_the_spec` already pins that exact
-    byte sequence -- and ANY other vocabulary's own `identity` string is folded into the hash first."""
+    """Pins the round-4/5 fix precisely: perigraph's own cross-language digest bytes (the default vocabulary)
+    are untouched -- `test_the_digest_rules_the_second_implementation_forced_into_the_spec` already pins that
+    exact byte sequence -- and any OTHER vocabulary's own CONTENT digest (round 5: not its self-declared
+    `identity` string, see the next two tests for why) is folded into the hash first."""
     default_h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64),))
     expected_default = hashlib.sha256(b"instruction=" + b"a" * 64 + b";").hexdigest()[:24]
     assert default_h.identity == expected_default
@@ -362,7 +413,8 @@ def test_identity_is_unchanged_for_the_default_vocabulary_but_folds_in_any_other
                                name="my-deployment", version="1")
     custom_h = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
                                         vocabulary=custom),), vocabulary=custom)
-    expected_custom = hashlib.sha256(b"vocabulary=my-deployment/1;instruction=" + b"a" * 64 + b";").hexdigest()[:24]
+    expected_custom = hashlib.sha256(
+        f"vocabulary={custom.content_digest};".encode() + b"instruction=" + b"a" * 64 + b";").hexdigest()[:24]
     assert custom_h.identity == expected_custom
     assert custom_h.identity != default_h.identity
 
@@ -432,25 +484,46 @@ def test_grouping_key_is_vocabulary_aware():
     assert len({a.grouping_key, b.grouping_key}) == 2
 
 
-def test_grouping_key_survives_two_vocabularies_sharing_a_forgotten_name():
-    """The one case `identity`'s own vocabulary string cannot tell apart: two vocabularies that both forgot to
-    declare `name`/`version` (both default to `"custom"`/`"unversioned"`) but differ in actual content. Both
-    would prefix `identity`'s hash with the SAME string and, on otherwise-identical identifying bytes, collide
-    there too -- `grouping_key` does not, because it compares the whole `PartVocabulary` object (parts AND
-    best_sourcing AND name AND version), not just the self-declared name string."""
+def test_identity_uses_vocabulary_content_not_its_self_declared_name():
+    """Round 4 folded `vocabulary.identity` (the SELF-DECLARED name/version string) into `Harness.identity`'s
+    hash; a reviewer found that two vocabularies which both forgot to declare `name`/`version` (both default to
+    `"custom"`/`"unversioned"`) share that string even though their actual content differs, so they still
+    collided. Round 5 folds in `vocabulary.content_digest` (a hash over `parts`/`best_sourcing`, never the
+    label) instead, which tells these two apart correctly."""
     left = hn.PartVocabulary(parts=(*hn.DEFAULT_HARNESS_PARTS, "context_window_policy"),
                              best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING,
                                           "context_window_policy": "pushed_by_owner"})
     right = hn.PartVocabulary(parts=(*hn.DEFAULT_HARNESS_PARTS, "some_other_part"),
                               best_sourcing={**hn.DEFAULT_BEST_AVAILABLE_SOURCING,
                                            "some_other_part": "pushed_by_owner"})
-    assert left.identity == right.identity, "both left name/version undeclared, so the strings match"
+    assert left.identity == right.identity, "both leave name/version undeclared, so the LABEL matches"
+    assert left.content_digest != right.content_digest, "but the actual parts differ, so the CONTENT does not"
     a = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
                                  vocabulary=left),), vocabulary=left)
     b = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
                                  vocabulary=right),), vocabulary=right)
-    assert a.identity == b.identity, "identity's hash prefix is the shared name string, so this still collides"
-    assert a.grouping_key != b.grouping_key, "grouping_key compares the full vocabulary, not just its name"
+    assert a.identity != b.identity, "identity now hashes the vocabulary's CONTENT, so this no longer collides"
+
+
+def test_grouping_key_still_distinguishes_declared_name_when_content_is_identical():
+    """The flip side, and the reason `grouping_key` is not simply redundant with the round-5 `identity` fix: two
+    vocabularies with IDENTICAL `parts`/`best_sourcing` but DIFFERENT self-declared `name`/`version` produce the
+    SAME `content_digest` -- correctly, since their actual rules are the same -- so `identity` treats them as
+    one harness. A caller who still wants to tell "declared by deployment A" apart from "declared by deployment
+    B" administratively, even though the content matches, uses `grouping_key`, which compares the whole
+    `PartVocabulary` object including `name`/`version`."""
+    same_content_a = hn.PartVocabulary(parts=hn.DEFAULT_HARNESS_PARTS, best_sourcing=hn.DEFAULT_BEST_AVAILABLE_SOURCING,
+                                       name="deployment-a", version="1")
+    same_content_b = hn.PartVocabulary(parts=hn.DEFAULT_HARNESS_PARTS, best_sourcing=hn.DEFAULT_BEST_AVAILABLE_SOURCING,
+                                       name="deployment-b", version="1")
+    assert same_content_a.content_digest == same_content_b.content_digest
+    assert same_content_a.identity != same_content_b.identity
+    a = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
+                                 vocabulary=same_content_a),), vocabulary=same_content_a)
+    b = hn.Harness(parts=(hn.Part(kind="instruction", sourcing="in_the_request", digest="a" * 64,
+                                 vocabulary=same_content_b),), vocabulary=same_content_b)
+    assert a.identity == b.identity, "same content, so the SAME record identity -- this is correct, not a bug"
+    assert a.grouping_key != b.grouping_key, "grouping_key still tells the two declarations apart administratively"
 
 
 def test_a_duplicate_pair_in_best_sourcing_is_refused_not_silently_collapsed():
