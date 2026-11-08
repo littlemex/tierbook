@@ -402,10 +402,10 @@ They will go stale; that is what the pin is for.
 
 **v0.5.0.** The loop closes for the certification plane: observations are ingested, a policy is derived and checked on
 held-out items, exported to vLLM Semantic Router, and the router's traffic comes back as observations that `drift`
-reads. Verified end to end on billed traffic (`docs/verify/v0.5.0-certification-loop.md`). Not yet shown: a self-hosted
-arm priced from a measured throughput inside the plane, more than one router replica, and Claude arms routed through
-vllm-sr on billed traffic (the gateway fix that makes them routable, littlemex/stratoclave#289, was checked on the
-gateway's local mode only). The ledger path's status, unchanged since v0.2.0, follows.
+reads. Verified end to end on billed traffic (`docs/verify/v0.5.0-certification-loop.md`). Claude arms are routed through
+vllm-sr on billed traffic too, on a gateway built from scratch, with a vllm-sr build that reads `reasoning_details` (the
+0.4.0 release does not). Not yet shown: a self-hosted arm priced from a measured throughput inside the plane, and more
+than one router replica. The ledger path's status, unchanged since v0.2.0, follows.
 
 **v0.2.0.** One turn runs end to end and the log can now be learned from. A state is observed from a live engine, a
 compiled policy decides from it, a family that declares an exploration rate draws randomly among the candidates whose

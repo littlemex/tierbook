@@ -26,3 +26,16 @@ def test_a_skipped_sample_never_overlaps_the_first():
     first = {x["item"] for x in sample(rows, ["law"], 20, seed=1)}
     second = {x["item"] for x in sample(rows, ["law"], 20, seed=1, skip=20)}
     assert len(first) == len(second) == 20 and not first & second
+
+
+def test_candidates_come_from_the_gateway_rates_and_an_unpriced_arm_is_refused():
+    import pytest
+    from examples.certification_loop.rates_to_candidates import candidates_from_rates
+    rates = {"version": None, "as_of": "t", "rates": [
+        {"pricing_key": "haiku", "models": ["claude-haiku-4-5"], "input_per_mtok_microusd": 1100000,
+         "output_per_mtok_microusd": 5500000, "cache_read_per_mtok_microusd": 110000,
+         "cache_write_per_mtok_microusd": 1375000}]}
+    c = candidates_from_rates(rates, ["claude-haiku-4-5"], base_url="https://g.example/v1", api_key_env="K")
+    assert c["candidates"]["claude-haiku-4-5"]["price_per_mtok"] == {"fresh_in": 1.1, "cached_in": 0.11, "out": 5.5}
+    with pytest.raises(SystemExit, match="prices no model"):
+        candidates_from_rates(rates, ["gpt-x"], base_url="https://g.example/v1", api_key_env="K")
