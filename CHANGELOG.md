@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+* `infra/patches/stratoclave/` is gone: both patches landed upstream as littlemex/stratoclave#289, and `GATEWAY_REF`
+  moves to its merge commit `c888e4ac2bfa363f5539357db12a7603725b25b7`. A gateway at that commit serves
+  `GET /api/mvp/me/rates`, per-request `cost_microusd` and `request_id`, and canonical cache usage on Claude chat
+  completions, so Claude arms are routable through vLLM Semantic Router.
+
 ## 0.5.0
 
 **tierbook is now the certification plane beside a request-path router, not a router.** Per-request selection is

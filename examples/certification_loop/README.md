@@ -14,8 +14,8 @@ categories are also the router's domain labels), the grader (`grade.py`), the ar
 * An OpenAI-compatible gateway that serves the arms in `candidates.json`, and its key in `TIERBOOK_API_KEY`.
 * For the routed half: Docker and `pip install vllm-sr==0.4.0` on the machine that will run the router.
 
-The prices in `candidates.json` are the per-MTok rates the gateway bills at, copied from its rate table; with the
-gateway patch in `infra/patches/stratoclave/` applied they can be read from `GET /api/mvp/me/rates` instead.
+The prices in `candidates.json` are the per-MTok rates the gateway bills at, copied from its rate table; a stratoclave
+gateway at or after `GATEWAY_REF` serves them to the caller at `GET /api/mvp/me/rates`.
 
 ## The loop
 
@@ -57,8 +57,8 @@ tierbook ingest --calls routed.jsonl --outcomes routed-outcomes.jsonl --out rout
 tierbook drift --observations obs.jsonl --fresh routed-obs.jsonl --deployed policy.json --candidates $EX/candidates.json --declarations $EX/declarations.json --out drift.json --rederived-out policy-next.json
 ```
 
-On a gateway that reports cached tokens beside `prompt_tokens` for some models (stratoclave with
-`infra/patches/stratoclave/0002` does so for Claude models), name those arms at ingest with `--cache-additive-arm`, once
+On a gateway that reports cached tokens beside `prompt_tokens` for some models (stratoclave does so for
+Claude models), name those arms at ingest with `--cache-additive-arm`, once
 per arm; without it the OpenAI meaning is read. This example's prompts are never cached, so it makes no difference here.
 
 `drift` exits 3 when fresh traffic contradicts a deployed assignment. When the re-derived policy differs, export it and

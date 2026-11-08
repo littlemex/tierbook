@@ -404,7 +404,8 @@ They will go stale; that is what the pin is for.
 held-out items, exported to vLLM Semantic Router, and the router's traffic comes back as observations that `drift`
 reads. Verified end to end on billed traffic (`docs/verify/v0.5.0-certification-loop.md`). Not yet shown: a self-hosted
 arm priced from a measured throughput inside the plane, more than one router replica, and Claude arms routed through
-vllm-sr, which waits on `infra/patches/stratoclave/0002`. The ledger path's status, unchanged since v0.2.0, follows.
+vllm-sr on billed traffic (the gateway fix that makes them routable, littlemex/stratoclave#289, was checked on the
+gateway's local mode only). The ledger path's status, unchanged since v0.2.0, follows.
 
 **v0.2.0.** One turn runs end to end and the log can now be learned from. A state is observed from a live engine, a
 compiled policy decides from it, a family that declares an exploration rate draws randomly among the candidates whose
