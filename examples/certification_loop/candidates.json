@@ -1,0 +1,112 @@
+{
+  "config_format": 2,
+  "_comment": "Arms for the certification-loop example. Prices are the per-MTok rates the gateway bills at (its bundled rate table at the commit named in README.md), converted from micro-USD; an operator regenerates this file from their own gateway's rates rather than typing figures. base_url is replaced at run time.",
+  "candidates": {
+    "qwen3-next-80b": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "qwen3-next-80b",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 0.14,
+        "cached_in": 0.14,
+        "out": 1.2
+      },
+      "note": "gateway pricing key 'qwen'"
+    },
+    "nemotron-super-3-120b": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "nemotron-super-3-120b",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 0.15,
+        "cached_in": 0.15,
+        "out": 0.65
+      },
+      "note": "gateway pricing key 'nemotron'"
+    },
+    "claude-haiku-4-5": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "claude-haiku-4-5",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 1.1,
+        "cached_in": 0.11,
+        "out": 5.5
+      },
+      "note": "gateway pricing key 'haiku'"
+    },
+    "claude-sonnet-5": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "claude-sonnet-5",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 2.2,
+        "cached_in": 0.22,
+        "out": 11.0
+      },
+      "note": "gateway pricing key 'sonnet-5'"
+    },
+    "claude-opus-4-5": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "claude-opus-4-5",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 5.5,
+        "cached_in": 0.55,
+        "out": 27.5
+      },
+      "note": "gateway pricing key 'opus'"
+    },
+    "gpt-6.1-terra": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "gpt-6.1-terra",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 1.1,
+        "cached_in": 0.055,
+        "out": 5.5
+      },
+      "note": "gateway pricing key 'gpt-6.1-terra'"
+    },
+    "gpt-5.6-terra": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "gpt-5.6-terra",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 2.2,
+        "cached_in": 0.275,
+        "out": 13.2
+      },
+      "note": "gateway pricing key 'gpt-5.6-terra'"
+    }
+  },
+  "families": {}
+}
