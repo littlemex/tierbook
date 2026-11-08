@@ -57,6 +57,10 @@ tierbook ingest --calls routed.jsonl --outcomes routed-outcomes.jsonl --out rout
 tierbook drift --observations obs.jsonl --fresh routed-obs.jsonl --deployed policy.json --candidates $EX/candidates.json --declarations $EX/declarations.json --out drift.json --rederived-out policy-next.json
 ```
 
+On a gateway that reports cached tokens beside `prompt_tokens` for some models (stratoclave with
+`infra/patches/stratoclave/0002` does so for Claude models), name those arms at ingest with `--cache-additive-arm`, once
+per arm; without it the OpenAI meaning is read. This example's prompts are never cached, so it makes no difference here.
+
 `drift` exits 3 when fresh traffic contradicts a deployed assignment. When the re-derived policy differs, export it and
 hand it to the running router with `vllm-sr config apply --config vsr-next.yaml`.
 

@@ -138,25 +138,32 @@ def digest(observations: Iterable[Observation]) -> str:
 
 
 def from_chat_completion(response: dict, *, item: str, task_type: str, arm: str, outcome: str,
-                         latency_s: float | None = None, **extra) -> Observation:
+                         latency_s: float | None = None, cache_additive: bool = False, **extra) -> Observation:
     """An observation from an OpenAI-compatible chat completion body.
 
     Both spellings of the token counts are read (`prompt_tokens`/`completion_tokens`, `input_tokens`/`output_tokens`)
-    and both cache fields seen in the wild (`prompt_tokens_details.cached_tokens`, `cache_read_input_tokens`). On the
-    OpenAI spelling, cached tokens are part of `prompt_tokens` and fresh input is the difference; on the Anthropic
-    spelling they are not. Usage is left EMPTY -- unknown, not zero -- when either count is missing, or when the
-    cached count exceeds `prompt_tokens`, which says the wire does not follow the OpenAI convention and the split
-    between fresh and cached input cannot be read off it.
+    and both cache fields seen in the wild (`prompt_tokens_details.cached_tokens`, `cache_read_input_tokens`).
+
+    Whether cached tokens are part of the prompt count is a property of the wire, and one endpoint can serve both: an
+    OpenAI-family model's `prompt_tokens` includes them (the OpenAI meaning), while a gateway that renders an
+    Anthropic-family response onto the same shape may report them beside it. `cache_additive=True` says the second
+    holds for this arm; the caller knows its gateway and this function does not guess. The `input_tokens` spelling is
+    additive by definition.
+
+    Usage is left EMPTY -- unknown, not zero -- when a count is missing; when cached tokens exceed a prompt count
+    that is supposed to contain them, which says the declared meaning is wrong for this wire; and when cache WRITES
+    are reported, because no price-card kind bills them and pricing them as fresh input would be a guess.
     """
     u = response.get("usage") or {}
+    details = u.get("prompt_tokens_details") or {}
     prompt = u.get("prompt_tokens", u.get("input_tokens"))
     completion = u.get("completion_tokens", u.get("output_tokens"))
-    cached = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens"))
-                 or u.get("cache_read_input_tokens") or 0)
+    cached = int(details.get("cached_tokens") or u.get("cache_read_input_tokens") or 0)
+    writes = int(details.get("cache_write_tokens") or u.get("cache_creation_input_tokens") or 0)
     usage: dict[str, int] = {}
-    if prompt is not None and completion is not None:
+    if prompt is not None and completion is not None and writes == 0:
         prompt = int(prompt)
-        if "prompt_tokens" not in u:
+        if cache_additive or "prompt_tokens" not in u:
             usage = {"fresh_in": prompt, "cached_in": cached, "out": int(completion)}
         elif cached <= prompt:
             usage = {"fresh_in": prompt - cached, "cached_in": cached, "out": int(completion)}
@@ -176,7 +183,7 @@ def by_key(observations: Iterable[Observation]) -> Iterator[tuple[tuple[str, str
 
 
 def ingest_chat_log(source_rows: Iterable[dict], outcome_rows: Iterable[dict], *,
-                    source: str = "") -> list[Observation]:
+                    source: str = "", cache_additive_arms: Iterable[str] = ()) -> list[Observation]:
     """Join a chat-completions call log to the caller's grades, by `(item, arm, run)`.
 
     A source row carries `item`, `task_type`, `arm`, optional `run`, `latency_s`, `observed_at`, `label_source`,
@@ -187,7 +194,10 @@ def ingest_chat_log(source_rows: Iterable[dict], outcome_rows: Iterable[dict], *
     `unobserved` with the error as its reason. A grade for a call that errored is refused rather than overridden:
     the two files disagree about whether there was an answer, and choosing between them is not a mapping. A grade
     with no call is refused too: it would be an outcome nobody paid for. `billed_usd` on a source row is carried.
+    `cache_additive_arms` names the arms whose gateway reports cached tokens beside the prompt count rather than in
+    it (see `from_chat_completion`).
     """
+    additive = frozenset(cache_additive_arms)
     grades: dict[tuple[str, str, str], dict] = {}
     for g in outcome_rows:
         key = (str(g["item"]), str(g["arm"]), str(g.get("run", "")))
@@ -204,7 +214,7 @@ def ingest_chat_log(source_rows: Iterable[dict], outcome_rows: Iterable[dict], *
         common = dict(item=key[0], task_type=str(r["task_type"]), arm=key[1], run=key[2],
                       latency_s=r.get("latency_s"), observed_at=str(r.get("observed_at", "")),
                       label_source=str(r.get("label_source", "")), source=source,
-                      billed_usd=r.get("billed_usd"))
+                      billed_usd=r.get("billed_usd"), cache_additive=key[1] in additive)
         g = grades.get(key)
         if (r.get("error") or not r.get("response")) and g is not None:
             raise EvidenceError(f"{key} has a grade but the call returned no answer ({r.get('error')!r})")

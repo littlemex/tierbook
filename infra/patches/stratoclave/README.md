@@ -90,6 +90,11 @@ reports a cache leg for the unknown field to appear in. Without this fix,
 tierbook cannot route any Claude-family model through vLLM Semantic Router at
 all.
 
+**What it keeps.** `prompt_tokens` keeps this endpoint's pinned meaning (C8.4: uncached input, with the cache legs
+reported beside it and `total_tokens` excluding them), so on this endpoint a Claude response's cached tokens are
+additive to `prompt_tokens` while a GPT response's are inside it. tierbook reads the difference from a declaration,
+`tierbook ingest --cache-additive-arm <claude arm>`, rather than guessing it.
+
 **Base commit.** The same `34768dca17a429e04a7368a34d71e8fe4561edb0` 0001 is
 based on — 0002 is the very next commit on top of 0001, not an independent
 patch against `main`.

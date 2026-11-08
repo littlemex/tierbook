@@ -12,6 +12,7 @@ handed back to the router. `docs/DESIGN-v0.5-certification-plane.md` says why, f
 
 * **`tierbook ingest`** joins an OpenAI-compatible call log to the caller's grades as observations, one per attempt.
   It never grades. A call with no grade is `unobserved: ungraded`; a grade for a call that returned nothing is refused.
+  `--cache-additive-arm` declares, per arm, that the gateway reports cached tokens beside `prompt_tokens`.
 * **`tierbook derive`** certifies per task type: the cheapest arm per accepted task among those whose selection-half
   lower bound clears the declared floor, then a held-out check that makes it `certified`, `unconfirmed`,
   `contradicted` or `unassignable`. Cost counts every attempt, including failed ones, at the current candidate file's
