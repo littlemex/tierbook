@@ -331,10 +331,10 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
     for arm in decl.usd_per_attempt:
         cand = cfg.candidates.get(arm)
         if cand is None or not cand.is_fixed_cost:
+            where = cfg.source or "the candidate file"
             raise DeclarationError(
-                f"usd_per_attempt names {arm!r}, which is not a fixed-cost candidate in {cfg.source or 'the '
-                'candidate file'}; a declared price may only stand in for an hourly bill, never for a price card "
-                "or for an arm the router cannot reach")
+                f"usd_per_attempt names {arm!r}, which is not a fixed-cost candidate in {where}; a declared price "
+                "may only stand in for an hourly bill, never for a price card or for an arm the router cannot reach")
     results, stale = tally_items(observations, decl, as_of)
     part = {key: partition_of(key[2], decl.split_salt, decl.holdout_fraction) for key in results}
     observed_types = sorted({t for t, _, _ in results} | {t for t, _ in stale})
