@@ -42,5 +42,5 @@ from tierbook.policy import (  # noqa: F401
 #: rule quietly did nothing wherever the two were not sitting next to each other -- which is every deployment.
 SCHEMA_PATH = Path(__file__).with_name("schema.json")
 
-__version__ = "0.1.0"
+__version__ = "0.5.0"
 SCHEMA_VERSION = 1
