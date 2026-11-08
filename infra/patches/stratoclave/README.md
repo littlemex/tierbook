@@ -3,7 +3,8 @@
 Patches against [littlemex/stratoclave](https://github.com/littlemex/stratoclave) that tierbook needs and upstream
 does not have yet. `infra/tierbook-up` applies them to its pinned checkout of the gateway (`GATEWAY_REF`, the commit
 they were made against) before deploying, and `./infra/tierbook-up patches` reports whether each still applies or has
-landed upstream. To propose one upstream, apply it to a clone with `git am`.
+landed upstream. Both are proposed upstream as the branch `feat/me-rates-and-canonical-chat-usage` of
+littlemex/stratoclave; delete them here once it is merged and `GATEWAY_REF` moves past it.
 
 ## What is in this patch
 
