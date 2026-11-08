@@ -4,19 +4,25 @@
 applies them to a pinned checkout before deploying, and the same diffs are the contribution — nothing has to be
 re-derived to upstream them.
 
-## There are none right now
+## What is here now
 
-Both gaps this mechanism was built for are fixed upstream, and `GATEWAY_REF` / `CLUSTER_REF` in `infra/tierbook-up` name
-the commits that carry the fixes:
+Nothing is needed in distributed-ai for v0.5: the certification loop's router runs from vllm-sr's own Docker stack.
+
+| repository | patch | what it adds | why tierbook needs it |
+|---|---|---|---|
+| stratoclave | `stratoclave/0001-feat-mvp-let-a-caller-read-its-own-billing-rates-and.patch` | `GET /api/mvp/me/rates`; `cost_microusd` and `request_id` on usage-history rows | the certification plane prices observations at the gateway's current rates and reconciles against what was billed |
+| stratoclave | `stratoclave/0002-fix-mvp-stop-leaking-Anthropic-shaped-cache-keys-int.patch` | OpenAI-canonical `prompt_tokens_details` cache usage on Claude responses from `/v1/chat/completions` | vLLM Semantic Router rejects the Anthropic-shaped keys and answers 502, so no Claude arm can be routed through it |
+
+The two earlier gaps this mechanism carried are fixed upstream, and `GATEWAY_REF` / `CLUSTER_REF` name commits that carry
+those fixes:
 
 | gap | fixed as |
 |---|---|
 | the gateway's first-admin variable never reached its task definition | the variable is passed through beside `ALLOW_ADMIN_CREATION` |
 | the serving chart's engine arguments were a closed list, so a request carrying tool schemas was rejected with 400 | `extraArgs` on the three serving workloads |
 
-So this directory holds only this document. That is the intended end state for a patch, not a sign the mechanism went
-unused — and a patch directory that exists with nothing in it is a test failure, because scaffolding left behind makes
-`patches` report on a repository it carries nothing for.
+A patch directory that exists with nothing in it is a test failure, because scaffolding left behind makes `patches`
+report on a repository it carries nothing for.
 
 ## Why a diff rather than fixing the deployed resource
 

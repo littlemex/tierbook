@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.5.0
+
+**tierbook is now the certification plane beside a request-path router, not a router.** Per-request selection is
+done well by vLLM Semantic Router and others; what none of them do is turn an operator's own graded outcomes into a
+per-task-type assignment that is cheapest per accepted task, checked on held-out items, priced at today's rates, and
+handed back to the router. `docs/DESIGN-v0.5-certification-plane.md` says why, from the survey in
+`docs/prior-art-2026-11.md`; `docs/verify/v0.5.0-certification-loop.md` runs it on billed traffic through vllm-sr 0.4.0.
+
+### Added
+
+* **`tierbook ingest`** joins an OpenAI-compatible call log to the caller's grades as observations, one per attempt.
+  It never grades. A call with no grade is `unobserved: ungraded`; a grade for a call that returned nothing is refused.
+* **`tierbook derive`** certifies per task type: the cheapest arm per accepted task among those whose selection-half
+  lower bound clears the declared floor, then a held-out check that makes it `certified`, `unconfirmed`,
+  `contradicted` or `unassignable`. Cost counts every attempt, including failed ones, at the current candidate file's
+  prices. The policy names a fallback and compares itself with the single best arm on the same held-out items.
+* **`tierbook drift`** diffs a deployed policy against a re-derivation, checks each deployed assignment against fresh
+  routed traffic (`confirmed` / `consistent` / `contradicted` / `undetermined`), lists cells that need measuring, and
+  counts attempts that reached no arm. Exit 3 on a contradiction, 2 on a refusal.
+* **`tierbook export-policy`** writes the policy as a vllm-sr configuration (through the existing exporter) or as a
+  plain table, with the policy's fallback as the router's default.
+* Everything the certificate depends on is declared, with no defaults: alpha, the bound method (a dotted path;
+  `tierbook.bounds:wilson` ships), the split, how unobserved attempts count, freshness, the multiplicity correction,
+  floors, and how repeated runs combine (a name or a dotted path).
+* `examples/certification_loop/`: prepare, drive, grade, and the commands for the whole loop.
+* `infra/patches/stratoclave/`: per-request cost and billing rates readable by a caller (0001), and OpenAI-canonical
+  cache usage on Claude responses, which vllm-sr otherwise rejects with 502 (0002). `GATEWAY_REF` moves to the commit
+  they apply to.
+
+### Changed
+
+* `export_vsr` emits the provider shape vllm-sr 0.4.0 and `main` accept (`providers.defaults.model`, backend
+  `provider`), and its listener and management API addresses are inputs that default to loopback. The listener used
+  to be `0.0.0.0`, which vllm-sr's Docker stack publishes on every host interface; an in-cluster export passes
+  `--listener-address 0.0.0.0` (see `deploy/base/router.yaml`).
+* The Wilson interval lives in `tierbook/bounds.py`; `reproduce.wilson` re-exports it.
+* The package version is 0.5.0 in both `pyproject.toml` and `tierbook.__version__`, which had both said 0.1.0.
+
+### Removed
+
+* `predict.py` and `describe.py`: no importer, no test, and a documented install extra that did not exist.
+
+### Fixed
+
+* A test of the plane's refusal of signature-less observers used `map`, which has a signature from Python 3.14.
+
 ## 0.2.0
 
 **The log survives its own evolution, and exploration is specified and drawn from.** A reader can now add a field

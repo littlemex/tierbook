@@ -422,7 +422,7 @@ def test_the_exported_config_names_the_tier_the_holdout_supported(tmp_path):
     pricing = conf["providers"]["models"][0].get("pricing") or {}
     assert "prompt_per_1m" in pricing and "fresh_in" not in pricing
     # The default for unmatched traffic is the reference, not the cheapest thing on offer.
-    assert conf["providers"]["defaults"]["default_model"] == "api-strong-a"
+    assert conf["providers"]["defaults"]["model"] == "api-strong-a"
 
 
 def test_the_schema_travels_with_the_installed_package():

@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "_comment": "Everything a certification depends on, declared. The floors are this example's stand-in for a business requirement per task type; nothing in tierbook proposes them.",
+  "alpha": 0.05,
+  "bound": "tierbook.bounds:wilson",
+  "holdout_fraction": 0.5,
+  "split_salt": "certification-loop-2026-11",
+  "unobserved_as": "rejected",
+  "max_observation_age_days": 30,
+  "held_out_correction": "none",
+  "min_items": 20,
+  "task_types": {
+    "biology": {
+      "floor": 0.8
+    },
+    "history": {
+      "floor": 0.6
+    },
+    "math": {
+      "floor": 0.6
+    },
+    "law": {
+      "floor": 0.45
+    }
+  }
+}

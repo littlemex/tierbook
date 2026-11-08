@@ -57,7 +57,7 @@ GATEWAY_REPO="${TIERBOOK_GATEWAY_REPO:-https://github.com/littlemex/stratoclave.
 #: The exact commit of the gateway this was verified against. Neither of the two repositories cuts versions, so a commit
 #: is the only thing that names a state of them -- and "the tip of main" is not a state, it is whatever main happens to
 #: be the day somebody runs this. Pinning is what makes a run reproducible and a failure attributable.
-GATEWAY_REF="${TIERBOOK_GATEWAY_REF:-db7760356d9f87a4a11ee3a3b01607fc397942af}"
+GATEWAY_REF="${TIERBOOK_GATEWAY_REF:-34768dca17a429e04a7368a34d71e8fe4561edb0}"
 GATEWAY_ADMIN_EMAIL="${TIERBOOK_GATEWAY_ADMIN_EMAIL:-}"
 GATEWAY_CONTAINER_CLI="${TIERBOOK_CONTAINER_CLI:-docker}"
 

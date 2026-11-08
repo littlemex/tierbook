@@ -97,7 +97,8 @@ spec:
       volumes:
         # Written by `tierbook export-vsr --out`. Kept separate from the compiled table so that a table which
         # compiles but does not export -- a chain, an unmapped family, a reserved entrypoint name -- fails at
-        # export time rather than at the router's start.
+        # export time rather than at the router's start. Export it with `--listener-address 0.0.0.0`: in a pod
+        # the listener must accept the Service's traffic, and the Service, not a host publish, is the boundary.
         - {name: router-config, configMap: {name: tierbook-router-config}}
         - {name: envoy-config, configMap: {name: tierbook-envoy-config}}
         - {name: models, persistentVolumeClaim: {claimName: tierbook-router-models}}

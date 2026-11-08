@@ -34,6 +34,13 @@ count is gone rather than corrected: a number in a docstring beside the list it 
     tierbook attach-outcome  attach an observed outcome (label, tokens, latency) to a decision already logged
     tierbook accept      the acceptance criteria over a log, each with its own verdict and why
 
+The certification plane (v0.5, registered from `certify_cli.py`; see docs/DESIGN-v0.5-certification-plane.md):
+
+    tierbook ingest      join a call log to the caller's grades as observations
+    tierbook derive      certify a per-task-type assignment, with a held-out check and a fallback
+    tierbook drift       diff a deployed policy against today's evidence and prices
+    tierbook export-policy  turn a derived policy into a router configuration
+
 There is no `serve`. A component that decides where money goes should not also be the thing holding the
 socket: the online decision is a dictionary lookup, and the caller already has a process.
 
@@ -449,7 +456,7 @@ def cmd_export_vsr(args) -> int:
                             listener_port=args.port, entrypoint=args.entrypoint,
                             request_can_reject=args.can_reject,
                             allow_provisional=args.allow_provisional, signal_kind=args.signal_kind,
-                            signal_categories=cats)
+                            signal_categories=cats, listener_address=args.listener_address)
     except ExportError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
@@ -1406,6 +1413,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="the run needs function tools; probe for them and fail if the endpoint refuses")
     f.set_defaults(fn=cmd_preflight)
 
+    from tierbook.certify_cli import register as register_certification_plane
+    register_certification_plane(sub, common)
+
     x = sub.add_parser("export-vsr", parents=[common], help="turn a compiled table into a router config")
     x.add_argument("--table", required=True)
     x.add_argument("--config", required=True)
@@ -1428,6 +1438,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="the port the data plane listens on. Not 8080: the router binds that "
                         "for its classification API in the same network namespace")
     x.add_argument("--extproc-port", type=int, default=50051)
+    x.add_argument("--listener-address", default="127.0.0.1",
+                   help="where the router publishes its listener on the host; loopback unless it must be "
+                        "reachable from other machines (in-cluster deployments pass 0.0.0.0)")
     x.add_argument("--signal-kind", default="domain",
                    help="the condition type the classifier emits; 'domain' for the shipped classifier")
     x.add_argument("--signal-categories", action="append", metavar="LABEL=cat1,cat2",

@@ -68,6 +68,7 @@ from statistics import NormalDist
 
 from math import comb
 
+from tierbook.bounds import wilson  # noqa: F401  (re-exported; the interval lives where both layers can import it)
 from tierbook.evidence import EvidenceError, UNOBSERVED
 from tierbook.outcomes import Cell, OutcomeTable
 from tierbook.quorum import (
@@ -77,28 +78,6 @@ from tierbook.quorum import (
     enumerate_policies,
     frontier,
 )
-
-
-def wilson(successes: int, n: int, *, z: float = 1.96) -> tuple[float, float]:
-    """A Wilson score interval, which stays inside [0, 1] where the normal approximation does not.
-
-    Used rather than the textbook interval because the rates here are small and the samples are in the
-    low hundreds, which is exactly where the normal approximation puts a lower bound below zero and a
-    reader stops trusting the number.
-
-    **What the interval is over.** It treats the items as a sample and each item's flip as an independent
-    binary draw, so it is uncertainty about the rate on the population the benchmark stands for. It is
-    *not* uncertainty about the run: two collections give one difference, and no interval computed from
-    them describes how much a third would move. A reader who wants the second thing has to collect a
-    third run.
-    """
-    if n == 0:
-        return (0.0, 1.0)
-    p = successes / n
-    denom = 1 + z * z / n
-    centre = (p + z * z / (2 * n)) / denom
-    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
-    return (max(0.0, centre - half), min(1.0, centre + half))
 
 
 def simultaneous_wilson(successes: int, n: int, *, alpha: float = 0.05,

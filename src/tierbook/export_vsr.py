@@ -87,7 +87,8 @@ def _provider_model(cand: Candidate) -> dict:
         "name": f"{cand.id}-primary",
         "endpoint": endpoint,
         "protocol": protocol,
-        "type": backend_type,
+        # `provider`, not `type`: v0.4.0's schema (and main's) rejects `type` as an unknown property.
+        "provider": backend_type,
         "weight": 1,
     }
     if cand.endpoint.api_key_env:
@@ -144,6 +145,9 @@ def export(
     allow_provisional: bool = False,
     signal_kind: str = "domain",
     signal_categories: dict[str, list[str]] | None = None,
+    management_bind_address: str = "127.0.0.1",
+    listener_address: str = "127.0.0.1",
+    management_port: int | None = None,
 ) -> tuple[dict, dict]:
     """Build the router config, and the provenance that travels beside it. `signal_for_family` maps a tierbook family to a classifier label.
 
@@ -269,9 +273,12 @@ def export(
     }
     config = {
         "version": CONFIG_VERSION,
-        "listeners": [{"name": f"http-{listener_port}", "address": "0.0.0.0", "port": listener_port,
+        # The listener's address is where vllm-sr's Docker stack PUBLISHES the port on the host (0.0.0.0 publishes on
+        # every interface, in front of backends that hold credentials). Loopback by default; a deployment that needs
+        # it reachable from elsewhere passes the wider address knowingly.
+        "listeners": [{"name": f"http-{listener_port}", "address": listener_address, "port": listener_port,
                        "timeout": "1200s"}],
-        "providers": {"defaults": {"default_model": default_model},
+        "providers": {"defaults": {"model": default_model},   # `model`: v0.4.0 rejects `default_model`
                       "models": [_provider_model(c) for c in members]},
         "routing": routing,
         "entrypoints": [{"model_names": [entrypoint], "recipe": recipe}],
@@ -285,9 +292,14 @@ def export(
                      "routing": recipe_routing}],
         "global": {"router": {"config_source": "file", "strategy": "priority"},
                    # The classification API answers "which decision would this request take" without calling
-                   # a model, which is how an operator checks the routing without spending anything. It binds
-                   # to loopback by default; acknowledging that it is container-local is what lets it start.
-                   "services": {"management_api": {"bind_address": "127.0.0.1"}}},
+                   # a model, which is how an operator checks the routing without spending anything.
+                   # Where the classification API binds INSIDE the router's container. Loopback by default.
+                   # vllm-sr 0.4.0's split Docker stack refuses anything but 0.0.0.0 here, because Envoy and the
+                   # Dashboard reach the router across the container network; that is a container-side bind, and
+                   # whether it is reachable from outside is decided by the port publish, not by this value.
+                   "services": {"management_api": {
+                       "bind_address": management_bind_address,
+                       **({"port": management_port} if management_port is not None else {})}}},
     }
     return config, provenance
 

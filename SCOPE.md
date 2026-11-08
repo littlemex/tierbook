@@ -52,6 +52,14 @@ answer unrepresentable.
 | 2. driven from the agent side | **done** | `examples/opencode_ops/`, 27 tests in `testpaths`. One fails if the loop does not spend less per accepted answer than a fixed always-escalate policy; another changes only the acceptance rates and demands the preference flip. 14 mutations, no survivors. Four defects in the mechanism came out of being its first outside caller (F142) |
 | 3. real machines, nothing inherited | **done, and the premise held** | both sides built beside the running ones on fresh names: nine stacks, then `153 added, 0 changed, 0 destroyed` with no module edit. The loop ran on billed traffic at $0.00003549 per accepted answer against $0.00077, and the performance currency got its first measured number -- 718,410/hour inside an 8s deadline, recorded as a lower bound because nothing queued. **The ad-hoc part was the first administrator**: the documented procedure cannot work and the alternative is labelled stale, so the running deployment has an admin that no repository explains. Full record in `docs/verify/v0.4.0-from-scratch.md`, findings in F143 |
 
+### v0.5: where the mechanism sits now
+
+After the three items above were done, the project was repositioned against what moved outside it
+(`docs/prior-art-2026-11.md`): per-request selection is now well served by the router on the request path, so tierbook
+is the **certification plane** beside it -- observations in, a held-out-checked per-task-type assignment out, exported
+to that router, re-derived when prices, arms or outcomes move (`docs/DESIGN-v0.5-certification-plane.md`). The META
+constraint above governs it unchanged: every threshold, bound method, split and floor in it is declared by the caller.
+
 ### How the work is done
 
 - **`main` is closed.** No pushes to `main`. An **epic branch off `main`**, **feat branches pushed into the epic**,
