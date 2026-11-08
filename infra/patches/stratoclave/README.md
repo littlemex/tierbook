@@ -3,7 +3,8 @@
 Patches against [littlemex/stratoclave](https://github.com/littlemex/stratoclave) that tierbook needs and upstream
 does not have yet. `infra/tierbook-up` applies them to its pinned checkout of the gateway (`GATEWAY_REF`, the commit
 they were made against) before deploying, and `./infra/tierbook-up patches` reports whether each still applies or has
-landed upstream. To propose one upstream, apply it to a clone with `git am`.
+landed upstream. Both are proposed upstream as the branch `feat/me-rates-and-canonical-chat-usage` of
+littlemex/stratoclave; delete them here once it is merged and `GATEWAY_REF` moves past it.
 
 ## What is in this patch
 
@@ -89,6 +90,11 @@ qwen/nemotron traffic over the same path did not, only because neither model
 reports a cache leg for the unknown field to appear in. Without this fix,
 tierbook cannot route any Claude-family model through vLLM Semantic Router at
 all.
+
+**What it keeps.** `prompt_tokens` keeps this endpoint's pinned meaning (C8.4: uncached input, with the cache legs
+reported beside it and `total_tokens` excluding them), so on this endpoint a Claude response's cached tokens are
+additive to `prompt_tokens` while a GPT response's are inside it. tierbook reads the difference from a declaration,
+`tierbook ingest --cache-additive-arm <claude arm>`, rather than guessing it.
 
 **Base commit.** The same `34768dca17a429e04a7368a34d71e8fe4561edb0` 0001 is
 based on — 0002 is the very next commit on top of 0001, not an independent

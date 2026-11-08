@@ -56,7 +56,8 @@ def cmd_ingest(args) -> int:
     from tierbook.observation import ingest_chat_log, write
 
     try:
-        obs = ingest_chat_log(_rows(args.calls), _rows(args.outcomes) if args.outcomes else [], source=args.source)
+        obs = ingest_chat_log(_rows(args.calls), _rows(args.outcomes) if args.outcomes else [], source=args.source,
+                              cache_additive_arms=args.cache_additive_arm or ())
     except _refusals() as e:
         print(f"refused: {e}", file=sys.stderr)
         return REFUSED
@@ -180,6 +181,9 @@ def register(sub, common) -> None:
     i.add_argument("--outcomes", default=None, help="JSONL of the caller's grades; absent means all ungraded")
     i.add_argument("--out", required=True)
     i.add_argument("--source", default="")
+    i.add_argument("--cache-additive-arm", action="append", metavar="ARM",
+                   help="an arm whose gateway reports cached tokens beside prompt_tokens rather than inside it "
+                        "(repeatable); without it the OpenAI meaning, cached tokens inside prompt_tokens, is read")
     i.add_argument("--append", action="store_true",
                    help="append to --out rather than replace it. Off by default: re-running an ingest must not "
                         "count the same attempts twice")

@@ -786,3 +786,35 @@ def test_repeat_rule_accepts_a_module_colon_attribute_callable(tmp_path):
     sel_rec = arm_record(policy, "law", "api-cheap")["selection"]
     assert sel_rec["items"] == 1
     assert sel_rec["accepted"] == 1
+
+
+# --- the meaning of cached tokens is the caller's declaration, per arm -------------------------------------------
+
+def _body(usage):
+    return {"choices": [{"message": {"content": "A"}, "finish_reason": "stop"}], "usage": usage}
+
+
+def test_cached_tokens_are_read_inside_prompt_tokens_unless_the_arm_is_declared_additive():
+    from tierbook.observation import from_chat_completion
+    u = {"prompt_tokens": 100, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 60}}
+    inside = from_chat_completion(_body(u), item="i", task_type="t", arm="gpt", outcome="accepted")
+    beside = from_chat_completion(_body(u), item="i", task_type="t", arm="claude", outcome="accepted",
+                                  cache_additive=True)
+    assert inside.usage == {"fresh_in": 40, "cached_in": 60, "out": 5}
+    assert beside.usage == {"fresh_in": 100, "cached_in": 60, "out": 5}
+
+
+def test_reported_cache_writes_leave_usage_unknown_rather_than_priced_as_fresh_input():
+    from tierbook.observation import from_chat_completion
+    u = {"prompt_tokens": 10, "completion_tokens": 4, "prompt_tokens_details": {"cache_write_tokens": 3524}}
+    o = from_chat_completion(_body(u), item="i", task_type="t", arm="claude", outcome="accepted", cache_additive=True)
+    assert o.usage == {}
+
+
+def test_ingest_applies_the_additive_meaning_only_to_the_named_arms():
+    from tierbook.observation import ingest_chat_log
+    u = {"prompt_tokens": 100, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 60}}
+    calls = [{"item": "i", "task_type": "t", "arm": a, "response": _body(u)} for a in ("gpt", "claude")]
+    grades = [{"item": "i", "arm": a, "outcome": "accepted"} for a in ("gpt", "claude")]
+    got = {o.arm: o.usage["fresh_in"] for o in ingest_chat_log(calls, grades, cache_additive_arms=["claude"])}
+    assert got == {"gpt": 40, "claude": 100}

@@ -85,7 +85,10 @@ One line per attempt of one item by one arm in one run:
   `(task type, arm, item, run)` are refused. `ingest` replaces its output unless `--append` is given.
 * `usage` is tokens. **Cost is always recomputed from the current candidate file**, so a price change re-derives the
   policy with nothing re-measured. Empty `usage` means the source did not report it, which is unknown and not zero:
-  an arm whose graded attempts carry no usage is unpriced. A source that knows the billed amount records `billed_usd`; it is reported beside
+  an arm whose graded attempts carry no usage is unpriced. Whether cached tokens are inside `prompt_tokens` (the
+  OpenAI meaning) or beside it is a property of the wire, and one gateway can serve both; `ingest
+  --cache-additive-arm` names the arms where they are beside it, and reported cache writes leave usage unknown
+  because no price-card kind bills them. A source that knows the billed amount records `billed_usd`; it is reported beside
   the computed cost for reconciliation and is never what a choice is made on, because it is yesterday's price.
 * `task_type` is the label the assignment is keyed on, and `label_source` says who produced it. The assignment is
   exported against the router's own label, so an assignment derived from a label the router did not produce says so
