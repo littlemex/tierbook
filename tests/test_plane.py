@@ -95,8 +95,19 @@ def test_something_that_is_not_callable_is_refused():
 def test_a_callable_with_no_signature_is_refused_rather_than_trusted():
     """A C callable exposes nothing to inspect, so the handle check above cannot run on it at all. Admitting one is
     admitting an observer on trust, which is the thing being refused rather than an inconvenience."""
+    class Opaque:
+        """Stands in for a C callable. `map` used to, until Python 3.14 gave it a signature and the test passed
+        a callable the check could inspect -- so the probe is built to have no signature on every version."""
+
+        @property
+        def __signature__(self):
+            raise ValueError("no signature")
+
+        def __call__(self, snapshot):
+            return None
+
     with pytest.raises(p.Unreplayable, match="trust is what this refuses"):
-        p.register(map)
+        p.register(Opaque())
 
 
 # --- the snapshot is immutable and its name is derived ------------------------------------------------------------
