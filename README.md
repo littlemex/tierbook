@@ -46,6 +46,27 @@ RANK UNSTABLE across folds: calibration ['self-hosted-a', 'api-cheap-a']
 Run the same command at `--margin 0.25` and it assigns. The refusal is not a demo: it is what this project's
 compiler did to this project's own conclusion, and the shipped example reproduces it on day one.
 
+## v0.5: the certification plane
+
+Per-request routing is a crowded, solved layer: vLLM Semantic Router, LiteLLM, gateways and vendor routers all pick a
+model per request. What none of them does is turn **your own graded outcomes** into a per-task-type assignment that is
+the cheapest per accepted task, checked on items the choice was not made on, priced at today's rates, and then hand it
+to the router you already run. That is what v0.5 adds, in four verbs:
+
+```console
+tierbook ingest  --calls calls.jsonl --outcomes outcomes.jsonl --out obs.jsonl
+tierbook derive  --observations obs.jsonl --candidates candidates.json --declarations declarations.json --out policy.json
+tierbook export-policy --policy policy.json --target vsr --candidates candidates.json --out vsr.yaml --signal law=law
+tierbook drift   --observations obs.jsonl --fresh routed.jsonl --deployed policy.json --candidates candidates.json \
+                 --declarations declarations.json --out drift.json
+```
+
+The design and why it is shaped this way: [`docs/DESIGN-v0.5-certification-plane.md`](docs/DESIGN-v0.5-certification-plane.md),
+from the survey in [`docs/prior-art-2026-11.md`](docs/prior-art-2026-11.md). The whole loop, run on billed traffic
+through vllm-sr 0.4.0 across three deployments: [`docs/verify/v0.5.0-certification-loop.md`](docs/verify/v0.5.0-certification-loop.md),
+reproducible with [`examples/certification_loop/`](examples/certification_loop/README.md). The ledger, compile and route
+path below is unchanged and is where the measurements in `docs/results-*.md` came from.
+
 ## Why a router should refuse things
 
 Three measurements, all in `docs/`, all of which cost money to find.
@@ -378,6 +399,12 @@ schema, not truths about vendors**. Every record carries `measured_at` and a pin
 They will go stale; that is what the pin is for.
 
 ## Status
+
+**v0.5.0.** The loop closes for the certification plane: observations are ingested, a policy is derived and checked on
+held-out items, exported to vLLM Semantic Router, and the router's traffic comes back as observations that `drift`
+reads. Verified end to end on billed traffic (`docs/verify/v0.5.0-certification-loop.md`). Not yet shown: a self-hosted
+arm priced from a measured throughput inside the plane, more than one router replica, and Claude arms routed through
+vllm-sr, which waits on `infra/patches/stratoclave/0002`. The ledger path's status, unchanged since v0.2.0, follows.
 
 **v0.2.0.** One turn runs end to end and the log can now be learned from. A state is observed from a live engine, a
 compiled policy decides from it, a family that declares an exploration rate draws randomly among the candidates whose
