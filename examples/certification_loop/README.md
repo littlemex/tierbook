@@ -14,8 +14,12 @@ categories are also the router's domain labels), the grader (`grade.py`), the ar
 * An OpenAI-compatible gateway that serves the arms in `candidates.json`, and its key in `TIERBOOK_API_KEY`.
 * For the routed half: Docker and `pip install vllm-sr==0.4.0` on the machine that will run the router.
 
-The prices in `candidates.json` are the per-MTok rates the gateway bills at, copied from its rate table; a stratoclave
-gateway at or after `GATEWAY_REF` serves them to the caller at `GET /api/mvp/me/rates`.
+The prices in `candidates.json` are the per-MTok rates the gateway bills at, copied from its rate table. A stratoclave
+gateway at or after `GATEWAY_REF` serves them to the caller at `GET /api/mvp/me/rates`, and `rates_to_candidates.py
+--gateway "$GATEWAY_URL" --arms a,b --out candidates.json` writes the candidate file from there instead.
+
+Routing a Claude model that returns reasoning needs a vllm-sr build that reads `reasoning_details`: its `main` and the
+0.5.0 development builds do, the 0.4.0 release refuses the field and answers 502.
 
 ## The loop
 

@@ -546,3 +546,12 @@ def test_the_image_is_pushed_before_the_service_that_pulls_it():
     assert ecr < build < deploy_all, (
         "the order must be: registry stack, then the image, then the rest of the stacks. "
         f"got registry at {ecr}, image at {build}, deploy-all at {deploy_all}")
+
+
+def test_checkout_pinned_prints_only_the_commit_on_stdout(tmp_path):
+    """Its stdout is captured as the recorded commit. Progress lines on stdout made the state file record log text, and
+    the connection file then warned that the checkout did not match its own pin."""
+    repo, ref = a_bare_remote(tmp_path)
+    out = run_checkout_pinned(tmp_path, repo, ref)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == ref, f"stdout carried more than the commit: {out.stdout!r}"

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* `GATEWAY_REF` moves to littlemex/stratoclave `c485658`, which renders Claude reasoning as the string `reasoning_content`
+  plus `reasoning_details`, so a vllm-sr build that reads the latter routes Claude arms with reasoning.
+* `examples/certification_loop/rates_to_candidates.py` writes the candidate file from the gateway's `GET /api/mvp/me/rates`.
+* `tierbook-up` recorded its own progress lines as the gateway commit; `checkout_pinned` now prints only the commit on
+  stdout. `doctor` no longer asks for a cluster name when the cluster is skipped.
 * `infra/patches/stratoclave/` is gone: both patches landed upstream as littlemex/stratoclave#289, and `GATEWAY_REF`
   moves to its merge commit `c888e4ac2bfa363f5539357db12a7603725b25b7`. A gateway at that commit serves
   `GET /api/mvp/me/rates`, per-request `cost_microusd` and `request_id`, and canonical cache usage on Claude chat

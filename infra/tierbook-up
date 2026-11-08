@@ -57,7 +57,7 @@ GATEWAY_REPO="${TIERBOOK_GATEWAY_REPO:-https://github.com/littlemex/stratoclave.
 #: The exact commit of the gateway this was verified against. Neither of the two repositories cuts versions, so a commit
 #: is the only thing that names a state of them -- and "the tip of main" is not a state, it is whatever main happens to
 #: be the day somebody runs this. Pinning is what makes a run reproducible and a failure attributable.
-GATEWAY_REF="${TIERBOOK_GATEWAY_REF:-c888e4ac2bfa363f5539357db12a7603725b25b7}"
+GATEWAY_REF="${TIERBOOK_GATEWAY_REF:-c485658703cee1cc49008c452c1b445601021b2f}"
 GATEWAY_ADMIN_EMAIL="${TIERBOOK_GATEWAY_ADMIN_EMAIL:-}"
 GATEWAY_CONTAINER_CLI="${TIERBOOK_CONTAINER_CLI:-docker}"
 
@@ -185,7 +185,7 @@ cmd_doctor() {
       warn "  Use an unused prefix, or delete them deliberately."
     fi
   fi
-  [ -n "$CLUSTER_NAME" ]   || warn "TIERBOOK_CLUSTER_NAME unset -- required unless TIERBOOK_CLUSTER=skip"
+  [ -n "$CLUSTER_NAME" ] || [ "$CLUSTER_MODE" = skip ] || warn "TIERBOOK_CLUSTER_NAME unset -- required unless TIERBOOK_CLUSTER=skip"
   [ -n "$API_MODEL" ]      || warn "TIERBOOK_API_MODEL unset -- the metered arm has no model id"
   if [ -z "$API_PRICE_PER_MTOK" ]; then
     warn "TIERBOOK_API_PRICE_PER_MTOK unset. This one is NOT derived and NOT defaulted: it is a published list price,"
@@ -216,10 +216,12 @@ gateway_base_url() {
 #
 # An existing checkout is moved onto the pin rather than left alone. A stale working tree that happens to be there is the
 # quiet version of the same problem.
-checkout_pinned() {  # checkout_pinned <dir> <repo> <ref> <name>
+checkout_pinned() {
+  # Its stdout is the commit id and nothing else: callers capture it with $(...) and record it. Progress goes to stderr;
+  # when it went to stdout, the recorded commit was the log text and the connection file warned of a pin mismatch.  # checkout_pinned <dir> <repo> <ref> <name>
   local dir="$1" repo="$2" ref="$3" name="$4"
   if [ ! -d "$dir/.git" ]; then
-    info "$name: cloning at $ref"
+    info "$name: cloning at $ref" >&2
     mkdir -p "$dir"
     git -C "$dir" init -q
     git -C "$dir" remote add origin "$repo"
@@ -231,7 +233,7 @@ checkout_pinned() {  # checkout_pinned <dir> <repo> <ref> <name>
   git -C "$dir" checkout -q --detach FETCH_HEAD || die "$name: could not check out $ref."
   git -C "$dir" clean -qfd
   local at; at="$(git -C "$dir" rev-parse HEAD)"
-  info "$name: at $at"
+  info "$name: at $at" >&2
   printf '%s' "$at"
 }
 
