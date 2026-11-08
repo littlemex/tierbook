@@ -57,7 +57,7 @@ GATEWAY_REPO="${TIERBOOK_GATEWAY_REPO:-https://github.com/littlemex/stratoclave.
 #: The exact commit of the gateway this was verified against. Neither of the two repositories cuts versions, so a commit
 #: is the only thing that names a state of them -- and "the tip of main" is not a state, it is whatever main happens to
 #: be the day somebody runs this. Pinning is what makes a run reproducible and a failure attributable.
-GATEWAY_REF="${TIERBOOK_GATEWAY_REF:-34768dca17a429e04a7368a34d71e8fe4561edb0}"
+GATEWAY_REF="${TIERBOOK_GATEWAY_REF:-c888e4ac2bfa363f5539357db12a7603725b25b7}"
 GATEWAY_ADMIN_EMAIL="${TIERBOOK_GATEWAY_ADMIN_EMAIL:-}"
 GATEWAY_CONTAINER_CLI="${TIERBOOK_CONTAINER_CLI:-docker}"
 
@@ -634,11 +634,11 @@ if not users:
         "script should fix: seeding an administrator means redeploying its ECS stack, and redeploying somebody else's\n"
         "gateway is not this script's business. Two ways forward, and they are the operator's choice:\n"
         "  * have whoever owns it create the first administrator, then re-run `tierbook-up connect`; or\n"
-        "  * point TIERBOOK_GATEWAY_PREFIX at a prefix of your own and let this script create one, where the patch in\n"
-        "    infra/patches/stratoclave makes the documented procedure actually work.\n"
+        "  * point TIERBOOK_GATEWAY_PREFIX at a prefix of your own and let this script create one, from the pinned\n"
+        "    GATEWAY_REF, which carries the first-admin fix the documented procedure needs.\n"
         "\n"
-        "If this gateway WAS created here, the deploy did not carry the bootstrap email. Check that the patch applied:\n"
-        "  ./infra/tierbook-up patches")
+        "If this gateway WAS created here, the deploy did not carry the bootstrap email. Check that TIERBOOK_GATEWAY_REF,\n"
+        "if you set it, is a commit that includes that fix.")
 username = users[0]["Username"]
 
 # A password of our own, set permanently, so the NEW_PASSWORD_REQUIRED exchange is not standing between this script and
