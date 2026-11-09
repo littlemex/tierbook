@@ -1,0 +1,52 @@
+{
+  "config_format": 2,
+  "_comment": "The three arms the shipped sample observed, at the gateway rates of the example candidate file.",
+  "candidates": {
+    "qwen3-next-80b": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "qwen3-next-80b",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 0.14,
+        "cached_in": 0.14,
+        "out": 1.2
+      },
+      "note": "gateway pricing key 'qwen'"
+    },
+    "claude-haiku-4-5": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "claude-haiku-4-5",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 1.1,
+        "cached_in": 0.11,
+        "out": 5.5
+      },
+      "note": "gateway pricing key 'haiku'"
+    },
+    "claude-sonnet-5": {
+      "deployment": "api",
+      "endpoint": {
+        "base_url": "https://gateway.example.invalid/v1",
+        "model": "claude-sonnet-5",
+        "wire": "chat",
+        "api_key_env": "TIERBOOK_API_KEY"
+      },
+      "price_per_mtok": {
+        "fresh_in": 2.2,
+        "cached_in": 0.22,
+        "out": 11.0
+      },
+      "note": "gateway pricing key 'sonnet-5'"
+    }
+  },
+  "families": {}
+}

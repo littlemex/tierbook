@@ -44,7 +44,8 @@ def _one_turn_of_the_loop_block() -> str:
     """The fenced console block under README's '## One turn of the loop' heading -- the one that already
     contains `tierbook assign` and `tierbook accept` -- found by heading and fence rather than by a hand-typed
     substring, so a future reorder of README's sections does not silently make this read the wrong block."""
-    text = (ROOT / "README.md").read_text()
+    # The ledger path's walkthrough moved from README.md to docs/ledger-path.md with v0.5's front page.
+    text = (ROOT / "docs" / "ledger-path.md").read_text()
     heading = "## One turn of the loop"
     start = text.index(heading)
     fence_start = text.index("```console", start)
