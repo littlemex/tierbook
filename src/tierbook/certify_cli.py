@@ -140,6 +140,9 @@ def cmd_export_policy(args) -> int:
 
     try:
         policy = json.loads(Path(args.policy).read_text())
+        if args.target == "prismyra-learn":
+            # The fallback here is the tag's own model, Prismyra, not an arm of the policy.
+            return _export_prismyra_learn(policy, args)
         fb = (policy.get("fallback") or {}).get("arm")
         if not fb:
             raise ValueError("the policy has no fallback arm, so traffic with no certified assignment has nowhere "
@@ -175,6 +178,57 @@ def cmd_export_policy(args) -> int:
     return 0
 
 
+def _export_prismyra_learn(policy: dict, args) -> int:
+    """Write a Prismyra learn spec whose per-tag `router` follows the policy. Translation only.
+
+    Prismyra's own router decides, per request, between a tag's distilled student and Prismyra itself; this sets
+    which of those the policy certified. What router block an arm means is the caller's (`--arm-router`, arm ->
+    a Prismyra `router` object, or null for "Prismyra alone"), because this module does not know how a student
+    artifact or a confidence threshold is named. A task type certified on an arm the map does not name is refused:
+    Prismyra cannot serve a metered API, and dropping the entry would leave the old router in place. A task type
+    that is not certified gets no router, so its traffic is answered by Prismyra, the tag's own model.
+    """
+    if not args.learn_spec or not args.arm_router:
+        raise ValueError("--target prismyra-learn needs --learn-spec and --arm-router")
+    spec = json.loads(Path(args.learn_spec).read_text())
+    arms = json.loads(Path(args.arm_router).read_text())
+    tags = _pairs(args.signal, "--signal")
+    by_task = {e["task"]: e for e in spec}
+    decisions = {}
+    for t, e in sorted(policy["task_types"].items()):
+        if t not in tags:
+            continue
+        tag = tags[t]
+        if tag not in by_task:
+            raise ValueError(f"task type {t!r} maps to tag {tag!r}, which the learn spec does not register")
+        entry = by_task[tag]
+        ok = e["status"] == "certified" or (args.allow_unconfirmed and e["status"] == "unconfirmed")
+        if not ok:
+            entry.pop("router", None)
+            decisions[tag] = {"arm": None, "status": e["status"], "router": None,
+                              "why": f"not certified ({e['status']}): Prismyra answers"}
+            continue
+        if e["arm"] not in arms:
+            raise ValueError(f"task type {t!r} is certified on {e['arm']!r}, which --arm-router does not map to a "
+                             "Prismyra router; this target can only express arms the Prismyra server serves")
+        block = arms[e["arm"]]
+        if block is None:
+            entry.pop("router", None)
+        else:
+            entry["router"] = block
+        decisions[tag] = {"arm": e["arm"], "status": e["status"], "router": block, "why": e["reason"]}
+    unmapped = sorted(set(tags) - set(policy["task_types"]))
+    if unmapped:
+        raise ValueError(f"--signal names task types the policy does not have: {unmapped}")
+    Path(args.out).write_text(json.dumps(spec, indent=2) + "\n")
+    _dump({"decisions": decisions, "observations_digest": policy["observations_digest"],
+           "guarantee": policy["guarantee"]}, f"{args.out}.provenance.json")
+    for tag, d in sorted(decisions.items()):
+        print(f"{tag}: {d['arm'] or 'prismyra'} ({d['status']})")
+    print(f"wrote {args.out}")
+    return 0
+
+
 def register(sub, common) -> None:
     i = sub.add_parser("ingest", parents=[common], help="join a call log to its grades as observations")
     i.add_argument("--calls", required=True, help="JSONL of chat-completion calls")
@@ -205,7 +259,10 @@ def register(sub, common) -> None:
 
     x = sub.add_parser("export-policy", parents=[common], help="turn a derived policy into a router config")
     x.add_argument("--policy", required=True)
-    x.add_argument("--target", choices=("vsr", "table"), required=True)
+    x.add_argument("--target", choices=("vsr", "table", "prismyra-learn"), required=True)
+    x.add_argument("--learn-spec", default=None, help="prismyra-learn: the Prismyra learn spec to update")
+    x.add_argument("--arm-router", default=None,
+                   help="prismyra-learn: JSON mapping an arm to a Prismyra router block, or to null for Prismyra alone")
     x.add_argument("--candidates", default=None)
     x.add_argument("--out", required=True)
     x.add_argument("--signal", action="append", metavar="TASK_TYPE=CLASSIFIER_LABEL")

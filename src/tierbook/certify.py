@@ -298,6 +298,11 @@ def _cell(items: list[ItemResult], arm: str, cfg: Config, decl: Declarations, bo
             tokens[kind] += v
     attempts = sum(r.attempts for r in items)
     missing = sum(r.usage_missing_graded for r in items)
+    cand = cfg.candidates.get(arm)
+    if cand is not None and cand.is_fixed_cost:
+        # A fixed-cost arm is priced per attempt from its declared usd_per_attempt, so its tokens are not what it is
+        # priced on and an answer that reports none (a decision model, a student) is not unpriceable for that.
+        missing = 0
     if missing:
         total, priced_by = None, f"{missing} graded attempt(s) reported no usage; empty usage is unknown, not zero"
     else:

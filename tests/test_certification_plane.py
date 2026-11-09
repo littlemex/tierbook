@@ -818,3 +818,77 @@ def test_ingest_applies_the_additive_meaning_only_to_the_named_arms():
     grades = [{"item": "i", "arm": a, "outcome": "accepted"} for a in ("gpt", "claude")]
     got = {o.arm: o.usage["fresh_in"] for o in ingest_chat_log(calls, grades, cache_additive_arms=["claude"])}
     assert got == {"gpt": 40, "claude": 100}
+
+
+def test_a_fixed_cost_arm_is_priced_per_attempt_even_when_its_answers_report_no_usage(tmp_path):
+    """A decision model or a distilled student returns a label and no token counts; it is priced from its declared
+    usd_per_attempt, so the absence of usage must not make it unpriced the way it does for a metered arm."""
+    import json as _json
+    from tierbook.config import load_config
+    from tierbook.observation import Observation
+    cf = tmp_path / "c.json"
+    cf.write_text(_json.dumps({"config_format": 2, "families": {}, "candidates": {
+        "student": {"deployment": "self_hosted", "endpoint": {"base_url": "http://s.invalid/v1", "model": "s"},
+                    "hourly_usd": 0.1}}}))
+    cfg = load_config(cf)
+    d = certify.load_declarations({
+        "alpha": 0.05, "bound": "tierbook.bounds:wilson", "holdout_fraction": 0.5, "split_salt": "s",
+        "unobserved_as": "rejected", "max_observation_age_days": None, "held_out_correction": "none",
+        "task_types": {"t": {"floor": 0.5}}, "usd_per_attempt": {"student": {"usd": 0.000001, "source": "test"}}})
+    obs = [Observation(item=f"i{i}", task_type="t", arm="student", outcome="accepted") for i in range(200)]
+    p = certify.derive(obs, cfg, d)
+    assert p["task_types"]["t"]["status"] == "certified"
+    assert p["task_types"]["t"]["held_out"]["spend_per_accepted_usd"] == pytest.approx(0.000001)
+
+
+def _policy_file(tmp_path, status, arm):
+    p = {"task_types": {"finnews": {"status": status, "arm": arm, "reason": "r"}},
+         "observations_digest": "d", "guarantee": "g", "fallback": {"arm": "x"}}
+    f = tmp_path / "policy.json"
+    f.write_text(json.dumps(p))
+    return f
+
+
+def _learn_spec(tmp_path, router=None):
+    e = {"task": "finnews-v1", "question": "q", "options": ["a", "b"], "kind": "choice"}
+    if router:
+        e["router"] = router
+    f = tmp_path / "spec.json"
+    f.write_text(json.dumps([e]))
+    return f
+
+
+def test_prismyra_learn_export_sets_the_router_of_the_certified_student(tmp_path):
+    from tierbook import cli
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student-w3": {"mode": "ab", "ratio": 10000, "student_path": "s.json"},
+                                "prismyra": None}))
+    out = tmp_path / "out.json"
+    rc = cli.main(["export-policy", "--policy", str(_policy_file(tmp_path, "certified", "student-w3")),
+                   "--target", "prismyra-learn", "--learn-spec", str(_learn_spec(tmp_path)), "--arm-router",
+                   str(arms), "--signal", "finnews=finnews-v1", "--out", str(out)])
+    assert rc == 0
+    assert json.loads(out.read_text())[0]["router"] == {"mode": "ab", "ratio": 10000, "student_path": "s.json"}
+
+
+def test_prismyra_learn_export_removes_the_router_when_nothing_is_certified(tmp_path):
+    from tierbook import cli
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student-w3": {"mode": "ab", "ratio": 10000, "student_path": "s.json"}}))
+    out = tmp_path / "out.json"
+    spec = _learn_spec(tmp_path, router={"mode": "ab", "ratio": 10000, "student_path": "old.json"})
+    rc = cli.main(["export-policy", "--policy", str(_policy_file(tmp_path, "unconfirmed", "student-w3")),
+                   "--target", "prismyra-learn", "--learn-spec", str(spec), "--arm-router", str(arms),
+                   "--signal", "finnews=finnews-v1", "--out", str(out)])
+    assert rc == 0
+    assert "router" not in json.loads(out.read_text())[0]
+
+
+def test_prismyra_learn_export_refuses_an_arm_prismyra_cannot_serve(tmp_path):
+    from tierbook import cli
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student-w3": {"mode": "ab", "ratio": 10000, "student_path": "s.json"}}))
+    rc = cli.main(["export-policy", "--policy", str(_policy_file(tmp_path, "certified", "claude-haiku-4-5")),
+                   "--target", "prismyra-learn", "--learn-spec", str(_learn_spec(tmp_path)), "--arm-router",
+                   str(arms), "--signal", "finnews=finnews-v1", "--out", str(tmp_path / "o.json")])
+    assert rc == 2
