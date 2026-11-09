@@ -27,6 +27,8 @@ this project exists to refuse.
 """
 from __future__ import annotations
 
+import math
+
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -92,6 +94,28 @@ class Endpoint:
 
 
 @dataclass(frozen=True)
+class Cascade:
+    """An arm composed of two others: `primary` answers when its own score for the attempt is at least `threshold`,
+    otherwise `fallback` answers the same item. Its cost is what both actually consumed; it has no price of its own.
+
+    Nothing is defaulted. Where to draw the line on a score is the caller's decision, and so is what happens to a
+    primary attempt that carries no score (`on_no_score`: `"fallback"` defers it, `"unobserved"` counts it as no
+    answer); a study that chose either differently must be able to say so. Several thresholds are several candidates.
+    The primary must be an ordinary arm: a cascade's attempts have no score of their own to route on. The fallback
+    may itself be a cascade.
+    """
+
+    primary: str
+    fallback: str
+    threshold: float
+    on_no_score: str
+
+
+#: What a cascade does with a primary attempt that carries no score.
+ON_NO_SCORE = ("fallback", "unobserved")
+
+
+@dataclass(frozen=True)
 class Candidate:
     """One thing that may be measured, and the priced inputs measurement cannot produce.
 
@@ -100,11 +124,12 @@ class Candidate:
     """
 
     id: str
-    endpoint: Endpoint
-    deployment: str                       # "api" (per token) | "self_hosted" (per hour)
+    endpoint: Endpoint | None             # None only for a cascade, which is reached through its parts
+    deployment: str                       # "api" (per token) | "self_hosted" (per hour) | "cascade" (composed)
     price_per_mtok: dict[str, float] | None = None   # api: fresh_in / cached_in / out
     hourly_usd: float | None = None                  # self_hosted: the bill while it is up
     note: str = ""
+    cascade: Cascade | None = None                   # cascade: how it is composed; priced from its parts
 
     @property
     def is_fixed_cost(self) -> bool:
@@ -324,6 +349,70 @@ def _reject_illegal(cid: str, raw: dict, observed: frozenset[str]) -> None:
         )
 
 
+def _cascade_candidate(cid: str, entry: dict, ep: dict) -> Candidate:
+    c = entry["cascade"]
+    if entry.get("deployment") not in (None, "cascade"):
+        raise ConfigError(f"candidate {cid!r} has a cascade and deployment {entry.get('deployment')!r}; a cascade "
+                          "is priced from the attempts of its parts, so it has no deployment of its own")
+    if entry.get("hourly_usd") is not None or entry.get("price_per_mtok"):
+        raise ConfigError(f"candidate {cid!r} is a cascade with its own price; its cost is what its parts consumed, "
+                          "so a price here would count them twice")
+    if entry.get("endpoint") is not None:
+        raise ConfigError(f"candidate {cid!r} is a cascade with an endpoint; a cascade is measured through its parts' "
+                          "endpoints and has none of its own")
+    if not isinstance(c, dict) or set(c) != {"primary", "fallback", "threshold", "on_no_score"}:
+        raise ConfigError(f"candidate {cid!r}: cascade must be an object with exactly primary, fallback, threshold "
+                          f"and on_no_score, found {sorted(c) if isinstance(c, dict) else type(c).__name__}")
+    if c["on_no_score"] not in ON_NO_SCORE:
+        raise ConfigError(f"candidate {cid!r}: cascade.on_no_score must be one of {ON_NO_SCORE}, "
+                          f"not {c['on_no_score']!r}")
+    t = c["threshold"]
+    if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t):
+        raise ConfigError(f"candidate {cid!r}: cascade.threshold must be a number, not {t!r}")
+    for k in ("primary", "fallback"):
+        if not isinstance(c[k], str) or not c[k]:
+            raise ConfigError(f"candidate {cid!r}: cascade.{k} must name a candidate")
+    if c["primary"] == c["fallback"]:
+        raise ConfigError(f"candidate {cid!r}: cascade.primary and cascade.fallback are both {c['primary']!r}")
+    return Candidate(id=cid, endpoint=None, deployment="cascade", note=entry.get("note", ""),
+                     cascade=Cascade(primary=c["primary"], fallback=c["fallback"], threshold=float(t),
+                                     on_no_score=c["on_no_score"]))
+
+
+def _check_cascades(candidates: dict[str, Candidate]) -> None:
+    """Every part a cascade names exists, its primary is not a cascade, and no cascade contains itself."""
+    cascades = {cid: cand.cascade for cid, cand in candidates.items() if cand.cascade is not None}
+    for cid, c in cascades.items():
+        for part in (c.primary, c.fallback):
+            if part not in candidates:
+                raise ConfigError(f"cascade {cid!r} names {part!r}, which is not a candidate in this file")
+        if c.primary in cascades:
+            raise ConfigError(f"cascade {cid!r} has the cascade {c.primary!r} as its primary; a cascade routes on its "
+                              "primary's own score, and a cascade's attempts carry no score of their own. Use an "
+                              "ordinary arm as the primary (a cascade may be the fallback)")
+    for cid in cascades:
+        # Walk the fallback chain. A cascade's primary is ordinary, so the chain is a path: each cascade on it adds
+        # its primary, the last adds its fallback. An arm met twice would be served or billed twice for one call.
+        met: list[str] = []
+        cur = cid
+        while True:
+            c = cascades.get(cur)
+            if c is None:
+                met.append(cur)
+                break
+            if cur in met:
+                raise ConfigError(f"cascade {cid!r} contains itself (through {cur!r})")
+            met += [cur, c.primary]
+            cur = c.fallback
+            if cur == cid:
+                raise ConfigError(f"cascade {cid!r} contains itself (through its fallback chain)")
+        leaves = [a for a in met if a not in cascades]
+        dup = sorted({a for a in leaves if leaves.count(a) > 1})
+        if dup:
+            raise ConfigError(f"cascade {cid!r} reaches {dup} more than once along its fallback chain; one call "
+                              "would be served or billed twice")
+
+
 def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config:
     """Read a candidate file, refusing the two things it must not contain."""
     p = Path(path)
@@ -356,6 +445,9 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
         _reject_illegal(cid, entry, observed)
         ep = entry.get("endpoint") or {}
         _reject_illegal(f"{cid}.endpoint", ep, observed)
+        if entry.get("cascade") is not None:
+            candidates[cid] = _cascade_candidate(cid, entry, ep)
+            continue
         if not ep.get("base_url") or not ep.get("model"):
             raise ConfigError(
                 f"candidate {cid!r} needs endpoint.base_url and endpoint.model: the only thing tierbook "
@@ -387,6 +479,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
             note=entry.get("note", ""),
         )
 
+    _check_cascades(candidates)
     obj_raw = dict(raw.get("objective") or {})
     if "weights" in obj_raw:
         raise ConfigError(

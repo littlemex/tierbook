@@ -1,9 +1,10 @@
 # tierbook
 
-**Certified model assignments for the router you already run.** tierbook reads the graded outcomes of your own traffic
-and tells your router which model each task type should go to: the cheapest per accepted task that clears the quality
-floor you declare, checked on items the choice was not made on, priced at today's rates — and it re-decides when prices,
-models or outcomes move.
+**Grow the cheap arm, and switch to it only when it has earned it.** tierbook is the operations loop that moves your
+traffic, task type by task type, onto the cheapest arm that is good enough — often a small, fast student grown from
+your own traffic and taught by a large model — and moves it only when a certificate says so: the arm's acceptance on
+items it was not chosen on clears the floor you declared, priced at today's rates. It re-decides when prices, models,
+students or outcomes move, and writes the decision into the router you already run.
 
 ![tierbook sits beside the request path](docs/images/architecture.png)
 
@@ -16,6 +17,30 @@ Routers such as [vLLM Semantic Router](https://github.com/vllm-project/semantic-
 request. tierbook does a different job: it derives the per-task-type choice from your graded outcomes, attaches a
 held-out confidence bound to it, and writes it into their configuration. It never sits in the request path. The survey
 of what routers do today is in [`docs/prior-art-2026-11.md`](docs/prior-art-2026-11.md).
+
+## The idea
+
+![growing a student](docs/images/student-ops.png)
+
+A large model is where a task type starts, not where it has to stay. Its answers are the lesson; the arm that serves can
+be a student trained on them — a LightGBM classifier on text embeddings, a 0.8B LLM fine-tuned on the teacher's labels —
+that answers in milliseconds on a CPU. What tierbook adds is not the student or the teacher but the discipline of the
+loop around them:
+
+1. **The teacher is scaffolding.** It labels traffic for a while; the student serves. Its bill is a one-off cost of the
+   lesson, amortised over a horizon you declare, not a cost per request.
+2. **Switch on a certificate, not on a hope.** A student takes a task type only when its held-out lower bound clears
+   the floor, and the policy says so per window as it improves.
+3. **How much accuracy to trade for cost is yours.** A floor is declared per task type; the same evidence certifies the
+   teacher at one floor and the student at a lower one, and tierbook will not pick the floor for you.
+4. **A threshold is part of the arm.** "The student answers when it is sure, the teacher otherwise" is a
+   [cascade](#cascades-student-when-sure-teacher-otherwise) with a declared threshold, priced from what both actually
+   consumed. Each extra threshold is another candidate, and more candidates make it likelier that a lucky one is chosen
+   and then fails the held-out check; choose thresholds on data you do not certify on, or declare few
+   ([Husain and Saha](https://hamel.dev/blog/posts/decision-model-evals/) make the same point for decision-model evals).
+5. **Serving is part of the price.** An arm's price is its measured throughput, so making a student cheaper to serve
+   moves the policy the way a price change does. One fine-tuned 0.8B student became 2.3× cheaper to serve on the same
+   CPU by serving work alone, with every label unchanged.
 
 ## Why
 
@@ -138,6 +163,33 @@ Prismyra itself is the cheapest at your floor, and exports the decision as the r
 Serving through Prismyra's router, with its confidence-mode admission, is still being verified. The run behind the
 numbers is in [`docs/verify/v0.5.0-distillation-loop.md`](docs/verify/v0.5.0-distillation-loop.md) and the pieces in
 [`examples/distillation_loop/`](examples/distillation_loop/README.md).
+
+The student need not be a classifier. A `Qwen/Qwen3.5-0.8B` fine-tuned on the teacher's labels accepted 0.885 of the
+certification items against the teacher's 0.896 and the LightGBM student's 0.810, served on a 4-vCPU Graviton4
+instance at under a third of the teacher's price per attempt; at a floor of 0.85 its held-out lower bound fell short
+by 0.003 to 0.008 on 600 items, and tierbook said so rather than certifying it.
+
+### Cascades: student when sure, teacher otherwise
+
+A cascade is a candidate built from two others. Declare it in `candidates.json`:
+
+```json
+"student-or-teacher": {"cascade": {"primary": "student", "fallback": "teacher", "threshold": 0.9, "on_no_score": "fallback"}}
+```
+
+and record the student's own score on each call (`"score": 0.97` on the call-log row, higher meaning surer; `ingest`
+carries it; the example `drive.py` does not produce one, because only the arm knows its confidence). tierbook composes the cascade's attempts from the parts' attempts: the student's answer where its score is
+at least the threshold, the teacher's answer at the same item and run where it is not. The cost is every student
+attempt plus the teacher on the deferred ones, each part priced on its own card or declaration, and the policy records
+the cascade's definition beside the assignment.
+
+Nothing is defaulted. `on_no_score` says what a student attempt without a score does (`fallback` or `unobserved`); a
+deferred item the teacher never answered is `unobserved`; an attempt recorded under the cascade's own name is refused,
+because the record cannot say which part answered or what each consumed. The fallback may itself be a cascade; the
+primary may not, because a cascade's attempts carry no score of their own. Several thresholds are several candidates,
+chosen on selection and checked on held-out like any arm. The vLLM Semantic Router export refuses a cascade, because a
+router that picks one model per request cannot run one. Prismyra's router has a confidence mode that matches this shape
+(`--target prismyra-learn`); serving a cascade through it is still being verified.
 
 ## A live run
 

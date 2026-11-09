@@ -421,6 +421,9 @@ def cmd_preflight(args) -> int:
     cfg = _config(args)
     bad = 0
     for cid, cand in sorted(cfg.candidates.items()):
+        if cand.endpoint is None:
+            print(f"{cid:24} {'skipped':14} a cascade is reached through its parts")
+            continue
         ep, probe = negotiate(cand.endpoint, needs_tools=args.require_tools)
         mark = {OK: "ok", INCOMPATIBLE: "INCOMPATIBLE", UNREACHABLE: "UNREACHABLE"}[probe.status]
         print(f"{cid:24} {mark:14} wire={probe.wire:9} {probe.detail[:150]}")

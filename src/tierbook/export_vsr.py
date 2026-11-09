@@ -81,6 +81,12 @@ def _provider_model(cand: Candidate) -> dict:
     `backend_refs` is the part an earlier version of this exporter omitted, and omitting it is not a cosmetic
     difference: without it the router has a model name and no way to reach anything.
     """
+    if cand.cascade is not None:
+        raise ExportError(
+            f"candidate {cand.id!r} is a cascade ({cand.cascade.primary} when its score >= {cand.cascade.threshold}, "
+            f"else {cand.cascade.fallback}). The router picks one model per request and cannot run a model, read "
+            "its score and call another, so this assignment has no faithful vLLM Semantic Router config. It needs a "
+            "router that can run a cascade, or a single arm.")
     endpoint, protocol = _endpoint_of(cand)
     backend_type = _BACKEND_TYPE[cand.deployment]
     ref: dict = {
@@ -179,6 +185,13 @@ def export(
         if status != ASSIGNED and not allow_provisional:
             skipped.append(f"{family} ({status}: {(d.get('validation') or {}).get('reason', '')[:120]})")
             continue
+        if d["kind"] == "cascade":
+            c = d.get("cascade") or {}
+            raise ExportError(
+                f"the entry for {family!r} is a cascade ({c.get('primary')} when its score >= {c.get('threshold')}, "
+                f"else {c.get('fallback')}). The router picks one model per request and cannot run a model, read "
+                "its score and call another, so this assignment has no faithful vLLM Semantic Router config. It "
+                "needs a router that can run a cascade, or a single arm.")
         if d["kind"] == "chain":
             raise ExportError(
                 f"the entry for {family!r} is a chain {d['chosen']}, whose second stage fires only on "

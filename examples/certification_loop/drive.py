@@ -88,7 +88,11 @@ def main(argv=None) -> int:
     jobs = []
     if a.mode == "direct":
         cands = json.load(open(a.candidates))["candidates"]
-        wanted = [x for x in a.arms.split(",") if x] or sorted(cands)
+        # A cascade has no endpoint of its own: it is measured through its parts.
+        wanted = [x for x in a.arms.split(",") if x] or sorted(c for c in cands if "cascade" not in cands[c])
+        cascades = [x for x in wanted if "cascade" in cands[x]]
+        if cascades:
+            raise SystemExit(f"{cascades} are cascades, which have no endpoint; measure their parts")
         for arm in wanted:
             ep = cands[arm]["endpoint"]
             url = (a.base_url or ep["base_url"]).rstrip("/") + "/chat/completions"

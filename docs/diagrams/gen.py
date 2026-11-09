@@ -307,7 +307,41 @@ def live_run():
     return d
 
 
-DIAGRAMS = (architecture, ops_loop, certificate, distillation, interfaces, live_run)
+# --- 7. growing a student ------------------------------------------------------------------------------------------
+
+def student_ops():
+    d = D("student-ops", 1600, 800)
+    d.text(40, 24, 1520, 50, "A task type moves from the teacher to a student only when the student has earned it",
+           size=30, color=INK, bold=True)
+    d.text(40, 72, 1520, 34, "The large model is scaffolding. The loop around it is what tierbook adds.", size=19)
+    H = 160
+    steps = (
+        (80, 140, "1  teacher answers", "a large model or a decision\nmodel serves and labels\ntraffic for a while", SLATE),
+        (450, 140, "2  student learns", "a classifier on embeddings,\nor a small LLM fine-tuned\non the teacher's labels", DEEP),
+        (820, 140, "3  cascades declared", "student if its score >= t,\nteacher otherwise; several\nt are several candidates", DEEP),
+        (1190, 140, "4  certify per floor", "chosen on selection,\nchecked on held-out;\nthe floor is yours", BRIGHT),
+        (1190, 430, "5  serve on a CPU", "measured throughput is\nthe price: serving work\nmoves the policy", BRIGHT),
+        (820, 430, "6  watch fresh traffic", "drift: contradicted?\nprice moved? a better\nstudent this window?", DEEP),
+    )
+    for x, y, t, b, col in steps:
+        d.card(x, y, 330, H, t, b, accent=col, size=23, body_size=17)
+    for (x1, y1), (x2, y2) in (((410, 220), (450, 220)), ((780, 220), (820, 220)), ((1150, 220), (1190, 220)),
+                               ((1355, 300), (1355, 430)), ((1190, 510), (1150, 510))):
+        d.arrow([(x1, y1), (x2, y2)], color=DEEP, w=4)
+    d.arrow([(985, 430), (985, 365), (615, 365), (615, 300)], color=MUTED, w=4, dashed=1)
+    d.text(630, 370, 340, 30, "next window: refit, re-derive", size=16, color=BODY, align="left")
+    d.rect(80, 430, 560, H, AMBER_SOFT, stroke="#F0D9A8", sw=2, arc=16)
+    d.text(100, 440, 520, 36, "what the operator declares", size=20, color=AMBER, bold=True, align="left")
+    d.text(100, 478, 520, 110, "the floor per task type\nthe teacher's amortisation horizon\nthe thresholds to try\n"
+           "the split, alpha and bound", size=17, align="left", valign="top")
+    d.chip(80, 640, 1440, 46, "measured here: a fine-tuned 0.8B student reached 0.885 against its teacher's 0.896 at under a "
+           "third of the teacher's price; serving work alone made it 2.3x cheaper", size=16)
+    d.chip(80, 700, 1440, 46, "tierbook still did not certify it at 0.85 (held-out lower bound 0.842-0.847 on 600 items) "
+           "-- the certificate, not the hope, decides the switch", fill=AMBER_SOFT, color=AMBER, size=16)
+    return d
+
+
+DIAGRAMS = (architecture, ops_loop, certificate, distillation, interfaces, live_run, student_ops)
 
 
 def main() -> int:

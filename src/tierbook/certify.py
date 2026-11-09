@@ -1,7 +1,8 @@
 """The certification plane: observations in, a per-task-type assignment with a stated guarantee out.
 
-See `docs/DESIGN-v0.5-certification-plane.md`. Four functions, each owning one sentence:
+See `docs/DESIGN-v0.5-certification-plane.md`. Each function owns one sentence:
 
+* `compose` -- the attempts of each declared cascade arm, built from the attempts of its parts;
 * `tally_items` -- per (task type, arm, item) results over fresh attempts, partitioned by a declared split;
 * `derive` -- bounds, the comparison, the status of each assignment, and the fallback;
 * `as_table` -- the policy in the shape the v0.4 router exporter reads (translation only);
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
@@ -180,6 +181,11 @@ class ItemResult:
     billed_usd: float | None
     newest: datetime | None
     label_sources: set[str]
+    #: What each arm whose attempts make up this item consumed: {arm: {"tokens", "attempts", "usage_missing_graded"}}.
+    #: One entry for an ordinary arm; for a cascade, one per part that was called (the primary always, the fallback
+    #: when deferred to). Pricing is per part.
+    parts: dict[str, dict] = field(default_factory=dict)
+    fallback_missing_attempts: int = 0   # cascade attempts deferred to a fallback that never made them
 
 
 def _verdict(runs: list[Observation], decl: Declarations) -> tuple[str | None, int]:
@@ -221,6 +227,98 @@ def dedupe(observations: Iterable[Observation]) -> list[Observation]:
     return list(seen.values())
 
 
+@dataclass(frozen=True)
+class ComposedAttempt(Observation):
+    """An attempt of a cascade arm, derived from the attempts of its parts. Never written: it exists only between
+    `compose` and `tally_items`, so the record format is unchanged."""
+
+    parts: tuple[Observation, ...] = ()
+    #: Deferred to a fallback that has no attempt at this item and run: evidence the cascade needs and lacks.
+    fallback_missing: bool = False
+
+
+def _parts(o: Observation) -> tuple[Observation, ...]:
+    return o.parts if isinstance(o, ComposedAttempt) else (o,)
+
+
+def _composed(o: Observation, parts: tuple[Observation, ...], **changes) -> ComposedAttempt:
+    values = {f.name: getattr(o, f.name) for f in dataclass_fields(Observation)}
+    values.update(changes)
+    return ComposedAttempt(**values, parts=parts)
+
+
+def compose(observations: Iterable[Observation], cfg: Config) -> list[Observation]:
+    """The observations, plus one attempt of each cascade arm for every attempt of its primary.
+
+    A primary attempt with a score at or above the cascade's threshold is the cascade's attempt, whatever its outcome
+    (an ungraded answer the cascade would have served stays ungraded). Below the threshold, the cascade's attempt is
+    the fallback's attempt at the same item and run, and its cost is both. A primary attempt with no score is handled
+    as the cascade's declared `on_no_score` says. A deferred attempt the fallback never made is `unobserved`, and
+    counts as `unobserved_as` declares. Composed attempts carry no score: they are not evidence of the cascade's
+    confidence, and a cascade cannot be another cascade's primary.
+
+    An attempt recorded under a cascade's own name is refused: the record format cannot say which part answered it
+    or what each part consumed. Record the parts' attempts and let them be composed.
+    """
+    base = dedupe(observations)
+    by_arm: dict[str, dict[tuple[str, str, str], Observation]] = {}
+    task_of: dict[tuple[str, str, str], str] = {}    # (arm, item, run) -> task type, to catch a mislabelled part
+    for o in base:
+        cand = cfg.candidates.get(o.arm)
+        if cand is not None and cand.cascade is not None:
+            raise EvidenceError(
+                f"attempt {(o.task_type, o.item, o.run)} is recorded under the cascade {o.arm!r}; the record format "
+                "cannot say which part answered or what each consumed. Record the attempts of its parts instead.")
+        by_arm.setdefault(o.arm, {})[(o.task_type, o.item, o.run)] = o
+        task_of[(o.arm, o.item, o.run)] = o.task_type
+    built: dict[str, dict[tuple[str, str, str], Observation]] = {}
+
+    def attempts(arm: str) -> dict[tuple[str, str, str], Observation]:
+        cand = cfg.candidates.get(arm)
+        if cand is None or cand.cascade is None:
+            return by_arm.get(arm, {})
+        if arm in built:
+            return built[arm]
+        c = cand.cascade
+        primary, fallback = attempts(c.primary), attempts(c.fallback)
+        out: dict[tuple[str, str, str], Observation] = {}
+        for key, p in primary.items():
+            if p.score is not None and p.score >= c.threshold:
+                out[key] = _composed(p, (p,), arm=arm, usage={}, score=None)
+                continue
+            if p.score is None and c.on_no_score == "unobserved":
+                why = f"{c.primary!r} reported no score, and on_no_score is 'unobserved'"
+                out[key] = _composed(p, (p,), arm=arm, outcome="unobserved", usage={}, grader="", score=None,
+                                     reason=f"{p.reason}; {why}" if p.outcome == "unobserved" and p.reason else why)
+                continue
+            f = fallback.get(key)
+            if f is None:
+                other = task_of.get((c.fallback, key[1], key[2]))
+                if other is not None and other != key[0]:
+                    raise EvidenceError(
+                        f"cascade {arm!r}: item {key[1]!r} run {key[2]!r} is task type {key[0]!r} for "
+                        f"{c.primary!r} and {other!r} for {c.fallback!r}; the parts disagree about what the item is")
+                out[key] = _composed(p, (p,), arm=arm, outcome="unobserved", usage={}, grader="", score=None,
+                                     fallback_missing=True,
+                                     reason=f"deferred to {c.fallback!r}, which has no attempt at this item and run")
+                continue
+            parts = (p,) + _parts(f)
+            times = [q.observed_at for q in parts]
+            out[key] = _composed(
+                f, parts, arm=arm, usage={}, score=None,
+                # Freshness is judged on the oldest part, and an undated part leaves the whole attempt undated.
+                observed_at=min(times, key=_when) if all(times) else "",
+                latency_s=(p.latency_s + f.latency_s) if p.latency_s is not None and f.latency_s is not None else None,
+                billed_usd=(p.billed_usd + f.billed_usd) if p.billed_usd is not None and f.billed_usd is not None
+                else None)
+        built[arm] = out
+        return out
+
+    composed = [o for arm, cand in sorted(cfg.candidates.items()) if cand.cascade is not None
+                for _, o in sorted(attempts(arm).items())]
+    return base + composed
+
+
 def tally_items(observations: Iterable[Observation], decl: Declarations,
                 as_of: datetime) -> tuple[dict[tuple[str, str, str], ItemResult], dict[tuple[str, str], int]]:
     """Per (task type, arm, item) results over FRESH attempts, and per (task type, arm) how many were too old.
@@ -242,20 +340,36 @@ def tally_items(observations: Iterable[Observation], decl: Declarations,
     for key, runs in by_item.items():
         verdict, graded = _verdict(runs, decl)
         tokens = {"fresh_in": 0, "cached_in": 0, "out": 0}
+        parts: dict[str, dict] = {}
         billed: float | None = 0.0
+        missing_graded = missing_unobserved = 0
         for o in runs:
-            for k, v in o.usage.items():
-                tokens[k] += v
+            # A part's missing usage counts as graded when the attempt it makes up was graded: the primary of a
+            # cascade answer is often never graded itself, and must not be priced at $0 for that.
+            graded_attempt = o.outcome != "unobserved"
+            for q in _parts(o):
+                pt = parts.setdefault(q.arm, {"tokens": {"fresh_in": 0, "cached_in": 0, "out": 0}, "attempts": 0,
+                                              "usage_missing_graded": 0})
+                pt["attempts"] += 1
+                for k, v in q.usage.items():
+                    tokens[k] += v
+                    pt["tokens"][k] += v
+                if not q.usage:
+                    if graded_attempt:
+                        pt["usage_missing_graded"] += 1
+                        missing_graded += 1
+                    else:
+                        missing_unobserved += 1
             billed = None if (billed is None or o.billed_usd is None) else billed + o.billed_usd
         times = [t for t in (_when(o.observed_at) for o in runs) if t is not None]
         out[key] = ItemResult(
             verdict=verdict, graded_runs=graded, attempts=len(runs),
             unobserved_attempts=sum(o.outcome == "unobserved" for o in runs),
             cut_off_attempts=sum(o.finish_reason == "length" for o in runs), tokens=tokens,
-            usage_missing_graded=sum(o.outcome != "unobserved" and not o.usage for o in runs),
-            usage_missing_unobserved=sum(o.outcome == "unobserved" and not o.usage for o in runs),
+            usage_missing_graded=missing_graded, usage_missing_unobserved=missing_unobserved,
             billed_usd=billed, newest=max(times) if times else None,
-            label_sources={o.label_source for o in runs if o.label_source})
+            label_sources={q.label_source for o in runs for q in _parts(o) if q.label_source}, parts=parts,
+            fallback_missing_attempts=sum(getattr(o, "fallback_missing", False) for o in runs))
     return out, stale
 
 
@@ -285,6 +399,38 @@ def price_tokens(tokens: dict[str, int], attempts: int, arm: str, cfg: Config,
     return total, "price card"
 
 
+def _price(items: list[ItemResult], cfg: Config, decl: Declarations) -> tuple[float | None, str, dict[str, dict]]:
+    """Spend at today's prices for these items, summed over the arms whose attempts they are made of, or None with
+    the reason. One arm for an ordinary cell; each part of a cascade priced on its own card or declaration."""
+    parts: dict[str, dict] = {}
+    for r in items:
+        for a, pt in r.parts.items():
+            acc = parts.setdefault(a, {"tokens": {"fresh_in": 0, "cached_in": 0, "out": 0}, "attempts": 0,
+                                       "usage_missing_graded": 0})
+            acc["attempts"] += pt["attempts"]
+            acc["usage_missing_graded"] += pt["usage_missing_graded"]
+            for kind, v in pt["tokens"].items():
+                acc["tokens"][kind] += v
+    total: float | None = 0.0
+    how: list[str] = []
+    for a, pt in sorted(parts.items()):
+        cand = cfg.candidates.get(a)
+        # A fixed-cost arm is priced per attempt from its declared usd_per_attempt, so its tokens are not what it is
+        # priced on and an answer that reports none (a decision model, a student) is not unpriceable for that.
+        missing = 0 if cand is not None and cand.is_fixed_cost else pt["usage_missing_graded"]
+        if missing:
+            total = None
+            how.append(f"{missing} graded attempt(s) of {a} reported no usage; empty usage is unknown, not zero")
+            continue
+        p, why = price_tokens(pt["tokens"], pt["attempts"], a, cfg, decl)
+        if p is None:
+            total = None
+        elif total is not None:
+            total += p
+        how.append(why if len(parts) == 1 else f"{a}: {why}")
+    return total, ("; ".join(how) if how else "no attempts"), parts
+
+
 # --- cells ---------------------------------------------------------------------------------------------------------
 
 def _cell(items: list[ItemResult], arm: str, cfg: Config, decl: Declarations, bound: Bound, alpha: float,
@@ -297,19 +443,10 @@ def _cell(items: list[ItemResult], arm: str, cfg: Config, decl: Declarations, bo
         for kind, v in r.tokens.items():
             tokens[kind] += v
     attempts = sum(r.attempts for r in items)
-    missing = sum(r.usage_missing_graded for r in items)
-    cand = cfg.candidates.get(arm)
-    if cand is not None and cand.is_fixed_cost:
-        # A fixed-cost arm is priced per attempt from its declared usd_per_attempt, so its tokens are not what it is
-        # priced on and an answer that reports none (a decision model, a student) is not unpriceable for that.
-        missing = 0
-    if missing:
-        total, priced_by = None, f"{missing} graded attempt(s) reported no usage; empty usage is unknown, not zero"
-    else:
-        total, priced_by = price_tokens(tokens, attempts, arm, cfg, decl)
-        free = sum(r.usage_missing_unobserved for r in items)
-        if free and total is not None:
-            priced_by += f"; {free} unobserved attempt(s) reported no usage and are counted at $0"
+    total, priced_by, parts = _price(items, cfg, decl)
+    free = sum(r.usage_missing_unobserved for r in items)
+    if free and total is not None:
+        priced_by += f"; {free} unobserved attempt(s) reported no usage and are counted at $0"
     billed = [r.billed_usd for r in items]
     newest = max((r.newest for r in items if r.newest), default=None)
     return {
@@ -324,6 +461,9 @@ def _cell(items: list[ItemResult], arm: str, cfg: Config, decl: Declarations, bo
         "billed_usd": (sum(billed) if billed and all(b is not None for b in billed) else None),
         "newest": newest.isoformat() if newest else "",
         "label_sources": sorted(set().union(*(r.label_sources for r in items)) if items else set()),
+        "part_attempts": {a: pt["attempts"] for a, pt in sorted(parts.items())},
+        "part_tokens": {a: pt["tokens"] for a, pt in sorted(parts.items())},
+        "fallback_missing_attempts": sum(r.fallback_missing_attempts for r in items),
     }
 
 
@@ -340,7 +480,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             raise DeclarationError(
                 f"usd_per_attempt names {arm!r}, which is not a fixed-cost candidate in {where}; a declared price "
                 "may only stand in for an hourly bill, never for a price card or for an arm the router cannot reach")
-    results, stale = tally_items(observations, decl, as_of)
+    results, stale = tally_items(compose(observations, cfg), decl, as_of)
     part = {key: partition_of(key[2], decl.split_salt, decl.holdout_fraction) for key in results}
     observed_types = sorted({t for t, _, _ in results} | {t for t, _ in stale})
     arms_seen = sorted({a for _, a, _ in results} | {a for _, a in stale})
@@ -403,6 +543,10 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             status, code, why = UNCONFIRMED, "held_out_inconclusive", (
                 f"floor {floor} lies inside the held-out interval [{ho['lower']:.4f}, {ho['upper']:.4f}]")
         labels = sorted(set(per_arm[chosen]["selection"]["label_sources"]) | set(ho["label_sources"]))
+        cas = cfg.candidates[chosen].cascade if chosen in cfg.candidates else None
+        if cas is not None:
+            entry["cascade"] = {"primary": cas.primary, "fallback": cas.fallback, "threshold": cas.threshold,
+                                "on_no_score": cas.on_no_score}
         entry.update(status=status, arm=chosen, reason_code=code, held_out=ho, label_sources=labels,
                      reason=(f"cheapest per accepted task among {len(eligible)} that cleared selection; {why}; "
                              f"conditional on task_type labels from {labels or ['unrecorded']}"))
@@ -486,10 +630,8 @@ def _comparison(task_types, single, results, part, cfg, decl) -> dict | None:
         if not common:
             omitted[t] = f"no held-out item observed on both {e['arm']} and {one}"
             continue
-        ps, _ = price_tokens(_sum_tokens(mine[i] for i in common), sum(mine[i].attempts for i in common),
-                             e["arm"], cfg, decl)
-        os_, _ = price_tokens(_sum_tokens(theirs[i] for i in common), sum(theirs[i].attempts for i in common),
-                              one, cfg, decl)
+        ps = _price([mine[i] for i in common], cfg, decl)[0]
+        os_ = _price([theirs[i] for i in common], cfg, decl)[0]
         if ps is None or os_ is None:
             omitted[t] = "one side cannot be priced on the common items"
             continue
@@ -506,14 +648,6 @@ def _comparison(task_types, single, results, part, cfg, decl) -> dict | None:
             "policy_spend_per_accepted_usd": pol_spend / pol_acc if pol_acc else None,
             "single_best_spend_per_accepted_usd": one_spend / one_acc if one_acc else None,
             "ratio": ((pol_spend / pol_acc) / (one_spend / one_acc)) if pol_acc and one_acc and one_spend else None}
-
-
-def _sum_tokens(rs: Iterable[ItemResult]) -> dict[str, int]:
-    out = {"fresh_in": 0, "cached_in": 0, "out": 0}
-    for r in rs:
-        for k, v in r.tokens.items():
-            out[k] += v
-    return out
 
 
 # --- export translation --------------------------------------------------------------------------------------------
@@ -533,7 +667,9 @@ def as_table(policy: dict, *, allow_unconfirmed: bool = False) -> dict:
             status = "provisional"
         else:
             continue
-        fams[t] = {"cannot_reject": {"status": status, "kind": "single", "chosen": [e["arm"]], "why": e["reason"],
+        kind = "cascade" if e.get("cascade") else "single"
+        fams[t] = {"cannot_reject": {"status": status, "kind": kind, "chosen": [e["arm"]], "why": e["reason"],
+                                     **({"cascade": e["cascade"]} if e.get("cascade") else {}),
                                      "label_sources": e.get("label_sources", []),
                                      "validation": {"reason": e["reason"]}}}
     return {"families": fams, "registry_version": policy["observations_digest"],
@@ -569,8 +705,18 @@ def drift(deployed: dict, rederived: dict, fresh: list[Observation], decl: Decla
     if decl.min_items is None and any(e.get("status") == CERTIFIED for e in deployed["task_types"].values()):
         raise DeclarationError("drift needs min_items declared: below it a window says nothing, and the report "
                                "must not read as 'no change'")
+    for t, e in sorted(deployed["task_types"].items()):
+        cas = e.get("cascade")
+        cand = cfg.candidates.get(e.get("arm") or "")
+        now = cand.cascade if cand is not None else None
+        if cas is not None and (now is None or cas != {"primary": now.primary, "fallback": now.fallback,
+                                                        "threshold": now.threshold, "on_no_score": now.on_no_score}):
+            raise DeclarationError(
+                f"the deployed policy assigns {t!r} to the cascade {e['arm']!r} defined as {cas}, and the candidate "
+                f"file now defines it differently; fresh traffic would be checked against a cascade nobody "
+                "certified. Give the changed cascade a new name.")
     bound = resolve(decl.bound)
-    window, _ = tally_items(fresh, decl, as_of)
+    window, _ = tally_items(compose(fresh, cfg), decl, as_of)
     checks = []
     for t, e in sorted(deployed["task_types"].items()):
         if e.get("status") != CERTIFIED:
@@ -594,6 +740,16 @@ def drift(deployed: dict, rederived: dict, fresh: list[Observation], decl: Decla
     for t in types:
         arms = rederived["task_types"][t].get("arms") or {}
         for a in sorted(cfg.candidates):
+            cas = cfg.candidates[a].cascade
+            if cas is not None:
+                # Measured through its parts, which are listed themselves -- except the items it deferred to a
+                # fallback that never answered them, which only the cascade knows about.
+                s = arms.get(a) or {}
+                gap = sum((s.get(p) or {}).get("fallback_missing_attempts", 0) for p in ("selection", "held_out"))
+                if gap:
+                    needs.append({"task_type": t, "arm": cas.fallback,
+                                  "why": f"{gap} attempt(s) deferred to it by the cascade {a!r} were never made"})
+                continue
             s = arms.get(a)
             if s is None:
                 needs.append({"task_type": t, "arm": a, "why": "never observed"})

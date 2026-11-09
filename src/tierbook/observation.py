@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +32,9 @@ OUTCOMES = ("accepted", "rejected", "unobserved")
 #: Token kinds a price card can bill differently. Names are the candidate file's `price_per_mtok` keys.
 USAGE_KEYS = ("fresh_in", "cached_in", "out")
 
-FORMAT = 1
+#: The newest format this reader understands. A row is written in the oldest format that can carry it: 2 only when it
+#: has a `score`, so a file without scores stays readable by a format-1 reader.
+FORMAT = 2
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,9 @@ class Observation:
     label_source: str = ""
     finish_reason: str = ""
     source: str = ""
+    #: The arm's own score for this attempt (a confidence, a probability, a margin), as the arm reported it. Read only
+    #: by a cascade that routes on it; tierbook does not interpret its scale.
+    score: float | None = None
 
     def __post_init__(self) -> None:
         if self.outcome not in OUTCOMES:
@@ -68,6 +74,9 @@ class Observation:
                 datetime.fromisoformat(self.observed_at.replace("Z", "+00:00"))
             except ValueError:
                 raise EvidenceError(f"observed_at {self.observed_at!r} is not ISO 8601 (item {self.item!r})") from None
+        if self.score is not None and (isinstance(self.score, bool) or not isinstance(self.score, (int, float))
+                                       or not math.isfinite(self.score)):
+            raise EvidenceError(f"score {self.score!r} must be a finite number (item {self.item!r})")
         if self.billed_usd is not None and self.billed_usd < 0:
             raise EvidenceError(f"billed_usd {self.billed_usd!r} is negative")
         for name in ("item", "task_type", "arm"):
@@ -75,9 +84,9 @@ class Observation:
                 raise EvidenceError(f"an observation needs a non-empty {name}")
 
     def to_row(self) -> dict:
-        row = {"format": FORMAT, "item": self.item, "task_type": self.task_type, "arm": self.arm,
+        row = {"format": 2 if self.score is not None else 1, "item": self.item, "task_type": self.task_type, "arm": self.arm,
                "outcome": self.outcome, "usage": dict(self.usage)}
-        for name in ("billed_usd", "latency_s"):
+        for name in ("billed_usd", "latency_s", "score"):
             if getattr(self, name) is not None:
                 row[name] = getattr(self, name)
         for name in ("run", "reason", "grader", "observed_at", "label_source", "finish_reason", "source"):
@@ -90,8 +99,11 @@ class Observation:
         fmt = row.get("format", FORMAT)
         if fmt > FORMAT:
             raise EvidenceError(f"observation format {fmt} is newer than this reader ({FORMAT})")
+        if fmt < 2 and "score" in row:
+            raise EvidenceError(f"a format-{fmt} observation carries `score`, which format 2 introduced; a format-1 "
+                                "reader would refuse this row")
         known = {"format", "item", "task_type", "arm", "outcome", "usage", "billed_usd", "latency_s", "run",
-                 "reason", "grader", "observed_at", "label_source", "finish_reason", "source"}
+                 "reason", "grader", "observed_at", "label_source", "finish_reason", "source", "score"}
         unknown = sorted(set(row) - known)
         if unknown:
             raise EvidenceError(f"unknown observation keys {unknown}; a field this reader drops silently is a "
@@ -103,7 +115,7 @@ class Observation:
                    run=str(row.get("run", "")), reason=str(row.get("reason", "")),
                    grader=str(row.get("grader", "")), observed_at=str(row.get("observed_at", "")),
                    label_source=str(row.get("label_source", "")), finish_reason=str(row.get("finish_reason", "")),
-                   source=str(row.get("source", "")))
+                   source=str(row.get("source", "")), score=row.get("score"))
 
 
 def read(paths: str | Path | Iterable[str | Path]) -> list[Observation]:
@@ -123,6 +135,11 @@ def read(paths: str | Path | Iterable[str | Path]) -> list[Observation]:
 
 
 def write(observations: Iterable[Observation], path: str | Path, *, append: bool = False) -> int:
+    observations = list(observations)
+    for o in observations:
+        if type(o) is not Observation:
+            raise EvidenceError(f"{type(o).__name__} for {(o.task_type, o.arm, o.item, o.run)} is derived, not "
+                                "observed, and is never written as evidence")
     n = 0
     with open(path, "a" if append else "w") as f:
         for o in observations:
@@ -187,7 +204,7 @@ def ingest_chat_log(source_rows: Iterable[dict], outcome_rows: Iterable[dict], *
     """Join a chat-completions call log to the caller's grades, by `(item, arm, run)`.
 
     A source row carries `item`, `task_type`, `arm`, optional `run`, `latency_s`, `observed_at`, `label_source`,
-    and either `response` (the completion body) or `error` (why no body came back). An outcome row carries `item`,
+    `score` (the arm's own score for the answer, for a cascade to route on), and either `response` (the completion body) or `error` (why no body came back). An outcome row carries `item`,
     `arm`, optional `run`, `outcome` (`accepted` | `rejected` | `unobserved`), optional `reason` and `grader`.
 
     Mapping and joining only. A call with no grade becomes `unobserved: ungraded`; a call that errored becomes
@@ -214,7 +231,7 @@ def ingest_chat_log(source_rows: Iterable[dict], outcome_rows: Iterable[dict], *
         common = dict(item=key[0], task_type=str(r["task_type"]), arm=key[1], run=key[2],
                       latency_s=r.get("latency_s"), observed_at=str(r.get("observed_at", "")),
                       label_source=str(r.get("label_source", "")), source=source,
-                      billed_usd=r.get("billed_usd"), cache_additive=key[1] in additive)
+                      billed_usd=r.get("billed_usd"), score=r.get("score"), cache_additive=key[1] in additive)
         g = grades.get(key)
         if (r.get("error") or not r.get("response")) and g is not None:
             raise EvidenceError(f"{key} has a grade but the call returned no answer ({r.get('error')!r})")
