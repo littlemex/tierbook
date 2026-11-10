@@ -47,7 +47,7 @@ def candidates(tmp_path: Path, extra: dict | None = None) -> cfgmod.Config:
 
 def declarations(**over) -> certify.Declarations:
     d = dict(alpha=0.05, bound="tierbook.bounds:wilson", holdout_fraction=FRACTION, split_salt=SALT,
-             unobserved_as="rejected", max_observation_age_days=None, held_out_correction="none",
+             unobserved_as="rejected", max_observation_age_days=None, held_out_correction="none", holdout_ladder=1,
              task_types={T: {"floor": 0.1}}, repeat_rule="all",
              usd_per_attempt={"student": {"usd": 0.001, "source": "test: 0.2 USD/h over 200 items/h"}})
     d.update(over)

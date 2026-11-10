@@ -8,6 +8,7 @@
   "unobserved_as": "rejected",
   "max_observation_age_days": null,
   "held_out_correction": "none",
+  "holdout_ladder": 1,
   "min_items": 20,
   "task_types": {
     "biology": {

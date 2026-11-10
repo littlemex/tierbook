@@ -53,6 +53,9 @@ class Declarations:
     max_observation_age_days: float | None
     held_out_correction: str
     floors: dict[str, float]
+    #: How many arms of the selection-half frontier the held-out half may check, cheapest k, tested dearest first.
+    #: An int >= 1, or None for "all". 1 checks only the cheapest arm that cleared selection.
+    holdout_ladder: int | None
     repeat_rule: str | None = None
     min_items: int | None = None
     fallback_arm: str | None = None
@@ -62,14 +65,16 @@ class Declarations:
         return {"alpha": self.alpha, "bound": self.bound, "holdout_fraction": self.holdout_fraction,
                 "split_salt": self.split_salt, "unobserved_as": self.unobserved_as,
                 "max_observation_age_days": self.max_observation_age_days,
-                "held_out_correction": self.held_out_correction, "repeat_rule": self.repeat_rule,
+                "held_out_correction": self.held_out_correction,
+                "holdout_ladder": "all" if self.holdout_ladder is None else self.holdout_ladder,
+                "repeat_rule": self.repeat_rule,
                 "min_items": self.min_items, "fallback_arm": self.fallback_arm,
                 "usd_per_attempt": self.usd_per_attempt,
                 "task_types": {t: {"floor": f} for t, f in sorted(self.floors.items())}}
 
 
 _REQUIRED = ("alpha", "bound", "holdout_fraction", "split_salt", "unobserved_as", "max_observation_age_days",
-             "held_out_correction", "task_types")
+             "held_out_correction", "holdout_ladder", "task_types")
 _OPTIONAL = ("format", "repeat_rule", "min_items", "fallback_arm", "usd_per_attempt", "_comment")
 
 
@@ -100,6 +105,10 @@ def load_declarations(raw: dict | str | Path) -> Declarations:
     age = raw.get("max_observation_age_days")
     if age is not None and not (isinstance(age, (int, float)) and age > 0):
         problems.append("max_observation_age_days must be a positive number, or null for an explicit no-limit")
+    lad = raw.get("holdout_ladder")
+    if "holdout_ladder" in raw and not (lad == "all" or (isinstance(lad, int) and not isinstance(lad, bool)
+                                                         and lad >= 1)):
+        problems.append(f"holdout_ladder must be a positive integer or 'all', not {lad!r}")
     mi = raw.get("min_items")
     if mi is not None and not (isinstance(mi, int) and mi > 0):
         problems.append("min_items must be a positive integer")
@@ -128,7 +137,8 @@ def load_declarations(raw: dict | str | Path) -> Declarations:
     return Declarations(alpha=float(a), bound=str(raw["bound"]), holdout_fraction=float(h),
                         split_salt=str(raw["split_salt"]), unobserved_as=raw["unobserved_as"],
                         max_observation_age_days=age, held_out_correction=raw["held_out_correction"],
-                        floors=floors, repeat_rule=raw.get("repeat_rule"), min_items=mi,
+                        floors=floors, holdout_ladder=None if lad == "all" else lad,
+                        repeat_rule=raw.get("repeat_rule"), min_items=mi,
                         fallback_arm=raw.get("fallback_arm"), usd_per_attempt=dict(raw.get("usd_per_attempt") or {}))
 
 
@@ -527,28 +537,49 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
                          reason=f"no fresh, priced arm clears the floor on selection; nearest miss {miss} ({why})")
             task_types[t] = entry
             continue
-        chosen = min(eligible, key=lambda a: (per_arm[a]["selection"]["spend_per_accepted_usd"],
-                                              -per_arm[a]["selection"]["lower"], a))
+        ladder, dropped, above = _ladder(eligible, per_arm, decl.holdout_ladder)
+        # Fixed-sequence test: walk the ladder dearest first, each rung at the full alpha, and stop at the first
+        # that does not certify. A wrong certificate needs the first truly-below-floor rung on the path to pass,
+        # and that rung is tested once, so the error stays at the single-test level however long the ladder is.
+        rungs, chosen = [], None
+        status = code = why = None
+        for i, a in enumerate(ladder):
+            v, c, w = _held_out_verdict(per_arm[a]["held_out"], floor)
+            rungs.append({"rung": i + 1, "arm": a, "selection_lower": per_arm[a]["selection"]["lower"],
+                          "spend_per_accepted_usd": per_arm[a]["selection"]["spend_per_accepted_usd"],
+                          "held_out_lower": per_arm[a]["held_out"]["lower"],
+                          "held_out_upper": per_arm[a]["held_out"]["upper"], "verdict": v})
+            if v != CERTIFIED:
+                if chosen is None:
+                    chosen, status, code, why = a, v, c, w
+                for later in ladder[i + 1:]:
+                    rungs.append({"rung": len(rungs) + 1, "arm": later,
+                                  "selection_lower": per_arm[later]["selection"]["lower"],
+                                  "spend_per_accepted_usd": per_arm[later]["selection"]["spend_per_accepted_usd"],
+                                  "held_out_lower": None, "held_out_upper": None, "verdict": "not_reached"})
+                break
+            chosen, status, code, why = a, v, c, w
+        stopped = next((r["rung"] for r in rungs if r["verdict"] not in (CERTIFIED, "not_reached")), None)
         ho = per_arm[chosen]["held_out"]
-        if ho["items"] == 0:
-            status, code, why = UNCONFIRMED, "no_held_out_items", "no held-out items were observed for it"
-        elif ho["lower"] >= floor:
-            status, code, why = CERTIFIED, "held_out_clears", (
-                f"held-out lower bound {ho['lower']:.4f} >= floor {floor} on {ho['items']} items")
-        elif ho["upper"] < floor:
-            status, code, why = CONTRADICTED, "held_out_below", (
-                f"held-out upper bound {ho['upper']:.4f} < floor {floor}: selection chose it and the held-out "
-                "items contradict it")
-        else:
-            status, code, why = UNCONFIRMED, "held_out_inconclusive", (
-                f"floor {floor} lies inside the held-out interval [{ho['lower']:.4f}, {ho['upper']:.4f}]")
+        if len(ladder) > 1:
+            pos = next(r["rung"] for r in rungs if r["arm"] == chosen)
+            why = (f"{why} (rung {pos} of {len(ladder)}, holdout_ladder={decl.as_dict()['holdout_ladder']}"
+                   + (f"; the cheaper rung {ladder[pos]} was checked next and {rungs[pos]['verdict']}, ladder stopped"
+                      if status == CERTIFIED and stopped == pos + 1 else "")
+                   + (f"; {sum(r['verdict'] == 'not_reached' for r in rungs)} cheaper rung(s) not reached"
+                      if status != CERTIFIED else "") + ")")
+        entry.update(ladder=rungs, ladder_stopped_at=stopped, frontier_dropped=dropped,
+                     frontier_above_ladder=above)
         labels = sorted(set(per_arm[chosen]["selection"]["label_sources"]) | set(ho["label_sources"]))
         cas = cfg.candidates[chosen].cascade if chosen in cfg.candidates else None
         if cas is not None:
             entry["cascade"] = {"primary": cas.primary, "fallback": cas.fallback, "threshold": cas.threshold,
                                 "on_no_score": cas.on_no_score}
         entry.update(status=status, arm=chosen, reason_code=code, held_out=ho, label_sources=labels,
-                     reason=(f"cheapest per accepted task among {len(eligible)} that cleared selection; {why}; "
+                     reason=(("cheapest per accepted task" if len(ladder) == 1 else
+                              f"cheapest confirmed rung of a {len(ladder)}-rung held-out ladder" if status == CERTIFIED
+                              else f"dearest rung of a {len(ladder)}-rung held-out ladder, not confirmed")
+                             + f" among {len(eligible)} that cleared selection; {why}; "
                              f"conditional on task_type labels from {labels or ['unrecorded']}"))
         task_types[t] = entry
 
@@ -565,12 +596,53 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
                       + (f"1 - alpha/{len(certifiable)} (Bonferroni over task types, so the policy holds as a whole "
                          f"at 1 - {decl.alpha})" if decl.held_out_correction != "none"
                          else f"1 - {decl.alpha}, per task type; not a guarantee for the policy as a whole")
+                      + ("" if decl.holdout_ladder == 1 else
+                         "; the held-out half checks a ladder of arms fixed on the selection half, dearest first, "
+                         "each at that same confidence, stopping at the first that does not clear: a fixed-sequence "
+                         "test, so the chance of certifying a below-floor arm does not grow with the ladder's length")
                       + ", conditional on the task_type labels in the observations"),
         "task_types": task_types,
         "single_best": single,
         "fallback": fallback,
         "comparison": _comparison(task_types, single, results, part, cfg, decl),
     }
+
+
+def _held_out_verdict(ho: dict, floor: float) -> tuple[str, str, str]:
+    """The status one arm's held-out cell gives against the floor, its reason code and its reason."""
+    if ho["items"] == 0:
+        return UNCONFIRMED, "no_held_out_items", "no held-out items were observed for it"
+    if ho["lower"] >= floor:
+        return CERTIFIED, "held_out_clears", f"held-out lower bound {ho['lower']:.4f} >= floor {floor} on {ho['items']} items"
+    if ho["upper"] < floor:
+        return CONTRADICTED, "held_out_below", (f"held-out upper bound {ho['upper']:.4f} < floor {floor}: selection "
+                                                "chose it and the held-out items contradict it")
+    return UNCONFIRMED, "held_out_inconclusive", (
+        f"floor {floor} lies inside the held-out interval [{ho['lower']:.4f}, {ho['upper']:.4f}]")
+
+
+def _ladder(eligible: list[str], per_arm: dict, k: int | None) -> tuple[list[str], list[dict], list[str]]:
+    """The arms the held-out half may check, dearest first, from the selection half alone.
+
+    Arms are walked by selection lower bound, highest first (ties: cheaper first, then name), and the frontier keeps an
+    arm only if it is strictly cheaper per accepted task than every arm before it; the ladder is the k cheapest of it
+    (all when k is None). With k = 1 it is the cheapest arm that cleared selection, as before the ladder existed. Every
+    eligible arm accepted something and is priced, so its spend per accepted task is a number.
+    """
+    sel = {a: per_arm[a]["selection"] for a in eligible}
+    order = sorted(eligible, key=lambda a: (-sel[a]["lower"], sel[a]["spend_per_accepted_usd"], a))
+    frontier, dropped, best = [], [], None
+    for a in order:
+        cost = sel[a]["spend_per_accepted_usd"]
+        if best is None or cost < sel[best]["spend_per_accepted_usd"]:
+            frontier.append(a)
+            best = a
+        else:
+            dropped.append({"arm": a, "dominated_by": best})
+    by_cost = sorted(frontier, key=lambda a: (sel[a]["spend_per_accepted_usd"], -sel[a]["lower"], a))
+    take = by_cost if k is None else by_cost[:k]
+    above = [a for a in by_cost if a not in take]
+    return sorted(take, key=lambda a: (-sel[a]["spend_per_accepted_usd"], a)), dropped, above
 
 
 def _single_best(results, part, arms, task_types, cfg, decl, bound) -> dict | None:

@@ -56,7 +56,7 @@ def decl(**overrides) -> dict:
         split_salt=SALT,
         unobserved_as="excluded",
         max_observation_age_days=None,
-        held_out_correction="none",
+        held_out_correction="none", holdout_ladder=1,
         task_types={"law": {"floor": 0.5}},
         repeat_rule="all",
     )
@@ -349,7 +349,7 @@ def test_bonferroni_correction_widens_the_held_out_interval_versus_none(tmp_path
            + accepted_block(partition_items("held_out", 20, prefix="bonfheld2"), "physics", "api-cheap"))
     d_common = dict(task_types={"law": {"floor": 0.5}, "physics": {"floor": 0.5}})
 
-    none_policy = certify.derive(obs, cfg, certify.load_declarations(decl(held_out_correction="none", **d_common)))
+    none_policy = certify.derive(obs, cfg, certify.load_declarations(decl(held_out_correction="none", holdout_ladder=1, **d_common)))
     bonf_policy = certify.derive(obs, cfg, certify.load_declarations(
         decl(held_out_correction="bonferroni_over_task_types", **d_common)))
 
@@ -833,7 +833,7 @@ def test_a_fixed_cost_arm_is_priced_per_attempt_even_when_its_answers_report_no_
     cfg = load_config(cf)
     d = certify.load_declarations({
         "alpha": 0.05, "bound": "tierbook.bounds:wilson", "holdout_fraction": 0.5, "split_salt": "s",
-        "unobserved_as": "rejected", "max_observation_age_days": None, "held_out_correction": "none",
+        "unobserved_as": "rejected", "max_observation_age_days": None, "held_out_correction": "none", "holdout_ladder": 1,
         "task_types": {"t": {"floor": 0.5}}, "usd_per_attempt": {"student": {"usd": 0.000001, "source": "test"}}})
     obs = [Observation(item=f"i{i}", task_type="t", arm="student", outcome="accepted") for i in range(200)]
     p = certify.derive(obs, cfg, d)

@@ -127,7 +127,15 @@ Hand the policy to a router with `export-policy --target vsr` (vLLM Semantic Rou
 
 Everything that decides what is certified is declared by you, with no defaults: the floor per task type, alpha, the
 bound method (`tierbook.bounds:wilson` ships; any `module:attribute` works), the split, how unobserved attempts count,
-how long evidence stays fresh, and whether the guarantee holds per task type or for the policy as a whole. The
+how long evidence stays fresh, whether the guarantee holds per task type or for the policy as a whole, and how many
+arms the held-out half may check (`holdout_ladder`).
+
+`holdout_ladder: 1` checks only the cheapest arm that cleared selection. A larger value (or `"all"`) builds a ladder on
+the selection half alone: the arms that are cheaper than every arm with a higher selection lower bound, the k cheapest
+of them, checked on the held-out half dearest first, each at the full alpha, stopping at the first that does not
+clear. The cheapest confirmed rung is certified. This is a fixed-sequence test, so checking more arms does not loosen
+the guarantee; what it changes is that an arm which barely cleared selection no longer hides a dearer one that holds.
+A rung that fails stops the ladder, so cheaper rungs below it are reported as not reached, never as evidence. The
 guarantee is printed in words in every policy, including what it is conditional on.
 
 A certificate covers the task type as your labels define it. Once a router classifies requests, it says nothing about
