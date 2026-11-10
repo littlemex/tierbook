@@ -164,7 +164,7 @@ def cmd_export_policy(args) -> int:
                             entrypoint=args.entrypoint, allow_provisional=args.allow_unconfirmed,
                             signal_kind=args.signal_kind, signal_categories=cats,
                             management_bind_address=args.management_bind, management_port=args.management_port,
-                            listener_address=args.listener_address)
+                            listener_address=args.listener_address, cascade_confidence=args.cascade_confidence)
     except _refusals() as e:
         print(f"refused: {e}", file=sys.stderr)
         return REFUSED
@@ -261,6 +261,9 @@ def register(sub, common) -> None:
     x.add_argument("--policy", required=True)
     x.add_argument("--target", choices=("vsr", "table", "prismyra-learn"), required=True)
     x.add_argument("--learn-spec", default=None, help="prismyra-learn: the Prismyra learn spec to update")
+    x.add_argument("--cascade-confidence", default=None,
+                    help="vsr: the router's confidence_method a cascade's recorded score was computed as "
+                         "(e.g. avg_logprob); required to export a cascade")
     x.add_argument("--arm-router", default=None,
                    help="prismyra-learn: JSON mapping an arm to a Prismyra router block, or to null for Prismyra alone")
     x.add_argument("--candidates", default=None)

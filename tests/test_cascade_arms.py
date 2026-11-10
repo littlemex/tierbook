@@ -376,3 +376,53 @@ def test_vsr_export_refuses_a_cascade_assignment_from_the_table(tmp_path):
                                                                            "threshold": 0.8}}}}}
     with pytest.raises(export_vsr.ExportError, match="cascade"):
         export_vsr.export(table, cfg, signal_for_family={T: T}, default_model="teacher")
+
+
+# --- export to vLLM Semantic Router's confidence looper ------------------------------------------------------------
+
+def _table(cascade):
+    return {"families": {T: {"cannot_reject": {"status": "assigned", "kind": "cascade", "chosen": ["routed"],
+                                               "why": "test", "cascade": cascade}}}}
+
+
+def test_vsr_export_writes_a_cascade_as_the_confidence_looper_when_its_score_is_declared(tmp_path):
+    cfg = candidates(tmp_path)
+    c = {"primary": "student", "fallback": "teacher", "threshold": 0.8, "on_no_score": "fallback"}
+    conf, _ = export_vsr.export(_table(c), cfg, signal_for_family={T: T}, default_model="teacher",
+                                cascade_confidence="avg_logprob")
+    (d,) = conf["routing"]["decisions"]
+    assert [m["model"] for m in d["modelRefs"]] == ["student", "teacher"]
+    assert d["algorithm"] == {"type": "confidence", "confidence": {"confidence_method": "avg_logprob",
+                                                                   "threshold": 0.8, "on_error": "skip"}}
+    assert {m["name"] for m in conf["providers"]["models"]} == {"student", "teacher"}
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"on_no_score": "unobserved"}, "on_no_score 'fallback' only"),
+    ({"fallback": "mid-or-teacher"}, "itself a cascade"),
+])
+def test_vsr_export_refuses_cascades_the_looper_cannot_run(tmp_path, change, message):
+    cfg = candidates(tmp_path, {
+        "mid": {"deployment": "self_hosted", "hourly_usd": 1.0, "endpoint": {"base_url": "http://mid/v1", "model": "m"}},
+        "mid-or-teacher": cascade(0.7, primary="mid")})
+    c = dict({"primary": "student", "fallback": "teacher", "threshold": 0.8, "on_no_score": "fallback"}, **change)
+    with pytest.raises(export_vsr.ExportError, match=message):
+        export_vsr.export(_table(c), cfg, signal_for_family={T: T}, default_model="teacher",
+                          cascade_confidence="avg_logprob")
+
+
+def test_vsr_export_asks_which_confidence_the_score_is(tmp_path):
+    cfg = candidates(tmp_path)
+    c = {"primary": "student", "fallback": "teacher", "threshold": 0.8, "on_no_score": "fallback"}
+    with pytest.raises(export_vsr.ExportError, match="--cascade-confidence"):
+        export_vsr.export(_table(c), cfg, signal_for_family={T: T}, default_model="teacher")
+
+
+def test_a_family_declared_as_all_traffic_gets_a_rule_with_no_conditions(tmp_path):
+    cfg = candidates(tmp_path)
+    c = {"primary": "student", "fallback": "teacher", "threshold": 0.8, "on_no_score": "fallback"}
+    conf, _ = export_vsr.export(_table(c), cfg, signal_for_family={T: "*"}, default_model="teacher",
+                                cascade_confidence="avg_logprob")
+    (d,) = conf["routing"]["decisions"]
+    assert d["rules"] == {"operator": "AND", "conditions": []}
+    assert conf["routing"]["signals"] == {}

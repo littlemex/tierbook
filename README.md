@@ -198,10 +198,13 @@ Nothing is defaulted. `on_no_score` says what a student attempt without a score 
 deferred item the teacher never answered is `unobserved`; an attempt recorded under the cascade's own name is refused,
 because the record cannot say which part answered or what each consumed. The fallback may itself be a cascade; the
 primary may not, because a cascade's attempts carry no score of their own. Several thresholds are several candidates,
-chosen on selection and checked on held-out like any arm. The vLLM Semantic Router export refuses a cascade, because a
-router that picks one model per request cannot run one. Prismyra's router runs this shape when the student is one
-Prismyra trained itself (`--target prismyra-learn`); a cascade over a separately served model, such as the fine-tuned
-0.8B above, has no router here yet.
+chosen on selection and checked on held-out like any arm. vLLM Semantic Router runs a cascade with its confidence
+looper: `export-policy --target vsr --cascade-confidence avg_logprob` writes one, and refuses without that
+declaration, because the certificate holds only if the recorded score is the confidence that router computes. A
+cascade over a 0.8B student and Prismyra ran that way end to end: the router's choice equalled the recorded score's on
+all 300 routed items, and `drift` found the assignment consistent. A student served this way has to generate its
+answer, so it is trained to; one that only reads label logits needs a router that runs it, such as Prismyra's own for
+the students Prismyra trains (`--target prismyra-learn`).
 
 ## A live run
 
@@ -268,7 +271,7 @@ from the survey in [`docs/prior-art-2026-11.md`](docs/prior-art-2026-11.md).
 v0.5.0. The certification loop runs end to end on billed traffic through vLLM Semantic Router. The distillation lane
 runs end to end through Prismyra's own router: Prismyra labels, its LightGBM student is refitted per window, tierbook
 certifies per window, the export is served, and `drift` checks the served traffic. A cascade over a separately served
-student is certified and priced but not yet served by a router.
+0.8B student runs the same way through vLLM Semantic Router's confidence looper.
 
 Known limits: vLLM Semantic Router 0.4.0 rejects Claude responses that carry reasoning (`unknown field
 "reasoning_details"`), so routing those needs its `main` or a 0.5.0 build. Not yet shown: more than one router replica,

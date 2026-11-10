@@ -75,6 +75,41 @@ def _endpoint_of(cand: Candidate) -> tuple[str, str]:
     return f"{u.hostname}:{port}", u.scheme
 
 
+def _rules(signal: str, signal_kind: str) -> dict:
+    """A decision's match rule. `*` is the caller's declaration that this family is all of the entrypoint's traffic,
+    written as the router's rule with no conditions; any other label is matched through the classifier signal."""
+    if signal == "*":
+        return {"operator": "AND", "conditions": []}
+    return {"operator": "AND", "conditions": [{"type": signal_kind, "name": signal}]}
+
+
+def _cascade_algorithm(family: str, c: dict, cfg: Config, method: str | None) -> dict:
+    """A cascade assignment as the router's confidence looper: the primary, then the fallback when the router's own
+    confidence in the primary's answer is below the threshold.
+
+    The certificate holds only if the score the cascade was certified on is the quantity this router computes, so the
+    method is the caller's declaration (`method`, the router's `confidence_method` name, not interpreted here) and
+    nothing is exported without it. The router's confidence is normalised to [0, 1] (for `avg_logprob`, the average
+    token logprob plus 3, over 3, clamped), and a primary call that returns no logprobs is skipped to the fallback,
+    which is a cascade with `on_no_score: fallback`; other shapes have no faithful config here and are refused.
+    """
+    where = f"the entry for {family!r} is a cascade ({c.get('primary')} when its score >= {c.get('threshold')}, " \
+            f"else {c.get('fallback')})"
+    if not method:
+        raise ExportError(
+            f"{where}. The router can run it only by computing its own confidence in the primary's answer, so the "
+            "certificate holds only if the cascade's recorded score is that same quantity. Declare which one it is "
+            "(--cascade-confidence, the router's confidence_method name) or assign a single arm.")
+    if c.get("on_no_score") != "fallback":
+        raise ExportError(f"{where}, with on_no_score {c.get('on_no_score')!r}. The router skips a primary call with no "
+                          "logprobs to the next model, which is on_no_score 'fallback' only.")
+    fb = cfg.candidates.get(c.get("fallback") or "")
+    if fb is not None and fb.cascade is not None:
+        raise ExportError(f"{where}, and its fallback is itself a cascade; the router's confidence looper applies one "
+                          "threshold to every model it tries, so a chain with its own thresholds has no faithful config")
+    return {"primary": c["primary"], "fallback": c["fallback"], "threshold": float(c["threshold"]), "method": method}
+
+
 def _provider_model(cand: Candidate) -> dict:
     """One entry in `providers.models[]`, in the shape the router actually reads.
 
@@ -154,6 +189,7 @@ def export(
     management_bind_address: str = "127.0.0.1",
     listener_address: str = "127.0.0.1",
     management_port: int | None = None,
+    cascade_confidence: str | None = None,
 ) -> tuple[dict, dict]:
     """Build the router config, and the provenance that travels beside it. `signal_for_family` maps a tierbook family to a classifier label.
 
@@ -185,13 +221,9 @@ def export(
         if status != ASSIGNED and not allow_provisional:
             skipped.append(f"{family} ({status}: {(d.get('validation') or {}).get('reason', '')[:120]})")
             continue
+        cascade = None
         if d["kind"] == "cascade":
-            c = d.get("cascade") or {}
-            raise ExportError(
-                f"the entry for {family!r} is a cascade ({c.get('primary')} when its score >= {c.get('threshold')}, "
-                f"else {c.get('fallback')}). The router picks one model per request and cannot run a model, read "
-                "its score and call another, so this assignment has no faithful vLLM Semantic Router config. It "
-                "needs a router that can run a cascade, or a single arm.")
+            cascade = _cascade_algorithm(family, d.get("cascade") or {}, cfg, cascade_confidence)
         if d["kind"] == "chain":
             raise ExportError(
                 f"the entry for {family!r} is a chain {d['chosen']}, whose second stage fires only on "
@@ -218,7 +250,7 @@ def export(
             skipped.append(f"{family} (the compiled policy has an unmeasured guard, so no rule can fire and "
                            f"this traffic takes the declared default: {pol.get('unmeasured_guards')})")
             continue
-        chosen = d["chosen"][0]
+        chosen = d["chosen"][0] if cascade is None else cascade["primary"]
         if chosen not in cfg.candidates:
             raise ExportError(
                 f"the table assigns {family!r} to {chosen!r}, which is not in the candidate configuration "
@@ -227,6 +259,23 @@ def export(
             )
         used[chosen] = (f"assigned for {family} by tierbook: {d['why'][:200]}"
                         + ("" if status == ASSIGNED else f" [{status.upper()}: no held-out fold supports this]"))
+        if cascade is not None:
+            used[cascade["fallback"]] = f"the fallback of the cascade assigned for {family} by tierbook"
+            decisions.append({
+                "name": f"tierbook_{family.replace('-', '_').replace(' ', '_')}",
+                "description": (f"{family}: the cascade {d['chosen'][0]} ({cascade['primary']} when the router's "
+                                f"{cascade['method']} confidence is >= {cascade['threshold']}, else "
+                                f"{cascade['fallback']}), status {status}."),
+                "priority": 100,
+                "rules": _rules(signal, signal_kind),
+                # Order matters and is the declared one: primary first. The confidence looper sorts modelRefs by
+                # declared param_size, stably, and none is declared here, so the listed order is the order tried.
+                "modelRefs": [{"model": cascade["primary"], "use_reasoning": False},
+                              {"model": cascade["fallback"], "use_reasoning": False}],
+                "algorithm": {"type": "confidence", "confidence": {
+                    "confidence_method": cascade["method"], "threshold": cascade["threshold"], "on_error": "skip"}},
+            })
+            continue
         decisions.append({
             "name": f"tierbook_{family.replace('-', '_').replace(' ', '_')}",
             "description": (f"{family}: compiled at margin {table.get('margin')} from registry "
@@ -234,7 +283,7 @@ def export(
             "priority": 100,
             # `rules`, not a per-decision `signals` block. An earlier version of this exporter used the
             # latter and the router did not read it.
-            "rules": {"operator": "AND", "conditions": [{"type": signal_kind, "name": signal}]},
+            "rules": _rules(signal, signal_kind),
             "modelRefs": [{"model": chosen, "use_reasoning": False}],
         })
 
@@ -260,13 +309,13 @@ def export(
     quality = _quality_scores(table)
     members = [cfg.candidates[cid] for cid in sorted(used)]
     cards = [_model_card(c, description=used[c.id], quality=quality.get(c.id)) for c in members]
-    labels = sorted(set(signal_for_family.values()))
+    labels = sorted(set(signal_for_family.values()) - {"*"})
     cats = signal_categories or {}
     signals = {"domains": [
         {"name": label, "description": f"tierbook traffic family label {label!r}.",
          **({"mmlu_categories": cats[label]} if label in cats else {})}
         for label in labels
-    ]}
+    ]} if labels else {}
     routing = {"strategy": "priority", "modelCards": cards, "signals": signals, "decisions": decisions}
     # The model catalog is shared across recipes, so a recipe may carry the strategy, the signals and the
     # decisions but NOT the cards. The router refuses to start otherwise, naming that exact reason -- so this
