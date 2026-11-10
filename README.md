@@ -168,14 +168,17 @@ small model trained on the traffic itself. [Prismyra](https://github.com/littlem
 and logs what it answered; its learn pipeline refits a LightGBM student on that log every window, with text embeddings
 registered as features; tierbook certifies, per window, whether the student, the student routed by confidence, or
 Prismyra itself is the cheapest at your floor, and exports the decision as the router block of Prismyra's learn spec.
-Serving through Prismyra's router, with its confidence-mode admission, is still being verified. The run behind the
+That loop ran end to end: at a floor of 0.80 the policy certified Prismyra's confidence-mode router at a fifth of
+Prismyra's cost per accepted task, Prismyra served the exported spec, the student answered 68 % of 300 fresh requests
+in a median 13.8 ms, and `drift` confirmed the assignment (263 of 300 accepted). The run behind the
 numbers is in [`docs/verify/v0.5.0-distillation-loop.md`](docs/verify/v0.5.0-distillation-loop.md) and the pieces in
 [`examples/distillation_loop/`](examples/distillation_loop/README.md).
 
 The student need not be a classifier. A `Qwen/Qwen3.5-0.8B` fine-tuned on the teacher's labels accepted 0.885 of the
 certification items against the teacher's 0.896 and the LightGBM student's 0.810, served on a 4-vCPU Graviton4
-instance at under a third of the teacher's price per attempt; at a floor of 0.85 its held-out lower bound fell short
-by 0.003 to 0.008 on 600 items, and tierbook said so rather than certifying it.
+instance at under a third of the teacher's price per attempt. At a floor of 0.85 the student alone fell short on the
+held-out half; with a held-out ladder (below), its cascade with the teacher was certified at 37 % of the teacher's cost
+per accepted task.
 
 ### Cascades: student when sure, teacher otherwise
 
@@ -196,8 +199,9 @@ deferred item the teacher never answered is `unobserved`; an attempt recorded un
 because the record cannot say which part answered or what each consumed. The fallback may itself be a cascade; the
 primary may not, because a cascade's attempts carry no score of their own. Several thresholds are several candidates,
 chosen on selection and checked on held-out like any arm. The vLLM Semantic Router export refuses a cascade, because a
-router that picks one model per request cannot run one. Prismyra's router has a confidence mode that matches this shape
-(`--target prismyra-learn`); serving a cascade through it is still being verified.
+router that picks one model per request cannot run one. Prismyra's router runs this shape when the student is one
+Prismyra trained itself (`--target prismyra-learn`); a cascade over a separately served model, such as the fine-tuned
+0.8B above, has no router here yet.
 
 ## A live run
 
@@ -261,9 +265,10 @@ from the survey in [`docs/prior-art-2026-11.md`](docs/prior-art-2026-11.md).
 
 ## Status
 
-v0.5.0. The certification loop runs end to end on billed traffic through vLLM Semantic Router. The distillation lane is
-shown up to the certificate: Prismyra labels, its LightGBM student is refitted per window, tierbook certifies per window;
-serving through Prismyra's router is still being verified.
+v0.5.0. The certification loop runs end to end on billed traffic through vLLM Semantic Router. The distillation lane
+runs end to end through Prismyra's own router: Prismyra labels, its LightGBM student is refitted per window, tierbook
+certifies per window, the export is served, and `drift` checks the served traffic. A cascade over a separately served
+student is certified and priced but not yet served by a router.
 
 Known limits: vLLM Semantic Router 0.4.0 rejects Claude responses that carry reasoning (`unknown field
 "reasoning_details"`), so routing those needs its `main` or a 0.5.0 build. Not yet shown: more than one router replica,

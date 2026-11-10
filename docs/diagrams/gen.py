@@ -336,8 +336,9 @@ def student_ops():
            "the split, alpha and bound", size=17, align="left", valign="top")
     d.chip(80, 640, 1440, 46, "measured here: a fine-tuned 0.8B student reached 0.885 against its teacher's 0.896 at under a "
            "third of the teacher's price; serving work alone made it 2.3x cheaper", size=16)
-    d.chip(80, 700, 1440, 46, "tierbook still did not certify it at 0.85 (held-out lower bound 0.842-0.847 on 600 items) "
-           "-- the certificate, not the hope, decides the switch", fill=AMBER_SOFT, color=AMBER, size=16)
+    d.chip(80, 700, 1440, 46, "alone it missed 0.85 on held-out; its cascade with the teacher was certified at 0.85 at 37% "
+           "of the teacher's cost -- the certificate, not the hope, decides the switch", fill=AMBER_SOFT, color=AMBER,
+           size=16)
     return d
 
 
