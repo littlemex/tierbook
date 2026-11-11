@@ -177,8 +177,9 @@ numbers is in [`docs/verify/v0.5.0-distillation-loop.md`](docs/verify/v0.5.0-dis
 The student need not be a classifier. A `Qwen/Qwen3.5-0.8B` fine-tuned on the teacher's labels accepted 0.885 of the
 certification items against the teacher's 0.896 and the LightGBM student's 0.810, served on a 4-vCPU Graviton4
 instance at under a third of the teacher's price per attempt. At a floor of 0.85 the student alone fell short on the
-held-out half; with a held-out ladder (below), its cascade with the teacher was certified at 37 % of the teacher's cost
-per accepted task.
+held-out half; its cascade with the teacher was certified at 37 % of the teacher's cost per accepted task, and the
+version an OpenAI-compatible router can serve (a student that generates its label) at 41 %, after a second look on
+more items paid for with a halved alpha.
 
 ### Cascades: student when sure, teacher otherwise
 
