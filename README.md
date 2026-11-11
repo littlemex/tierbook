@@ -267,6 +267,39 @@ from the survey in [`docs/prior-art-2026-11.md`](docs/prior-art-2026-11.md).
 | `docs/diagrams/`, `docs/images/` | the figures' draw.io sources and their rendered PNGs (`python docs/diagrams/gen.py` regenerates both) |
 | `infra/` | bringing a gateway (and optionally a cluster) up from scratch for verification |
 
+## How this differs, and what it has not shown
+
+The parts exist elsewhere. What we have not found elsewhere is the combination: a switch happens only when a lower
+confidence bound on the acceptance rate (at a declared confidence, 95 % in the runs here), computed on items not used
+to choose, clears a declared floor; prices are kept apart from measurements; and the loop is run end to end on billed
+calls and live routers, so far on benchmark items.
+
+| | prior work and tools | what this adds |
+|---|---|---|
+| Cascades and confidence thresholds | FrugalGPT, AutoMix, vLLM Semantic Router's confidence looper; RouteLLM's cost threshold (a router, not a cascade) | a cascade is one candidate, priced from what each part consumed, and certified on the same score the router computes at serving time (the two matched on 300 of 300 routed items) |
+| Distilling traffic into a cheaper model | OpenPipe, Predibase, provider distillation APIs | the student takes a task type only when its held-out lower bound clears a declared floor, re-checked every window |
+| Evaluation, gates and monitoring | Braintrust, Langfuse, LangSmith, promptfoo | a gate that is a confidence bound on items the choice was not made on, plus `drift` on fresh traffic after the switch |
+| Price tables and cost tracking | LiteLLM, Langfuse, OpenRouter | cost per accepted task recomputed from today's prices, so a price change re-derives the policy without re-measuring, as long as the model behind the price is unchanged |
+| Choosing on one sample and testing on another | Learn then Test, Pareto Testing, and related work | the same method, including its fixed-sequence testing, applied to model assignment: arms are tested in an order fixed before the held-out half is seen, stopping at the first failure |
+
+Not yet shown, and worth knowing before relying on it:
+
+* **Breadth.** One author, and hundreds to a few thousand items per run. The distillation lane is one easy
+  closed-label task; the routed loop is multiple-choice MMLU-Pro. Open-ended generation, where acceptance needs a rubric
+  or a judge model rather than an exact match, is untested.
+* **The grader is yours.** The certificate bounds how often your grader accepts; it says nothing about whether the
+  grader is right.
+* **What the bound covers.** It is conditional on your task-type labels and on future traffic resembling the
+  evaluated items; requests a classifier sends to the wrong task type (18-21 % of routed requests in two deployments here, about a
+  fifth of the traffic) are outside it.
+* **Declared numbers.** Amortisation horizons and price probes are declarations, and the savings they produce move
+  with them; a self-hosted arm is priced at full utilisation unless you declare otherwise, which understates its cost when the
+  hardware sits idle.
+* **The benefit over a simpler rule** (switch on the point estimate) has not been measured as errors avoided against
+  savings forgone.
+* **Independence and maturity.** The teacher (Prismyra) and the gateway (stratoclave) come from the same author;
+  there is no third-party reproduction yet, no PyPI release, and running more than one router replica is untested.
+
 ## Status
 
 v0.5.0. The certification loop runs end to end on billed traffic through vLLM Semantic Router. The distillation lane
