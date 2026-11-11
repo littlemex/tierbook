@@ -288,7 +288,10 @@ Not yet shown, and worth knowing before relying on it:
   closed-label task; the routed loop is multiple-choice MMLU-Pro. Open-ended generation, where acceptance needs a rubric
   or a judge model rather than an exact match, is untested.
 * **The grader is yours.** The certificate bounds how often your grader accepts; it says nothing about whether the
-  grader is right.
+  grader is right. Where the grader is itself a model, its errors pass into the certificate, and checking it with a
+  second model judge may not help: Rao and Callison-Burch find decision-model and LLM rubric judges
+  [wrong in the same places](https://arxiv.org/abs/2609.29769), with a cascade between them gaining at most 2.7 points
+  over the best single judge. The same paper is a reason a cascade's gain is measured here rather than assumed.
 * **What the bound covers.** It is conditional on your task-type labels and on future traffic resembling the
   evaluated items; requests a classifier sends to the wrong task type (18-21 % of routed requests in two deployments here, about a
   fifth of the traffic) are outside it.
