@@ -179,7 +179,7 @@ certification items against the teacher's 0.896 and the LightGBM student's 0.810
 instance at under a third of the teacher's price per attempt. At a floor of 0.85 the student alone fell short on the
 held-out half; its cascade with the teacher was certified at 37 % of the teacher's cost per accepted task, and the
 version an OpenAI-compatible router can serve (a student that generates its label) at 41 %, on a second look at more
-items with alpha halved for that look (the two looks together bound a false certificate at 0.075, not 0.05).
+items with alpha halved for that look (across both looks a false certificate has a chance of about 0.0375, against about 0.025 for a single look).
 
 ### Cascades: student when sure, teacher otherwise
 
