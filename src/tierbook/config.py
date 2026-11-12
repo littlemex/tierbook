@@ -131,8 +131,8 @@ class Candidate:
     note: str = ""
     cascade: Cascade | None = None                   # cascade: how it is composed; priced from its parts
     #: What kind of thing the arm is, in the operator's own words (e.g. "generates", "scores_options"). Opaque to
-    #: tierbook: it is compared against a declared `interfaces` filter and never interpreted. A cascade without its
-    #: own takes its primary's, because the primary is what answers first.
+    #: tierbook: it is compared against a declared `interfaces` filter and never interpreted, and never inferred --
+    #: a cascade declares its own, because whether a router can serve the composition is the operator's knowledge.
     interface: str | None = None
 
     @property

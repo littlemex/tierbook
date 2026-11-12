@@ -95,7 +95,8 @@ def test_a_cascade_reports_its_components_versions(tmp_path):
         "student": {"usd": 0.5, "source": "test"}})
     rows = many("student", 60, version="s1", score=0.9) + many("teacher", 60, version="t1", tokens=10)
     policy = certify.derive(rows, cfg, decl)
-    assert policy["task_types"][T]["arms"]["routed"]["arm_version"] == {"student": "s1", "teacher": "t1"}
+    cell = policy["task_types"][T]["arms"]["routed"]
+    assert cell["arm_version"] is None and cell["component_versions"] == {"student": "s1", "teacher": "t1"}
 
 
 def test_drift_refuses_fresh_rows_from_another_version(tmp_path):
@@ -107,21 +108,76 @@ def test_drift_refuses_fresh_rows_from_another_version(tmp_path):
     certify.drift(deployed, deployed, many("student", 20, version="v1"), decl, cfg)
 
 
+def test_drift_does_not_refuse_an_arm_with_no_fresh_rows(tmp_path):
+    cfg, decl = candidates(tmp_path), declarations(min_items=5)
+    deployed = certify.derive(many("student", 60, version="v1"), cfg, decl)
+    report = certify.drift(deployed, deployed, many("teacher", 20, tokens=10), decl, cfg)
+    assert report["version_unchecked"] == []
+
+
+def test_drift_says_when_an_unversioned_certificate_meets_versioned_rows(tmp_path):
+    cfg, decl = candidates(tmp_path), declarations(min_items=5)
+    deployed = certify.derive(many("student", 60), cfg, decl)
+    report = certify.drift(deployed, deployed, many("student", 20, version="v9"), decl, cfg)
+    assert report["version_unchecked"] == [{"task_type": T, "arm": "student", "fresh_version": "v9"}]
+
+
+def test_an_aged_out_version_does_not_block_the_new_one(tmp_path):
+    from datetime import datetime, timezone
+    cfg, decl = candidates(tmp_path), declarations(max_observation_age_days=30)
+    old = [dataclasses.replace(o, observed_at="2026-01-01T00:00:00Z", run="old") for o in many("student", 60, version="v1")]
+    new = many("student", 60, version="v2")
+    policy = certify.derive(old + new, cfg, decl, as_of=datetime(2026, 11, 20, tzinfo=timezone.utc))
+    assert policy["task_types"][T]["arm_version"] == "v2"
+
+
 # --- interfaces ----------------------------------------------------------------------------------------------------
 
-def test_interfaces_filter_applies_before_selection(tmp_path):
-    cfg = candidates(tmp_path, {
+def tagged(tmp_path, cascade_interface="generates"):
+    from test_cascade_arms import cascade
+    routed = cascade(0.8)
+    if cascade_interface:
+        routed["interface"] = cascade_interface
+    return candidates(tmp_path, {
         "student": {"deployment": "self_hosted", "hourly_usd": 0.2, "interface": "scores_options",
                     "endpoint": {"base_url": "http://student/v1", "model": "student"}},
         "teacher": {"deployment": "api", "interface": "generates",
                     "endpoint": {"base_url": "http://teacher/v1", "model": "teacher"},
-                    "price_per_mtok": {"fresh_in": 10.0, "cached_in": 0.0, "out": 0.0}}})
+                    "price_per_mtok": {"fresh_in": 10.0, "cached_in": 0.0, "out": 0.0}},
+        "routed": routed})
+
+
+def test_interfaces_filter_applies_before_selection(tmp_path):
+    cfg = tagged(tmp_path, cascade_interface="scores_options")
     rows = many("student", 60) + many("teacher", 60, tokens=1000)
     open_ = certify.derive(rows, cfg, declarations())["task_types"][T]
     assert open_["arm"] == "student" and "excluded_by_interface" not in open_
     only = certify.derive(rows, cfg, declarations(interfaces=["generates"]))["task_types"][T]
     assert only["arm"] == "teacher"
-    assert only["excluded_by_interface"] == ["routed", "student"]   # the cascade inherits its primary's
+    assert only["excluded_by_interface"] == ["routed", "student"]
+
+
+def test_a_cascade_is_never_given_its_primarys_interface(tmp_path):
+    cfg = tagged(tmp_path, cascade_interface=None)
+    with pytest.raises(certify.DeclarationError, match=r"\['routed'\] declare no interface"):
+        certify.derive(many("teacher", 60, tokens=10), cfg, declarations(interfaces=["generates"]))
+
+
+def test_an_interface_name_no_candidate_carries_is_refused(tmp_path):
+    with pytest.raises(certify.DeclarationError, match="carried by no candidate"):
+        certify.derive(many("teacher", 60, tokens=10), tagged(tmp_path), declarations(interfaces=["generate"]))
+
+
+def test_a_declared_fallback_outside_the_filter_is_refused(tmp_path):
+    with pytest.raises(certify.DeclarationError, match="fallback_arm"):
+        certify.derive(many("teacher", 60, tokens=10), tagged(tmp_path),
+                       declarations(interfaces=["generates"], fallback_arm="student"))
+
+
+def test_when_the_filter_removes_every_passing_arm_the_reason_says_so(tmp_path):
+    cfg = tagged(tmp_path, cascade_interface="scores_options")
+    entry = certify.derive(many("student", 60), cfg, declarations(interfaces=["generates"]))["task_types"][T]
+    assert entry["status"] == certify.UNASSIGNABLE and entry["reason_code"] == "excluded_by_interface"
 
 
 def test_interfaces_must_be_a_non_empty_list():
@@ -153,4 +209,10 @@ def test_ingest_stamps_a_declared_version(tmp_path):
     r = run("ingest", "--calls", str(calls), "--out", str(out), "--arm-version", "student=sha256:abc")
     assert r.returncode == 0, r.stderr
     assert read(out)[0].arm_version == "sha256:abc"
+    assert "arm_version declared at ingest" in read(out)[0].source
     assert run("ingest", "--calls", str(calls), "--out", str(out), "--arm-version", "student").returncode == 2
+    assert run("ingest", "--calls", str(calls), "--out", str(out), "--arm-version", "studnet=v1").returncode == 2
+    assert run("ingest", "--calls", str(calls), "--out", str(out), "--arm-version", "student=a",
+               "--arm-version", "student=b").returncode == 2
+    assert run("ingest", "--calls", str(calls), "--out", str(out), "--append",
+               "--arm-version", "student=other").returncode == 2

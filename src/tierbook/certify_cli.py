@@ -1,7 +1,7 @@
 """The certification plane's verbs: `ingest`, `check-observations`, `derive`, `drift`, `export-policy`.
 
 Kept beside `cli.py` rather than inside it so the plane's door can be read on its own; `cli.main` registers these.
-Each verb reads files and writes one file, and prints what it refused.
+Each verb reads files and writes at most one file (`check-observations` writes none), and prints what it refused.
 
 Exit codes: 0 done; 2 refused (bad input, a missing declaration, an export the target cannot express);
 3 `drift` found a deployed assignment contradicted by fresh evidence. A refusal and a contradiction never share a code,
@@ -63,14 +63,33 @@ def cmd_ingest(args) -> int:
         return REFUSED
     if args.arm_version:
         import dataclasses
-        tags = {}
+
+        from tierbook.certify import arm_versions
+        from tierbook.observation import read
+        tags: dict[str, str] = {}
         for spec in args.arm_version:
             arm, sep, ver = spec.partition("=")
             if not sep or not arm or not ver:
                 print(f"refused: --arm-version takes ARM=VERSION, not {spec!r}", file=sys.stderr)
                 return REFUSED
+            if tags.get(arm, ver) != ver:
+                print(f"refused: --arm-version gives {arm!r} two versions", file=sys.stderr)
+                return REFUSED
             tags[arm] = ver
-        obs = [dataclasses.replace(o, arm_version=tags[o.arm]) if o.arm in tags else o for o in obs]
+        absent = sorted(set(tags) - {o.arm for o in obs})
+        if absent:
+            print(f"refused: --arm-version names {absent}, which have no calls in the log", file=sys.stderr)
+            return REFUSED
+        # The stamp is the operator's assertion, not the sender's report, and the row says so.
+        obs = [dataclasses.replace(o, arm_version=tags[o.arm],
+                                   source=(o.source + ";" if o.source else "") + "arm_version declared at ingest")
+               if o.arm in tags else o for o in obs]
+        if args.append and Path(args.out).exists():
+            try:
+                arm_versions(read(args.out) + obs)
+            except _refusals() as e:
+                print(f"refused: appending would mix versions: {e}", file=sys.stderr)
+                return REFUSED
     n = write(obs, args.out, append=args.append)
     ungraded = sum(o.reason == "ungraded" for o in obs)
     print(f"wrote {n} observations to {args.out}" + (f" ({ungraded} ungraded)" if ungraded else ""))
@@ -78,11 +97,12 @@ def cmd_ingest(args) -> int:
 
 
 def cmd_check_observations(args) -> int:
-    """Read observation files the way `derive` will, and print what they hold per (task type, arm, version).
+    """Parse observation files the way `derive` parses rows, and print what they hold per (task type, arm, version).
 
     The validator a sender runs before handing files over: a row this reader refuses is refused here first, with its
-    file and line, and an arm that mixes versions is named. Nothing is written."""
-    from tierbook.certify import arm_versions
+    file and line, and an arm that mixes versions is named. Candidates, declarations and freshness are not read, so
+    a file that passes here can still be refused by `derive` for those. Nothing is written."""
+    from tierbook.certify import NO_VERSION, arm_versions
     from tierbook.observation import read
 
     try:
@@ -93,11 +113,14 @@ def cmd_check_observations(args) -> int:
         return REFUSED
     cells: dict[tuple[str, str, str], dict[str, int]] = {}
     for o in obs:
-        c = cells.setdefault((o.task_type, o.arm, o.arm_version or "<none>"), {})
+        c = cells.setdefault((o.task_type, o.arm, o.arm_version or NO_VERSION), {})
         c[o.outcome] = c.get(o.outcome, 0) + 1
+        if o.path:
+            k = "path=" + ">".join(o.path)
+            c[k] = c.get(k, 0) + 1
     for (t, a, v), c in sorted(cells.items()):
         print(f"{t}\t{a}\t{v}\t" + " ".join(f"{k}={n}" for k, n in sorted(c.items())))
-    print(f"{len(obs)} observations in {len(args.observations)} file(s): readable")
+    print(f"{len(obs)} observations in {len(args.observations)} file(s): parsed")
     return 0
 
 
@@ -281,7 +304,7 @@ def register(sub, common) -> None:
     i.set_defaults(fn=cmd_ingest)
 
     c = sub.add_parser("check-observations", parents=[common],
-                       help="validate observation files and print what they hold, writing nothing")
+                       help="parse observation files as derive does and print each arm's versions and outcomes, writing nothing")
     c.add_argument("observations", nargs="+")
     c.set_defaults(fn=cmd_check_observations)
 

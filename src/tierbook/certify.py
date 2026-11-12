@@ -501,7 +501,8 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             raise DeclarationError(
                 f"usd_per_attempt names {arm!r}, which is not a fixed-cost candidate in {where}; a declared price "
                 "may only stand in for an hourly bill, never for a price card or for an arm the router cannot reach")
-    versions = arm_versions(observations)
+    _check_interfaces(cfg, decl)
+    versions = arm_versions(fresh_only(observations, decl, as_of))
     results, stale = tally_items(compose(observations, cfg), decl, as_of)
     part = {key: partition_of(key[2], decl.split_salt, decl.holdout_fraction) for key in results}
     observed_types = sorted({t for t, _, _ in results} | {t for t, _ in stale})
@@ -528,7 +529,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             whole = _cell(items(t, a, None), a, cfg, decl, bound, decl.alpha, stale.get((t, a), 0))
             per_arm[a] = {"selection": sel, "held_out": ho, "stale_attempts": stale.get((t, a), 0),
                           "fresh": whole["attempts"] > 0, "priced": whole["spend_usd"] is not None,
-                          "priced_by": whole["priced_by"], "arm_version": _version_of(a, versions, cfg),
+                          "priced_by": whole["priced_by"], **_versions_entry(a, versions, cfg),
                           "interface": interface_of(a, cfg)}
         if not per_arm:
             task_types[t] = {"status": UNASSIGNABLE, "arm": None, "reason_code": "no_observations",
@@ -544,8 +545,15 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
         entry: dict = {"floor": floor, "arms": per_arm}
         if decl.interfaces is not None:
             entry["excluded_by_interface"] = excluded
+        if not eligible and excluded and any(per_arm[a]["selection"]["lower"] >= floor for a in excluded):
+            entry.update(status=UNASSIGNABLE, arm=None, reason_code="excluded_by_interface",
+                         reason=f"every arm that clears the floor on selection is outside the declared interfaces "
+                                f"({excluded})")
+            task_types[t] = entry
+            continue
         if not eligible:
-            miss = max(sorted(per_arm), key=lambda a: per_arm[a]["selection"]["lower"])
+            miss = max(sorted(a for a in per_arm if a not in excluded) or sorted(per_arm),
+                       key=lambda a: per_arm[a]["selection"]["lower"])
             s = per_arm[miss]
             why = (f"stale: all {s['stale_attempts']} attempt(s) older than max_observation_age_days"
                    if not s["fresh"] else f"unpriced: {s['priced_by']}" if not s["priced"]
@@ -592,7 +600,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
         if cas is not None:
             entry["cascade"] = {"primary": cas.primary, "fallback": cas.fallback, "threshold": cas.threshold,
                                 "on_no_score": cas.on_no_score}
-        entry["arm_version"] = per_arm[chosen]["arm_version"]
+        entry.update(_versions_entry(chosen, versions, cfg))
         entry.update(status=status, arm=chosen, reason_code=code, held_out=ho, label_sources=labels,
                      reason=(("cheapest per accepted task" if len(ladder) == 1 else
                               f"cheapest confirmed rung of a {len(ladder)}-rung held-out ladder" if status == CERTIFIED
@@ -626,13 +634,16 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
     }
 
 
+#: How a missing version is shown in messages and listings. Angle brackets keep it out of any digest-like value.
+NO_VERSION = "<none>"
+
+
 def arm_versions(observations: Iterable[Observation]) -> dict[str, str]:
     """The one `arm_version` each arm's attempts carry, `""` for an arm whose rows name none.
 
     Refused: an arm whose rows name two versions, or name one on some rows and none on others. A rate pooled over two
-    different things that answered is a rate of neither, and a certificate over it binds to nothing that can be served
-    (the experiments retrained a discarded checkpoint and got 93.4% agreement with the original). Give each version
-    its own arm name, or observe one version only.
+    different things that answered is a rate of neither, and a certificate over it binds to nothing that can be served.
+    Give each version its own arm name, or observe one version only.
     """
     seen: dict[str, set[str]] = {}
     for o in observations:
@@ -640,7 +651,7 @@ def arm_versions(observations: Iterable[Observation]) -> dict[str, str]:
     out: dict[str, str] = {}
     for arm, vs in sorted(seen.items()):
         if len(vs) > 1:
-            shown = sorted(v or "<none>" for v in vs)
+            shown = sorted(v or NO_VERSION for v in vs)
             raise EvidenceError(f"arm {arm!r} has attempts from {len(vs)} versions {shown}; a rate over two things "
                                 "that answered certifies neither. Give each version its own arm name, or observe "
                                 "one version only")
@@ -648,23 +659,57 @@ def arm_versions(observations: Iterable[Observation]) -> dict[str, str]:
     return out
 
 
-def _version_of(arm: str, versions: dict[str, str], cfg: Config) -> str | dict | None:
-    """An ordinary arm's version, None when its rows name none; a cascade's, per component."""
+def _leaves(arm: str, cfg: Config) -> list[str]:
+    cand = cfg.candidates.get(arm)
+    if cand is None or cand.cascade is None:
+        return [arm]
+    return [cand.cascade.primary] + _leaves(cand.cascade.fallback, cfg)
+
+
+def _versions_entry(arm: str, versions: dict[str, str], cfg: Config) -> dict:
+    """`arm_version` for an ordinary arm (None when its rows name none); `component_versions` for a cascade, one per
+    ordinary arm it reaches."""
     cand = cfg.candidates.get(arm)
     if cand is not None and cand.cascade is not None:
-        return {cand.cascade.primary: _version_of(cand.cascade.primary, versions, cfg),
-                cand.cascade.fallback: _version_of(cand.cascade.fallback, versions, cfg)}
-    return versions.get(arm) or None
+        return {"arm_version": None, "component_versions": {a: versions.get(a) or None for a in _leaves(arm, cfg)}}
+    return {"arm_version": versions.get(arm) or None}
 
 
 def interface_of(arm: str, cfg: Config) -> str | None:
-    """The candidate's declared interface; a cascade without one takes its primary's."""
+    """The candidate's own declared interface. Never inferred, not even a cascade's from its parts: whether a router
+    can serve a composition is the operator's knowledge."""
     cand = cfg.candidates.get(arm)
-    if cand is None:
-        return None
-    if cand.interface is None and cand.cascade is not None:
-        return interface_of(cand.cascade.primary, cfg)
-    return cand.interface
+    return cand.interface if cand is not None else None
+
+
+def _check_interfaces(cfg: Config, decl: Declarations) -> None:
+    """With an `interfaces` filter declared, every candidate must say what it is, and every name in the filter must be
+    carried by some candidate: otherwise a forgotten tag or a typo removes arms from selection with no refusal."""
+    if decl.interfaces is None:
+        return
+    untagged = sorted(cid for cid, c in cfg.candidates.items() if c.interface is None)
+    unknown = sorted(set(decl.interfaces) - {c.interface for c in cfg.candidates.values()})
+    problems = ([f"candidates {untagged} declare no interface" ] if untagged else []) + \
+               ([f"interfaces {unknown} are carried by no candidate"] if unknown else [])
+    if problems:
+        raise DeclarationError("an interfaces filter is declared, so every candidate must declare one and every "
+                               "filtered name must exist: " + "; ".join(problems))
+    if decl.fallback_arm and interface_of(decl.fallback_arm, cfg) not in decl.interfaces:
+        raise DeclarationError(f"fallback_arm {decl.fallback_arm!r} has interface "
+                               f"{interface_of(decl.fallback_arm, cfg)!r}, outside the declared interfaces")
+
+
+def fresh_only(observations: Iterable[Observation], decl: Declarations, as_of: datetime) -> list[Observation]:
+    """The attempts `tally_items` counts, by the same freshness rule: an aged-out version is history, not evidence."""
+    limit = decl.max_observation_age_days
+    if limit is None:
+        return list(observations)
+    keep = []
+    for o in observations:
+        t = _when(o.observed_at)
+        if t is not None and (as_of - t).total_seconds() <= limit * 86400:
+            keep.append(o)
+    return keep
 
 
 def _held_out_verdict(ho: dict, floor: float) -> tuple[str, str, str]:
@@ -849,15 +894,23 @@ def drift(deployed: dict, rederived: dict, fresh: list[Observation], decl: Decla
     # The deployed certificate names what answered when it was issued. Fresh rows from anything else are not a check
     # of that certificate, whatever their rate.
     fresh_versions = arm_versions(fresh)
+    version_unchecked = []
     for t, e in sorted(deployed["task_types"].items()):
-        want = e.get("arm_version")
-        if e.get("status") != CERTIFIED or not want:
+        if e.get("status") != CERTIFIED:
             continue
-        got = _version_of(e["arm"], fresh_versions, cfg)
-        if got != want:
-            raise EvidenceError(f"{t!r}: the deployed certificate is for {e['arm']!r} at version {want!r}, and the "
-                                f"fresh attempts are from {got!r}; drift over a different version checks nothing "
-                                "that was certified. Re-derive for the version now serving")
+        want = e.get("component_versions") or ({e["arm"]: e.get("arm_version")} if "arm_version" in e else {})
+        for arm, v in sorted(want.items()):
+            if arm not in fresh_versions:
+                continue                      # no fresh rows: the cells-to-measure report says so
+            got = fresh_versions[arm] or None
+            if v is None:
+                if got is not None:
+                    version_unchecked.append({"task_type": t, "arm": arm, "fresh_version": got})
+                continue
+            if got != v:
+                raise EvidenceError(f"{t!r}: the deployed certificate is for {arm!r} at version {v!r}, and the "
+                                    f"fresh attempts are from {got or NO_VERSION}; drift over a different version "
+                                    "checks nothing that was certified. Re-derive for the version now serving")
     bound = resolve(decl.bound)
     window, _ = tally_items(compose(fresh, cfg), decl, as_of)
     checks = []
@@ -913,6 +966,8 @@ def drift(deployed: dict, rederived: dict, fresh: list[Observation], decl: Decla
                           "reasons": u["reasons"]} for t, u in sorted(unattributed.items())]
     return {"rederivation_changes": changes, "contradiction_checks": checks, "needs_measurement": needs,
             "unattributed_attempts": unattributed_rows,
+            # A certificate issued without a version cannot be checked against what serves now; said, not skipped.
+            "version_unchecked": version_unchecked,
             # Why a re-derivation may differ besides the evidence: the inputs it was derived under.
             "declarations_changed": deployed.get("declarations") != rederived.get("declarations"),
             "candidates_changed": deployed.get("candidates_digest") != rederived.get("candidates_digest")}

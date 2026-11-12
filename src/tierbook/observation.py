@@ -56,12 +56,13 @@ class Observation:
     #: The arm's own score for this attempt (a confidence, a probability, a margin), as the arm reported it. Read only
     #: by a cascade that routes on it; tierbook does not interpret its scale.
     score: float | None = None
-    #: The exact thing that answered, as the sender names it (a weights digest, an image digest, a perigraph identity,
-    #: or any composition of those). Opaque: tierbook compares it for equality and never parses it. Empty means the
-    #: sender did not say, which is not the same as "the same as every other row".
+    #: The exact thing that answered, as the sender names it (a weights digest, an image digest, or any composition).
+    #: Opaque: tierbook compares it for equality and never parses it. Empty means the sender did not say, which is not
+    #: the same as "the same as every other row".
     arm_version: str = ""
     #: The component arms that actually ran for this attempt, in order, when `arm` names something that routes inside
-    #: itself (a router assigned this request, then a student and a fallback answered). Recorded, not interpreted.
+    #: itself (a router assigned this request, then a student and a fallback answered). Recorded for the reader and
+    #: listed by `check-observations`; a rate is never split by it, because the router's choice is part of the arm.
     path: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
