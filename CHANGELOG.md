@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* **`export-policy --target prismyra-learn` refuses what it would otherwise skip in silence.** A task type the policy
+  exports (certified, or unconfirmed under `--allow-unconfirmed`) that no `--signal TASK_TYPE=TAG` maps to a tag is
+  refused; so is a tag carrying an external admission this tool wrote earlier that no task type maps to, two task
+  types mapped to one tag, and a `--signal` naming a task type the policy lacks (now checked before anything is
+  written). Needed because an end-to-end run without `--signal` wrote a spec with no router and exited 0: a real
+  certificate silently did not reach the Prismyra server.
 * **`derive` says when a cascade's deferrals found no fallback attempt.** Parts pair by item and run; a deferral with
   no fallback attempt at the same item and run counts as `unobserved_as` declares. `derive` now prints that count per
   cascade where it is read. Needed because an end-to-end run composed offline student scores (one run name) with

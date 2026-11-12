@@ -338,7 +338,9 @@ def _export_prismyra_learn(policy: dict, policy_bytes: bytes, args) -> int:
     Prismyra's own router decides, per request, between a tag's distilled student and Prismyra itself; this sets
     which of those the policy certified. What router block an arm means is the caller's (`--arm-router`, arm ->
     a Prismyra `router` object, or null for "Prismyra alone"), because this module does not know how a student
-    artifact or a confidence threshold is named. A task type certified on an arm the map does not name is refused:
+    artifact or a confidence threshold is named. A task type this run exports that `--signal` maps to no tag is
+    refused, and so is a tag with an earlier external admission that no task type maps to. A task type certified on
+    an arm the map does not name is refused:
     Prismyra cannot serve a metered API, and dropping the entry would leave the old router in place. A task type
     that is not certified gets no router, so its traffic is answered by Prismyra, the tag's own model.
 
@@ -359,6 +361,24 @@ def _export_prismyra_learn(policy: dict, policy_bytes: bytes, args) -> int:
     served_student = _pairs(args.served_student, "--served-student")
     tags = _pairs(args.signal, "--signal")
     by_task = {e["task"]: e for e in spec}
+    exported = lambda e: e["status"] == "certified" or (args.allow_unconfirmed and e["status"] == "unconfirmed")
+    # Exit 0 means every task type this run exports reached a tag, and every tag whose student this tool admitted
+    # earlier was decided again. Each gap below would otherwise leave the old router serving while reporting success.
+    exported_without_tag = sorted(t for t, e in policy["task_types"].items() if exported(e) and t not in tags)
+    if exported_without_tag:
+        raise ValueError(f"task type(s) {exported_without_tag} are exported by this policy but no --signal "
+                         "TASK_TYPE=TAG names the learn-spec tag they configure")
+    signal_without_task_type = sorted(set(tags) - set(policy["task_types"]))
+    if signal_without_task_type:
+        raise ValueError(f"--signal names task types the policy does not have: {signal_without_task_type}")
+    doubled = sorted({g for g in tags.values() if list(tags.values()).count(g) > 1})
+    if doubled:
+        raise ValueError(f"--signal maps more than one task type to tag(s) {doubled}; one tag has one router")
+    undecided = sorted(e["task"] for e in spec if (e.get("admission") or {}).get("mode") == "external"
+                       and e["task"] not in set(tags.values()))
+    if undecided:
+        raise ValueError(f"tag(s) {undecided} carry an external admission this tool wrote earlier, and no --signal "
+                         "maps a task type to them, so this run would leave that student serving unjudged")
     decisions, records = {}, {}
     out = Path(args.out)
     record_dir = out.parent / f"{out.name}.admission"
@@ -371,8 +391,7 @@ def _export_prismyra_learn(policy: dict, policy_bytes: bytes, args) -> int:
             raise ValueError(f"task type {t!r} maps to tag {tag!r}, which the learn spec does not register")
         entry = by_task[tag]
         prior = (entry.get("admission") or {}).get("mode")
-        ok = e["status"] == "certified" or (args.allow_unconfirmed and e["status"] == "unconfirmed")
-        if not ok:
+        if not exported(e):
             entry.pop("router", None)
             _drop_external(entry)
             decisions[tag] = {"arm": None, "status": e["status"], "router": None,
@@ -405,9 +424,6 @@ def _export_prismyra_learn(policy: dict, policy_bytes: bytes, args) -> int:
                 entry["admission"] = {"mode": "external", "record": record}
         decisions[tag] = {"arm": e["arm"], "status": e["status"], "router": block, "why": e["reason"],
                           "admission_record": record}
-    unmapped = sorted(set(tags) - set(policy["task_types"]))
-    if unmapped:
-        raise ValueError(f"--signal names task types the policy does not have: {unmapped}")
     for rel, rec in records.items():
         record_dir.mkdir(parents=True, exist_ok=True)
         _write_atomic(out.parent / rel, json.dumps(rec, indent=2) + "\n")

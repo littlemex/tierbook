@@ -894,6 +894,72 @@ def test_prismyra_learn_export_refuses_an_arm_prismyra_cannot_serve(tmp_path):
     assert rc == 2
 
 
+def test_prismyra_learn_export_refuses_a_certified_task_type_with_no_signal_mapping(tmp_path):
+    from tierbook import cli
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student-w3": {"mode": "ab", "ratio": 10000, "student_path": "s.json"}}))
+    out = tmp_path / "o.json"
+    rc = cli.main(["export-policy", "--policy", str(_policy_file(tmp_path, "certified", "student-w3")),
+                   "--target", "prismyra-learn", "--learn-spec", str(_learn_spec(tmp_path)), "--arm-router",
+                   str(arms), "--out", str(out), "--allow-unversioned"])
+    assert rc == 2
+    assert not out.exists()
+
+
+def test_prismyra_learn_export_with_allow_unconfirmed_also_needs_the_signal(tmp_path, capsys):
+    from tierbook import cli
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student-w3": {"mode": "ab", "ratio": 10000, "student_path": "s.json"}}))
+    rc = cli.main(["export-policy", "--policy", str(_policy_file(tmp_path, "unconfirmed", "student-w3")),
+                   "--target", "prismyra-learn", "--learn-spec", str(_learn_spec(tmp_path)), "--arm-router",
+                   str(arms), "--out", str(tmp_path / "o.json"), "--allow-unconfirmed", "--allow-unversioned"])
+    assert rc == 2
+    assert "finnews" in capsys.readouterr().err
+
+
+def test_prismyra_learn_export_refuses_to_leave_an_earlier_external_admission_undecided(tmp_path, capsys):
+    from tierbook import cli
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student-w3": {"mode": "ab", "ratio": 10000, "student_path": "s.json"}}))
+    e = {"task": "finnews-v1", "question": "q", "options": ["a", "b"], "kind": "choice",
+         "router": {"mode": "ab", "ratio": 10000, "student_path": "s.json"},
+         "admission": {"mode": "external", "record": "spec.json.admission/finnews-v1.json"}}
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps([e]))
+    rc = cli.main(["export-policy", "--policy", str(_policy_file(tmp_path, "unconfirmed", "student-w3")),
+                   "--target", "prismyra-learn", "--learn-spec", str(spec), "--arm-router", str(arms),
+                   "--out", str(tmp_path / "o.json")])
+    assert rc == 2
+    assert "finnews-v1" in capsys.readouterr().err
+
+
+def test_prismyra_learn_export_refuses_two_task_types_on_one_tag(tmp_path):
+    from tierbook import cli
+    p = {"task_types": {"a": {"status": "certified", "arm": "student-w3", "reason": "r"},
+                        "b": {"status": "unconfirmed", "arm": "student-w3", "reason": "r"}},
+         "observations_digest": "d", "guarantee": "g", "fallback": {"arm": "x"}}
+    pol = tmp_path / "policy.json"
+    pol.write_text(json.dumps(p))
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student-w3": {"mode": "ab", "ratio": 10000, "student_path": "s.json"}}))
+    rc = cli.main(["export-policy", "--policy", str(pol), "--target", "prismyra-learn", "--learn-spec",
+                   str(_learn_spec(tmp_path)), "--arm-router", str(arms), "--signal", "a=finnews-v1",
+                   "--signal", "b=finnews-v1", "--out", str(tmp_path / "o.json"), "--allow-unversioned"])
+    assert rc == 2
+
+
+def test_prismyra_learn_export_passes_an_uncertified_unmapped_task_type_through_unchanged(tmp_path):
+    from tierbook import cli
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student-w3": {"mode": "ab", "ratio": 10000, "student_path": "s.json"}}))
+    out = tmp_path / "o.json"
+    rc = cli.main(["export-policy", "--policy", str(_policy_file(tmp_path, "unconfirmed", "student-w3")),
+                   "--target", "prismyra-learn", "--learn-spec", str(_learn_spec(tmp_path)), "--arm-router",
+                   str(arms), "--out", str(out)])
+    assert rc == 0
+    assert json.loads(out.read_text()) == json.loads((tmp_path / "spec.json").read_text())
+
+
 def _versioned_policy(tmp_path, entry):
     p = {"task_types": {"finnews": {"status": "certified", "reason": "r", **entry}},
          "observations_digest": "d", "guarantee": "g", "fallback": {"arm": "x"}}

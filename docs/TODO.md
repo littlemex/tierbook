@@ -284,6 +284,21 @@ second look. Seen in the phase-6 run, where drift was run over the certification
 **What would tell us it is finished.** Either drift judges fresh rows only against the deployed policy (no
 re-derivation over held-out items), or the re-derivation is recorded in the ledger as a look. Decide with T21.
 
+### T25 -- A policy whose certified arms only partly run on one Prismyra server
+
+**What.** `export-policy --target prismyra-learn` now refuses any exported task type that `--signal` does not map to a
+tag. A policy with one task type certified on a Prismyra student and another certified on an arm Prismyra cannot serve
+(a metered API) therefore has no invocation that succeeds: leaving the second out is refused, mapping it is refused.
+
+**Why it matters.** Before, the operator could leave the second task type out, and the export skipped it silently --
+the same silence that lost a real certificate in the dbpedia_14 run. The refusal is the safer default; the gap is the
+mixed policy. No run so far has had one.
+
+**What would tell us it is finished.** A caller declaration with no default (for example
+`--not-on-this-server TASK_TYPE`), listed in the export's `decisions` with its reason and refused when the same task
+type is also in `--signal`, added when the first mixed policy appears. The vsr target's own signal check and this one
+could then share one helper.
+
 ## Deliberately not doing
 
 Recorded here so they are not rediscovered as gaps.
