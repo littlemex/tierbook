@@ -134,6 +134,10 @@ class Candidate:
     #: tierbook: it is compared against a declared `interfaces` filter and never interpreted, and never inferred --
     #: a cascade declares its own, because whether a router can serve the composition is the operator's knowledge.
     interface: str | None = None
+    #: What the arm was made from (`tierbook.provenance.Provenance`), when the candidate cites a provenance file.
+    provenance: object | None = None
+    #: The item sets a choice about this arm was made on (a recipe compared, a threshold tuned), when cited.
+    consulted: tuple = ()
 
     @property
     def is_fixed_cost(self) -> bool:
@@ -353,7 +357,7 @@ def _reject_illegal(cid: str, raw: dict, observed: frozenset[str]) -> None:
         )
 
 
-def _cascade_candidate(cid: str, entry: dict, ep: dict) -> Candidate:
+def _cascade_candidate(cid: str, entry: dict, ep: dict, base: Path) -> Candidate:
     c = entry["cascade"]
     if entry.get("deployment") not in (None, "cascade"):
         raise ConfigError(f"candidate {cid!r} has a cascade and deployment {entry.get('deployment')!r}; a cascade "
@@ -378,10 +382,35 @@ def _cascade_candidate(cid: str, entry: dict, ep: dict) -> Candidate:
             raise ConfigError(f"candidate {cid!r}: cascade.{k} must name a candidate")
     if c["primary"] == c["fallback"]:
         raise ConfigError(f"candidate {cid!r}: cascade.primary and cascade.fallback are both {c['primary']!r}")
+    if entry.get("arm_provenance") is not None:
+        raise ConfigError(f"candidate {cid!r} is a cascade with its own arm_provenance; a cascade is made of its parts, "
+                          "and each part cites its own")
     return Candidate(id=cid, endpoint=None, deployment="cascade", note=entry.get("note", ""),
-                     interface=_interface(cid, entry),
+                     interface=_interface(cid, entry), **_cited(cid, entry, base),
                      cascade=Cascade(primary=c["primary"], fallback=c["fallback"], threshold=float(t),
                                      on_no_score=c["on_no_score"]))
+
+
+def _cited(cid: str, entry: dict, base: Path) -> dict:
+    """A candidate's `provenance` and `consulted` citations, loaded now so a bad citation fails at load time."""
+    from tierbook.evidence import EvidenceError
+    from tierbook.provenance import _sets, load_provenance
+
+    out: dict = {}
+    try:
+        pv = entry.get("arm_provenance")
+        if pv is not None:
+            if not isinstance(pv, dict) or not pv.get("path"):
+                raise ConfigError(f"candidate {cid!r}: arm_provenance must be {{'path': ..., 'sha256': ...}}")
+            path = Path(pv["path"])
+            out["provenance"] = load_provenance(path if path.is_absolute() else base / path, pv.get("sha256"))
+            if out["provenance"].arm != cid:
+                raise ConfigError(f"candidate {cid!r} cites provenance for arm {out['provenance'].arm!r}")
+        if entry.get("consulted") is not None:
+            out["consulted"] = _sets(entry["consulted"], base, f"candidate {cid!r} consulted")
+    except EvidenceError as e:
+        raise ConfigError(f"candidate {cid!r}: {e}") from None
+    return out
 
 
 def _interface(cid: str, entry: dict) -> str | None:
@@ -458,7 +487,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
         ep = entry.get("endpoint") or {}
         _reject_illegal(f"{cid}.endpoint", ep, observed)
         if entry.get("cascade") is not None:
-            candidates[cid] = _cascade_candidate(cid, entry, ep)
+            candidates[cid] = _cascade_candidate(cid, entry, ep, p.parent)
             continue
         if not ep.get("base_url") or not ep.get("model"):
             raise ConfigError(
@@ -490,6 +519,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
             hourly_usd=entry.get("hourly_usd"),
             note=entry.get("note", ""),
             interface=_interface(cid, entry),
+            **_cited(cid, entry, p.parent),
         )
 
     _check_cascades(candidates)

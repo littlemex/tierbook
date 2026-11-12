@@ -537,18 +537,27 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             continue
         # Priced on BOTH partitions: the shipped cost is the held-out one, so an arm whose held-out attempts cannot
         # be priced cannot ship a cost and is not eligible, however it looked on selection.
+        for a, cell in per_arm.items():
+            held = {key[2] for key in results if key[0] == t and key[1] == a and part[key] == "held_out"}
+            why = provenance_exclusion(a, held, versions, cfg)
+            if why:
+                cell["excluded_by_provenance"] = why
         excluded = sorted(a for a, s in per_arm.items()
-                          if decl.interfaces is not None and s["interface"] not in decl.interfaces)
+                          if (decl.interfaces is not None and s["interface"] not in decl.interfaces)
+                          or s.get("excluded_by_provenance"))
         eligible = [a for a, s in per_arm.items()
                     if a not in excluded and s["fresh"] and s["priced"] and s["selection"]["accepted"] > 0
                     and s["selection"]["lower"] >= floor]
         entry: dict = {"floor": floor, "arms": per_arm}
         if decl.interfaces is not None:
-            entry["excluded_by_interface"] = excluded
+            entry["excluded_by_interface"] = sorted(a for a in excluded if not per_arm[a].get("excluded_by_provenance"))
+        if any(c.get("excluded_by_provenance") for c in per_arm.values()):
+            entry["excluded_by_provenance"] = {a: c["excluded_by_provenance"] for a, c in sorted(per_arm.items())
+                                               if c.get("excluded_by_provenance")}
         if not eligible and excluded and any(per_arm[a]["selection"]["lower"] >= floor for a in excluded):
-            entry.update(status=UNASSIGNABLE, arm=None, reason_code="excluded_by_interface",
-                         reason=f"every arm that clears the floor on selection is outside the declared interfaces "
-                                f"({excluded})")
+            entry.update(status=UNASSIGNABLE, arm=None, reason_code="excluded",
+                         reason=f"every arm that clears the floor on selection is excluded, by the declared "
+                                f"interfaces or by its own provenance ({excluded})")
             task_types[t] = entry
             continue
         if not eligible:
@@ -697,6 +706,41 @@ def _check_interfaces(cfg: Config, decl: Declarations) -> None:
     if decl.fallback_arm and interface_of(decl.fallback_arm, cfg) not in decl.interfaces:
         raise DeclarationError(f"fallback_arm {decl.fallback_arm!r} has interface "
                                f"{interface_of(decl.fallback_arm, cfg)!r}, outside the declared interfaces")
+
+
+def provenance_exclusion(arm: str, held_out_items: set[str], versions: dict[str, str], cfg: Config) -> dict | None:
+    """Why an arm's own claims rule it out, or None. Claims only subtract: nothing here can make an arm eligible.
+
+    Each ordinary arm a cascade reaches brings its own provenance, and the cascade's own `consulted` sets count too.
+    """
+    from tierbook.provenance import held_out_overlap
+
+    why: dict = {}
+    cand = cfg.candidates.get(arm)
+    sets = list(cand.consulted) if cand is not None else []
+    for leaf in _leaves(arm, cfg):
+        lc = cfg.candidates.get(leaf)
+        if lc is None:
+            continue
+        sets += list(lc.consulted)
+        pv = lc.provenance
+        if pv is None:
+            continue
+        sets += list(pv.trained_on)
+        seen = versions.get(leaf)
+        if pv.arm_version and seen is not None and seen != pv.arm_version:
+            why.setdefault("version_mismatch", []).append(
+                {"arm": leaf, "provenance": pv.arm_version, "observed": seen or NO_VERSION})
+        for req_arm, req_version in pv.requires:
+            got = versions.get(req_arm)
+            if got is not None and got != req_version:
+                why.setdefault("requirement_mismatch", []).append(
+                    {"arm": leaf, "requires": req_arm, "version": req_version, "observed": got or NO_VERSION})
+    hit = held_out_overlap(held_out_items, tuple(sets))
+    if hit:
+        why["held_out_overlap"] = {"count": len(hit), "first": hit[:5],
+                                   "sets": sorted({s.name for s in sets})}
+    return why or None
 
 
 def fresh_only(observations: Iterable[Observation], decl: Declarations, as_of: datetime) -> list[Observation]:

@@ -234,6 +234,7 @@ needs none of them installed to derive a policy.
 | command | what it does |
 |---|---|
 | `ingest --calls C --outcomes O --out obs.jsonl [--cache-additive-arm ARM] [--arm-version ARM=V]` | join a chat-completions log to grades; `--append` to add to an existing file; `--arm-version` stamps an arm's attempts with an opaque version |
+| `check-provenance FILE [--sha256 H]` | read an arm's provenance and the item sets it cites; writes nothing |
 | `check-observations FILE ...` | parse observation files as `derive` does and print each arm's versions, paths and outcome counts; writes nothing |
 | `derive --observations ... --candidates C --declarations D --out policy.json [--as-of T]` | certify per task type |
 | `drift --observations ... --deployed P --fresh F ... --out drift.json` | diff, contradiction checks, cells to measure; exit 3 on a contradiction |
@@ -254,6 +255,9 @@ deployed assignment was contradicted by fresh evidence.
   `drift` refuses fresh rows from another version. A certificate issued over unversioned rows binds nothing, and
   `drift` says so. A declared `interfaces` list keeps arms a router cannot serve out of selection; with it declared,
   every candidate, cascades included, must say what it is.
+* **A trainer's claims only subtract.** A candidate may cite what its arm was trained on and which sets a choice
+  consulted; an arm whose held-out items appear there is excluded from selection. Nothing a trainer claims can admit
+  an arm.
 * **The unit is the item.** Repeated runs of one item combine by a declared rule rather than counting as independent
   evidence.
 * **Refusals come from the record.** A missing floor, an unpriced arm, stale evidence or an unservable export is a

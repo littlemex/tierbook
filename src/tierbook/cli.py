@@ -38,6 +38,7 @@ The certification plane (v0.5, registered from `certify_cli.py`; see docs/DESIGN
 
     tierbook ingest      join a call log to the caller's grades as observations
     tierbook check-observations  validate observation files and print what each arm and version holds
+    tierbook check-provenance  read an arm's provenance and the item sets it cites
     tierbook derive      certify a per-task-type assignment, with a held-out check and a fallback
     tierbook drift       diff a deployed policy against today's evidence and prices
     tierbook export-policy  turn a derived policy into a router configuration

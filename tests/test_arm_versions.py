@@ -177,7 +177,7 @@ def test_a_declared_fallback_outside_the_filter_is_refused(tmp_path):
 def test_when_the_filter_removes_every_passing_arm_the_reason_says_so(tmp_path):
     cfg = tagged(tmp_path, cascade_interface="scores_options")
     entry = certify.derive(many("student", 60), cfg, declarations(interfaces=["generates"]))["task_types"][T]
-    assert entry["status"] == certify.UNASSIGNABLE and entry["reason_code"] == "excluded_by_interface"
+    assert entry["status"] == certify.UNASSIGNABLE and entry["reason_code"] == "excluded"
 
 
 def test_interfaces_must_be_a_non_empty_list():

@@ -1,7 +1,7 @@
-"""The certification plane's verbs: `ingest`, `check-observations`, `derive`, `drift`, `export-policy`.
+"""The certification plane's verbs: `ingest`, `check-observations`, `check-provenance`, `derive`, `drift`, `export-policy`.
 
 Kept beside `cli.py` rather than inside it so the plane's door can be read on its own; `cli.main` registers these.
-Each verb reads files and writes at most one file (`check-observations` writes none), and prints what it refused.
+Each verb reads files and writes at most one file (the two `check-*` verbs write none), and prints what it refused.
 
 Exit codes: 0 done; 2 refused (bad input, a missing declaration, an export the target cannot express);
 3 `drift` found a deployed assignment contradicted by fresh evidence. A refusal and a contradiction never share a code,
@@ -121,6 +121,24 @@ def cmd_check_observations(args) -> int:
     for (t, a, v), c in sorted(cells.items()):
         print(f"{t}\t{a}\t{v}\t" + " ".join(f"{k}={n}" for k, n in sorted(c.items())))
     print(f"{len(obs)} observations in {len(args.observations)} file(s): parsed")
+    return 0
+
+
+def cmd_check_provenance(args) -> int:
+    """Read an arm's provenance file and the manifests it cites, and print what it claims. Nothing is written."""
+    from tierbook.provenance import load_provenance
+
+    try:
+        pv = load_provenance(args.provenance, args.sha256)
+    except _refusals() as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return REFUSED
+    print(f"arm {pv.arm} version {pv.arm_version or '<none>'}")
+    for s in pv.trained_on:
+        print(f"trained_on {s.name}: {len(s.items)} items, digest {s.digest}")
+    for arm, v in pv.requires:
+        print(f"requires {arm} at {v}")
+    print("claims only remove an arm from selection; none is verified")
     return 0
 
 
@@ -307,6 +325,12 @@ def register(sub, common) -> None:
                        help="parse observation files as derive does and print each arm's versions and outcomes, writing nothing")
     c.add_argument("observations", nargs="+")
     c.set_defaults(fn=cmd_check_observations)
+
+    pv = sub.add_parser("check-provenance", parents=[common],
+                        help="read an arm's provenance and the manifests it cites, writing nothing")
+    pv.add_argument("provenance")
+    pv.add_argument("--sha256", default=None, help="the digest the candidate file declares for it")
+    pv.set_defaults(fn=cmd_check_provenance)
 
     for name, fn, helptext in (("derive", cmd_derive, "certify a per-task-type assignment from observations"),
                                ("drift", cmd_drift, "diff a deployed policy against today's evidence and prices")):
