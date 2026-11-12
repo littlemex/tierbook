@@ -37,6 +37,7 @@ count is gone rather than corrected: a number in a docstring beside the list it 
 The certification plane (v0.5, registered from `certify_cli.py`; see docs/DESIGN-v0.5-certification-plane.md):
 
     tierbook ingest      join a call log to the caller's grades as observations
+    tierbook check-observations  validate observation files and print what each arm and version holds
     tierbook derive      certify a per-task-type assignment, with a held-out check and a fallback
     tierbook drift       diff a deployed policy against today's evidence and prices
     tierbook export-policy  turn a derived policy into a router configuration

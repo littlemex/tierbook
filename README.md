@@ -233,7 +233,8 @@ needs none of them installed to derive a policy.
 
 | command | what it does |
 |---|---|
-| `ingest --calls C --outcomes O --out obs.jsonl [--cache-additive-arm ARM]` | join a chat-completions log to grades; `--append` to add to an existing file |
+| `ingest --calls C --outcomes O --out obs.jsonl [--cache-additive-arm ARM] [--arm-version ARM=V]` | join a chat-completions log to grades; `--append` to add to an existing file; `--arm-version` stamps an arm's attempts with an opaque version |
+| `check-observations FILE ...` | validate observation files the way `derive` reads them and print each arm's version and outcome counts; writes nothing |
 | `derive --observations ... --candidates C --declarations D --out policy.json [--as-of T]` | certify per task type |
 | `drift --observations ... --deployed P --fresh F ... --out drift.json` | diff, contradiction checks, cells to measure; exit 3 on a contradiction |
 | `export-policy --policy P --target vsr\|prismyra-learn\|table --out ...` | translate a policy for a router; refuses what the target cannot express |
@@ -248,6 +249,9 @@ deployed assignment was contradicted by fresh evidence.
   from one corpus; a study that reached the opposite conclusion must be able to express it through the same files
   ([`SCOPE.md`](SCOPE.md)).
 * **Price is separate from measurement.** Observations carry tokens; cost is recomputed from today's candidate file.
+* **A certificate is bound to what answered.** An observation may name an opaque `arm_version`; an arm whose rows name
+  two versions is refused, the policy names the version it certified, and `drift` refuses fresh rows from another
+  version. A declared `interfaces` list keeps arms a router cannot serve out of selection.
 * **The unit is the item.** Repeated runs of one item combine by a declared rule rather than counting as independent
   evidence.
 * **Refusals come from the record.** A missing floor, an unpriced arm, stale evidence or an unservable export is a

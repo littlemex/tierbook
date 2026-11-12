@@ -60,6 +60,9 @@ class Declarations:
     min_items: int | None = None
     fallback_arm: str | None = None
     usd_per_attempt: dict[str, dict] = field(default_factory=dict)
+    #: Which candidate `interface` values may be chosen at all, applied before selection. None (absent) filters
+    #: nothing. What a router can serve is the operator's knowledge, so it is declared here, never inferred.
+    interfaces: tuple[str, ...] | None = None
 
     def as_dict(self) -> dict:
         return {"alpha": self.alpha, "bound": self.bound, "holdout_fraction": self.holdout_fraction,
@@ -70,12 +73,13 @@ class Declarations:
                 "repeat_rule": self.repeat_rule,
                 "min_items": self.min_items, "fallback_arm": self.fallback_arm,
                 "usd_per_attempt": self.usd_per_attempt,
+                **({"interfaces": list(self.interfaces)} if self.interfaces is not None else {}),
                 "task_types": {t: {"floor": f} for t, f in sorted(self.floors.items())}}
 
 
 _REQUIRED = ("alpha", "bound", "holdout_fraction", "split_salt", "unobserved_as", "max_observation_age_days",
              "held_out_correction", "holdout_ladder", "task_types")
-_OPTIONAL = ("format", "repeat_rule", "min_items", "fallback_arm", "usd_per_attempt", "_comment")
+_OPTIONAL = ("format", "repeat_rule", "min_items", "fallback_arm", "usd_per_attempt", "interfaces", "_comment")
 
 
 def load_declarations(raw: dict | str | Path) -> Declarations:
@@ -127,6 +131,9 @@ def load_declarations(raw: dict | str | Path) -> Declarations:
                 or not p.get("source"):
             problems.append(f"usd_per_attempt[{arm!r}] needs a non-negative 'usd' and a 'source' saying where "
                             "it was derived from")
+    itf = raw.get("interfaces")
+    if itf is not None and not (isinstance(itf, list) and itf and all(isinstance(x, str) and x for x in itf)):
+        problems.append(f"interfaces must be a non-empty list of interface names, or absent, not {itf!r}")
     if "bound" in raw:
         try:
             resolve(str(raw["bound"]))
@@ -139,7 +146,8 @@ def load_declarations(raw: dict | str | Path) -> Declarations:
                         max_observation_age_days=age, held_out_correction=raw["held_out_correction"],
                         floors=floors, holdout_ladder=None if lad == "all" else lad,
                         repeat_rule=raw.get("repeat_rule"), min_items=mi,
-                        fallback_arm=raw.get("fallback_arm"), usd_per_attempt=dict(raw.get("usd_per_attempt") or {}))
+                        fallback_arm=raw.get("fallback_arm"), usd_per_attempt=dict(raw.get("usd_per_attempt") or {}),
+                        interfaces=tuple(itf) if itf is not None else None)
 
 
 # --- tally ---------------------------------------------------------------------------------------------------------
@@ -253,6 +261,9 @@ def _parts(o: Observation) -> tuple[Observation, ...]:
 
 def _composed(o: Observation, parts: tuple[Observation, ...], **changes) -> ComposedAttempt:
     values = {f.name: getattr(o, f.name) for f in dataclass_fields(Observation)}
+    # A composed attempt is the cascade's, not any one part's: the parts keep their own versions, and the policy
+    # reports them per component.
+    values.update(arm_version="", path=())
     values.update(changes)
     return ComposedAttempt(**values, parts=parts)
 
@@ -490,6 +501,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             raise DeclarationError(
                 f"usd_per_attempt names {arm!r}, which is not a fixed-cost candidate in {where}; a declared price "
                 "may only stand in for an hourly bill, never for a price card or for an arm the router cannot reach")
+    versions = arm_versions(observations)
     results, stale = tally_items(compose(observations, cfg), decl, as_of)
     part = {key: partition_of(key[2], decl.split_salt, decl.holdout_fraction) for key in results}
     observed_types = sorted({t for t, _, _ in results} | {t for t, _ in stale})
@@ -516,17 +528,22 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             whole = _cell(items(t, a, None), a, cfg, decl, bound, decl.alpha, stale.get((t, a), 0))
             per_arm[a] = {"selection": sel, "held_out": ho, "stale_attempts": stale.get((t, a), 0),
                           "fresh": whole["attempts"] > 0, "priced": whole["spend_usd"] is not None,
-                          "priced_by": whole["priced_by"]}
+                          "priced_by": whole["priced_by"], "arm_version": _version_of(a, versions, cfg),
+                          "interface": interface_of(a, cfg)}
         if not per_arm:
             task_types[t] = {"status": UNASSIGNABLE, "arm": None, "reason_code": "no_observations",
                              "reason": "a floor is declared and nothing was observed", "floor": floor}
             continue
         # Priced on BOTH partitions: the shipped cost is the held-out one, so an arm whose held-out attempts cannot
         # be priced cannot ship a cost and is not eligible, however it looked on selection.
+        excluded = sorted(a for a, s in per_arm.items()
+                          if decl.interfaces is not None and s["interface"] not in decl.interfaces)
         eligible = [a for a, s in per_arm.items()
-                    if s["fresh"] and s["priced"] and s["selection"]["accepted"] > 0
+                    if a not in excluded and s["fresh"] and s["priced"] and s["selection"]["accepted"] > 0
                     and s["selection"]["lower"] >= floor]
         entry: dict = {"floor": floor, "arms": per_arm}
+        if decl.interfaces is not None:
+            entry["excluded_by_interface"] = excluded
         if not eligible:
             miss = max(sorted(per_arm), key=lambda a: per_arm[a]["selection"]["lower"])
             s = per_arm[miss]
@@ -575,6 +592,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
         if cas is not None:
             entry["cascade"] = {"primary": cas.primary, "fallback": cas.fallback, "threshold": cas.threshold,
                                 "on_no_score": cas.on_no_score}
+        entry["arm_version"] = per_arm[chosen]["arm_version"]
         entry.update(status=status, arm=chosen, reason_code=code, held_out=ho, label_sources=labels,
                      reason=(("cheapest per accepted task" if len(ladder) == 1 else
                               f"cheapest confirmed rung of a {len(ladder)}-rung held-out ladder" if status == CERTIFIED
@@ -606,6 +624,47 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
         "fallback": fallback,
         "comparison": _comparison(task_types, single, results, part, cfg, decl),
     }
+
+
+def arm_versions(observations: Iterable[Observation]) -> dict[str, str]:
+    """The one `arm_version` each arm's attempts carry, `""` for an arm whose rows name none.
+
+    Refused: an arm whose rows name two versions, or name one on some rows and none on others. A rate pooled over two
+    different things that answered is a rate of neither, and a certificate over it binds to nothing that can be served
+    (the experiments retrained a discarded checkpoint and got 93.4% agreement with the original). Give each version
+    its own arm name, or observe one version only.
+    """
+    seen: dict[str, set[str]] = {}
+    for o in observations:
+        seen.setdefault(o.arm, set()).add(o.arm_version)
+    out: dict[str, str] = {}
+    for arm, vs in sorted(seen.items()):
+        if len(vs) > 1:
+            shown = sorted(v or "<none>" for v in vs)
+            raise EvidenceError(f"arm {arm!r} has attempts from {len(vs)} versions {shown}; a rate over two things "
+                                "that answered certifies neither. Give each version its own arm name, or observe "
+                                "one version only")
+        out[arm] = next(iter(vs))
+    return out
+
+
+def _version_of(arm: str, versions: dict[str, str], cfg: Config) -> str | dict | None:
+    """An ordinary arm's version, None when its rows name none; a cascade's, per component."""
+    cand = cfg.candidates.get(arm)
+    if cand is not None and cand.cascade is not None:
+        return {cand.cascade.primary: _version_of(cand.cascade.primary, versions, cfg),
+                cand.cascade.fallback: _version_of(cand.cascade.fallback, versions, cfg)}
+    return versions.get(arm) or None
+
+
+def interface_of(arm: str, cfg: Config) -> str | None:
+    """The candidate's declared interface; a cascade without one takes its primary's."""
+    cand = cfg.candidates.get(arm)
+    if cand is None:
+        return None
+    if cand.interface is None and cand.cascade is not None:
+        return interface_of(cand.cascade.primary, cfg)
+    return cand.interface
 
 
 def _held_out_verdict(ho: dict, floor: float) -> tuple[str, str, str]:
@@ -787,6 +846,18 @@ def drift(deployed: dict, rederived: dict, fresh: list[Observation], decl: Decla
                 f"the deployed policy assigns {t!r} to the cascade {e['arm']!r} defined as {cas}, and the candidate "
                 f"file now defines it differently; fresh traffic would be checked against a cascade nobody "
                 "certified. Give the changed cascade a new name.")
+    # The deployed certificate names what answered when it was issued. Fresh rows from anything else are not a check
+    # of that certificate, whatever their rate.
+    fresh_versions = arm_versions(fresh)
+    for t, e in sorted(deployed["task_types"].items()):
+        want = e.get("arm_version")
+        if e.get("status") != CERTIFIED or not want:
+            continue
+        got = _version_of(e["arm"], fresh_versions, cfg)
+        if got != want:
+            raise EvidenceError(f"{t!r}: the deployed certificate is for {e['arm']!r} at version {want!r}, and the "
+                                f"fresh attempts are from {got!r}; drift over a different version checks nothing "
+                                "that was certified. Re-derive for the version now serving")
     bound = resolve(decl.bound)
     window, _ = tally_items(compose(fresh, cfg), decl, as_of)
     checks = []

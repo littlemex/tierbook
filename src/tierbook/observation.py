@@ -32,9 +32,9 @@ OUTCOMES = ("accepted", "rejected", "unobserved")
 #: Token kinds a price card can bill differently. Names are the candidate file's `price_per_mtok` keys.
 USAGE_KEYS = ("fresh_in", "cached_in", "out")
 
-#: The newest format this reader understands. A row is written in the oldest format that can carry it: 2 only when it
-#: has a `score`, so a file without scores stays readable by a format-1 reader.
-FORMAT = 2
+#: The newest format this reader understands. A row is written in the oldest format that can carry it: 3 only when it
+#: names an `arm_version` or a `path`, 2 only when it has a `score`, so an older file stays readable by an older reader.
+FORMAT = 3
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,13 @@ class Observation:
     #: The arm's own score for this attempt (a confidence, a probability, a margin), as the arm reported it. Read only
     #: by a cascade that routes on it; tierbook does not interpret its scale.
     score: float | None = None
+    #: The exact thing that answered, as the sender names it (a weights digest, an image digest, a perigraph identity,
+    #: or any composition of those). Opaque: tierbook compares it for equality and never parses it. Empty means the
+    #: sender did not say, which is not the same as "the same as every other row".
+    arm_version: str = ""
+    #: The component arms that actually ran for this attempt, in order, when `arm` names something that routes inside
+    #: itself (a router assigned this request, then a student and a fallback answered). Recorded, not interpreted.
+    path: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.outcome not in OUTCOMES:
@@ -82,16 +89,24 @@ class Observation:
         for name in ("item", "task_type", "arm"):
             if not getattr(self, name):
                 raise EvidenceError(f"an observation needs a non-empty {name}")
+        if not isinstance(self.arm_version, str):
+            raise EvidenceError(f"arm_version must be a string, not {type(self.arm_version).__name__}")
+        if not isinstance(self.path, tuple) or not all(isinstance(a, str) and a for a in self.path):
+            raise EvidenceError(f"path must be a list of non-empty arm names, not {self.path!r} (item {self.item!r})")
 
     def to_row(self) -> dict:
-        row = {"format": 2 if self.score is not None else 1, "item": self.item, "task_type": self.task_type, "arm": self.arm,
+        fmt = 3 if (self.arm_version or self.path) else 2 if self.score is not None else 1
+        row = {"format": fmt, "item": self.item, "task_type": self.task_type, "arm": self.arm,
                "outcome": self.outcome, "usage": dict(self.usage)}
         for name in ("billed_usd", "latency_s", "score"):
             if getattr(self, name) is not None:
                 row[name] = getattr(self, name)
-        for name in ("run", "reason", "grader", "observed_at", "label_source", "finish_reason", "source"):
+        for name in ("run", "reason", "grader", "observed_at", "label_source", "finish_reason", "source",
+                     "arm_version"):
             if getattr(self, name):
                 row[name] = getattr(self, name)
+        if self.path:
+            row["path"] = list(self.path)
         return row
 
     @classmethod
@@ -102,8 +117,12 @@ class Observation:
         if fmt < 2 and "score" in row:
             raise EvidenceError(f"a format-{fmt} observation carries `score`, which format 2 introduced; a format-1 "
                                 "reader would refuse this row")
+        if fmt < 3 and ("arm_version" in row or "path" in row):
+            raise EvidenceError(f"a format-{fmt} observation carries `arm_version` or `path`, which format 3 "
+                                "introduced; an older reader would refuse this row")
         known = {"format", "item", "task_type", "arm", "outcome", "usage", "billed_usd", "latency_s", "run",
-                 "reason", "grader", "observed_at", "label_source", "finish_reason", "source", "score"}
+                 "reason", "grader", "observed_at", "label_source", "finish_reason", "source", "score",
+                 "arm_version", "path"}
         unknown = sorted(set(row) - known)
         if unknown:
             raise EvidenceError(f"unknown observation keys {unknown}; a field this reader drops silently is a "
@@ -115,7 +134,9 @@ class Observation:
                    run=str(row.get("run", "")), reason=str(row.get("reason", "")),
                    grader=str(row.get("grader", "")), observed_at=str(row.get("observed_at", "")),
                    label_source=str(row.get("label_source", "")), finish_reason=str(row.get("finish_reason", "")),
-                   source=str(row.get("source", "")), score=row.get("score"))
+                   source=str(row.get("source", "")), score=row.get("score"),
+                   arm_version=row.get("arm_version", ""),
+                   path=tuple(row["path"]) if isinstance(row.get("path"), list) else row.get("path", ()))
 
 
 def read(paths: str | Path | Iterable[str | Path]) -> list[Observation]:

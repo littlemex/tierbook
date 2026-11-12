@@ -130,6 +130,10 @@ class Candidate:
     hourly_usd: float | None = None                  # self_hosted: the bill while it is up
     note: str = ""
     cascade: Cascade | None = None                   # cascade: how it is composed; priced from its parts
+    #: What kind of thing the arm is, in the operator's own words (e.g. "generates", "scores_options"). Opaque to
+    #: tierbook: it is compared against a declared `interfaces` filter and never interpreted. A cascade without its
+    #: own takes its primary's, because the primary is what answers first.
+    interface: str | None = None
 
     @property
     def is_fixed_cost(self) -> bool:
@@ -375,8 +379,16 @@ def _cascade_candidate(cid: str, entry: dict, ep: dict) -> Candidate:
     if c["primary"] == c["fallback"]:
         raise ConfigError(f"candidate {cid!r}: cascade.primary and cascade.fallback are both {c['primary']!r}")
     return Candidate(id=cid, endpoint=None, deployment="cascade", note=entry.get("note", ""),
+                     interface=_interface(cid, entry),
                      cascade=Cascade(primary=c["primary"], fallback=c["fallback"], threshold=float(t),
                                      on_no_score=c["on_no_score"]))
+
+
+def _interface(cid: str, entry: dict) -> str | None:
+    v = entry.get("interface")
+    if v is not None and (not isinstance(v, str) or not v):
+        raise ConfigError(f"candidate {cid!r}: interface must be a non-empty string, not {v!r}")
+    return v
 
 
 def _check_cascades(candidates: dict[str, Candidate]) -> None:
@@ -477,6 +489,7 @@ def load_config(path: str | Path, *, schema: str | Path | None = None) -> Config
             price_per_mtok=entry.get("price_per_mtok"),
             hourly_usd=entry.get("hourly_usd"),
             note=entry.get("note", ""),
+            interface=_interface(cid, entry),
         )
 
     _check_cascades(candidates)

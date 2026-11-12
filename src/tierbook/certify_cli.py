@@ -1,4 +1,4 @@
-"""The certification plane's verbs: `ingest`, `derive`, `drift`, `export-policy`.
+"""The certification plane's verbs: `ingest`, `check-observations`, `derive`, `drift`, `export-policy`.
 
 Kept beside `cli.py` rather than inside it so the plane's door can be read on its own; `cli.main` registers these.
 Each verb reads files and writes one file, and prints what it refused.
@@ -61,9 +61,43 @@ def cmd_ingest(args) -> int:
     except _refusals() as e:
         print(f"refused: {e}", file=sys.stderr)
         return REFUSED
+    if args.arm_version:
+        import dataclasses
+        tags = {}
+        for spec in args.arm_version:
+            arm, sep, ver = spec.partition("=")
+            if not sep or not arm or not ver:
+                print(f"refused: --arm-version takes ARM=VERSION, not {spec!r}", file=sys.stderr)
+                return REFUSED
+            tags[arm] = ver
+        obs = [dataclasses.replace(o, arm_version=tags[o.arm]) if o.arm in tags else o for o in obs]
     n = write(obs, args.out, append=args.append)
     ungraded = sum(o.reason == "ungraded" for o in obs)
     print(f"wrote {n} observations to {args.out}" + (f" ({ungraded} ungraded)" if ungraded else ""))
+    return 0
+
+
+def cmd_check_observations(args) -> int:
+    """Read observation files the way `derive` will, and print what they hold per (task type, arm, version).
+
+    The validator a sender runs before handing files over: a row this reader refuses is refused here first, with its
+    file and line, and an arm that mixes versions is named. Nothing is written."""
+    from tierbook.certify import arm_versions
+    from tierbook.observation import read
+
+    try:
+        obs = read(args.observations)
+        arm_versions(obs)
+    except _refusals() as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return REFUSED
+    cells: dict[tuple[str, str, str], dict[str, int]] = {}
+    for o in obs:
+        c = cells.setdefault((o.task_type, o.arm, o.arm_version or "<none>"), {})
+        c[o.outcome] = c.get(o.outcome, 0) + 1
+    for (t, a, v), c in sorted(cells.items()):
+        print(f"{t}\t{a}\t{v}\t" + " ".join(f"{k}={n}" for k, n in sorted(c.items())))
+    print(f"{len(obs)} observations in {len(args.observations)} file(s): readable")
     return 0
 
 
@@ -241,7 +275,15 @@ def register(sub, common) -> None:
     i.add_argument("--append", action="store_true",
                    help="append to --out rather than replace it. Off by default: re-running an ingest must not "
                         "count the same attempts twice")
+    i.add_argument("--arm-version", action="append", metavar="ARM=VERSION",
+                   help="stamp every attempt of ARM with an opaque version string (repeatable), for a call log that "
+                        "does not carry one; tierbook compares versions and never parses them")
     i.set_defaults(fn=cmd_ingest)
+
+    c = sub.add_parser("check-observations", parents=[common],
+                       help="validate observation files and print what they hold, writing nothing")
+    c.add_argument("observations", nargs="+")
+    c.set_defaults(fn=cmd_check_observations)
 
     for name, fn, helptext in (("derive", cmd_derive, "certify a per-task-type assignment from observations"),
                                ("drift", cmd_drift, "diff a deployed policy against today's evidence and prices")):

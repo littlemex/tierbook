@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+* **Observation format 3: `arm_version` and `path`.** An observation may name the exact thing that answered (opaque,
+  compared and never parsed) and the component arms that ran. `derive` refuses an arm whose rows name two versions, or
+  a version on some rows and none on others, and the policy records the version of the arm it chose (per component for
+  a cascade). `drift` refuses fresh attempts from a version other than the certified one. Format 1 and 2 files read
+  unchanged. Needed because two discarded checkpoints were retrained in the distillation record and one retrain agreed
+  with the original on 93.4% of labels: a certificate over the original was not a certificate over what was served.
+* **`interface` on a candidate and `interfaces` in the declarations.** An operator-declared filter applied before
+  selection, so the arms a router cannot serve never become the choice. On round 12's evidence it picks the servable
+  cascade in one run, where the record needed an amendment written after the first result.
+* **`tierbook check-observations`** validates observation files the way `derive` reads them and prints each arm's
+  version and outcome counts. **`ingest --arm-version ARM=VERSION`** stamps a call log that carries none.
+
 * `GATEWAY_REF` moves to littlemex/stratoclave `c485658`, which renders Claude reasoning as the string `reasoning_content`
   plus `reasoning_details`, so a vllm-sr build that reads the latter routes Claude arms with reasoning.
 * `examples/certification_loop/rates_to_candidates.py` writes the candidate file from the gateway's `GET /api/mvp/me/rates`.
