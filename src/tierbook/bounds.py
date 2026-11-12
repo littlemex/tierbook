@@ -106,39 +106,40 @@ def pass_count(n: int, floor: float, alpha: float, bound: Bound) -> int | None:
     return lo
 
 
-def false_pass_at_floor(n: int, floor: float, alpha: float, bound: Bound) -> float | None:
-    """The exact chance that an arm whose true rate is exactly `floor` passes on `n` items under `bound`. A below-floor
-    arm passes with at most this, whatever the bound's own approximation, so it is the number a certificate's error
-    claim rests on."""
+def false_pass_at_floor(n: int, floor: float, alpha: float, bound: Bound) -> float:
+    """The exact chance that an arm whose true rate is exactly `floor` passes one look on `n` items under `bound`
+    (0.0 when no count can pass). A below-floor arm passes that look with at most this, whatever the bound's own
+    approximation. It is per arm and per look: a ladder or a second look is accounted for separately. Assumes the
+    bound's lower end rises with the accepted count, as every interval shipped here does."""
     x = pass_count(n, floor, alpha, bound)
-    return None if x is None else binomial_tail(x, n, floor)
+    return 0.0 if x is None else binomial_tail(x, n, floor)
+
+
+def power_at(n: int, floor: float, assumed_rate: float, alpha: float, bound: Bound) -> float:
+    """The chance an arm with true rate `assumed_rate` passes `floor` on `n` held-out items."""
+    x = pass_count(n, floor, alpha, bound)
+    return 0.0 if x is None else binomial_tail(x, n, assumed_rate)
 
 
 def items_for_power(floor: float, assumed_rate: float, alpha: float, power: float, bound: Bound,
-                    max_n: int = 100_000) -> int | None:
-    """The smallest held-out size at which an arm with true rate `assumed_rate` passes `floor` with probability at
-    least `power`. Every argument is the caller's; nothing is defaulted. None if not reached by `max_n`."""
-    for n in _sizes(max_n):
-        x = pass_count(n, floor, alpha, bound)
-        if x is not None and binomial_tail(x, n, assumed_rate) >= power:
-            return _refine(n, floor, assumed_rate, alpha, power, bound)
+                    max_n: int) -> int | None:
+    """The first held-out size, counting up from 1, at which an arm with true rate `assumed_rate` passes `floor` with
+    probability at least `power`; None if none up to `max_n` does. Power is a sawtooth in n (the pass count moves in
+    whole items), so a size just above the answer can fall below `power` again; read the answer as a size to plan
+    for, not a threshold above which every size works. Every argument is the caller's."""
+    grid, n = [], 1
+    while n < max_n:
+        grid.append(n)
+        n = max(n + 1, int(n * 1.25))
+    grid.append(max_n)
+    prev = 0
+    for n in grid:
+        if power_at(n, floor, assumed_rate, alpha, bound) >= power:
+            for m in range(prev + 1, n + 1):
+                if power_at(m, floor, assumed_rate, alpha, bound) >= power:
+                    return m
+        prev = n
     return None
-
-
-def _sizes(max_n: int):
-    n = 10
-    while n <= max_n:
-        yield n
-        n = int(n * 1.25) + 1
-
-
-def _refine(n: int, floor, rate, alpha, power, bound) -> int:
-    lo = max(1, int(n / 1.25) - 1)
-    for m in range(lo, n + 1):
-        x = pass_count(m, floor, alpha, bound)
-        if x is not None and binomial_tail(x, m, rate) >= power:
-            return m
-    return n
 
 
 def resolve(path: str) -> Bound:

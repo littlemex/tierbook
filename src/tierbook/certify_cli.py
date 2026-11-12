@@ -179,35 +179,48 @@ def cmd_derive(args) -> int:
 
 
 def _record_looks(policy: dict, ledger: str | None) -> None:
-    """Count this judgement as one more look at each task type's held-out set, and say which look it is.
+    """Count this judgement as one more look at each task type's held-out items, and say how many looks they had.
 
-    A held-out half is spent by being looked at: three floors, a re-run with a different ladder, or a second look after
-    adding items are all looks at the same items. The ledger is append-only JSONL keyed by the held-out set's digest;
-    without one, the policy says looks were not recorded rather than implying this was the first."""
+    A held-out half is spent by being looked at: three floors, a re-run with a different ladder, or a second look
+    after adding items are all looks at (some of) the same items. The ledger is append-only JSONL with each look's
+    held-out item ids; `look` is one more than the number of earlier looks at this task type that shared any item, and
+    `items_seen_before` says how many of today's held-out items an earlier look already used. Without a ledger the
+    policy says looks were not recorded rather than implying this was the first. One writer at a time."""
+    entries = {t: e for t, e in policy["task_types"].items() if "held_out_items" in e}
     if ledger is None:
         policy["looks"] = "not recorded (no --ledger)"
-        for e in policy["task_types"].values():
-            if "held_out_set" in e:
-                e["look"] = None
+        for e in entries.values():
+            e["look"] = None
+            e.pop("held_out_items")
         return
     path = Path(ledger)
-    prior = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+    prior = []
+    if path.exists():
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if line.strip():
+                try:
+                    prior.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"{ledger}:{n}: {e.msg}") from None
     rows = []
-    for t, e in sorted(policy["task_types"].items()):
-        if "held_out_set" not in e:
-            continue
-        k = 1 + sum(1 for r in prior if r.get("task_type") == t and r.get("held_out_set") == e["held_out_set"])
-        e["look"] = k
-        rows.append({"task_type": t, "held_out_set": e["held_out_set"], "look": k, "floor": e.get("floor"),
-                     "alpha": policy["declarations"]["alpha"], "bound": policy["declarations"]["bound"],
-                     "holdout_ladder": policy["declarations"]["holdout_ladder"],
+    d = policy["declarations"]
+    for t, e in sorted(entries.items()):
+        items = set(e.pop("held_out_items"))
+        earlier = [r for r in prior if r.get("task_type") == t and items & set(r.get("held_out_items") or [])]
+        seen = set().union(*(set(r["held_out_items"]) for r in earlier)) & items if earlier else set()
+        e["look"] = 1 + len(earlier)
+        e["items_seen_before"] = len(seen)
+        rows.append({"task_type": t, "held_out_set": e["held_out_set"], "held_out_items": sorted(items),
+                     "look": e["look"], "floor": e.get("floor"), "alpha": d["alpha"], "bound": d["bound"],
+                     "holdout_ladder": d["holdout_ladder"], "split_salt": d["split_salt"],
+                     "holdout_fraction": d["holdout_fraction"], "held_out_correction": d["held_out_correction"],
                      "candidates_digest": policy["candidates_digest"],
                      "observations_digest": policy["observations_digest"], "derived_at": policy["derived_at"],
                      "status": e.get("status"), "arm": e.get("arm")})
     with path.open("a") as f:
         for r in rows:
             f.write(json.dumps(r, sort_keys=True) + "\n")
-    policy["looks"] = f"recorded in {ledger}"
+    policy["looks"] = {"ledger": ledger, "earlier_rows": len(prior)}
 
 
 def cmd_power(args) -> int:
@@ -217,7 +230,7 @@ def cmd_power(args) -> int:
 
     try:
         bound = resolve(args.bound)
-        n = items_for_power(args.floor, args.assumed_rate, args.alpha, args.power, bound, max_n=args.max_n)
+        n = items_for_power(args.floor, args.assumed_rate, args.alpha, args.power, bound, args.max_n)
     except _refusals() as e:
         print(f"refused: {e}", file=sys.stderr)
         return REFUSED
@@ -225,8 +238,8 @@ def cmd_power(args) -> int:
         print(f"not reached by {args.max_n} held-out items")
         return 0
     fp = false_pass_at_floor(n, args.floor, args.alpha, bound)
-    print(f"{n} held-out items: an arm at {args.assumed_rate} passes floor {args.floor} with probability >= "
-          f"{args.power}; an arm exactly at the floor passes with {fp:.4f}")
+    print(f"{n} held-out items (the first size, counting up, that reaches it): an arm at {args.assumed_rate} passes "
+          f"floor {args.floor} with probability >= {args.power}; an arm exactly at the floor passes with {fp:.4f}")
     return 0
 
 

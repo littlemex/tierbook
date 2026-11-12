@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field, fields as dataclass_fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -95,22 +96,38 @@ def _per_attempt(arm: str, p) -> dict:
     """
     if not isinstance(p, dict) or not p.get("source"):
         raise DeclarationError(f"usd_per_attempt[{arm!r}] needs a 'source' saying where it was derived from")
-    known = {"usd", "source", "measured_on", "stands_in_for", *_PRICE_INPUTS}
+    known = {"usd", "source", "measured_on", "stands_in_for", "_comment", *_PRICE_INPUTS}
     extra = sorted(set(p) - known)
     if extra:
         raise DeclarationError(f"usd_per_attempt[{arm!r}] has unknown keys {extra}")
+    def num(v) -> bool:
+        return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v) and v >= 0
+
+    sif = p.get("stands_in_for")
+    if sif is not None and not (isinstance(sif, dict) and set(sif) == {"version", "why"}
+                                and all(isinstance(v, str) and v for v in sif.values())):
+        raise DeclarationError(f"usd_per_attempt[{arm!r}].stands_in_for must be {{'version': <the observed version>, "
+                               "'why': <the operator's reason>}}, naming the one version it covers")
     has_inputs = [k for k in _PRICE_INPUTS if k in p]
     if has_inputs and "usd" in p:
         raise DeclarationError(f"usd_per_attempt[{arm!r}] gives both 'usd' and its inputs; give one")
     if has_inputs:
-        missing = [k for k in _PRICE_INPUTS if k not in p]
-        bad = [k for k in has_inputs if isinstance(p[k], bool) or not isinstance(p[k], (int, float)) or p[k] < 0]
-        if missing or bad or p["attempts_per_hour"] == 0 or p["horizon_attempts"] == 0:
-            raise DeclarationError(f"usd_per_attempt[{arm!r}] computed from inputs needs all of {list(_PRICE_INPUTS)} "
-                                   f"as non-negative numbers, with non-zero rates (missing {missing}, bad {bad})")
-        usd = p["usd_per_hour"] / p["attempts_per_hour"] + p["one_off_usd"] / p["horizon_attempts"]
+        hourly = ["usd_per_hour", "attempts_per_hour"]
+        one_off = ["one_off_usd", "horizon_attempts"]
+        missing = [k for k in hourly if k not in p] + ([k for k in one_off if k not in p]
+                                                       if any(k in p for k in one_off) else [])
+        bad = [k for k in has_inputs if not num(p[k])]
+        if missing or bad or p.get("attempts_per_hour") == 0 or p.get("horizon_attempts", 1) == 0:
+            raise DeclarationError(f"usd_per_attempt[{arm!r}] computed from inputs needs usd_per_hour and "
+                                   "attempts_per_hour, and one_off_usd with horizon_attempts or neither, as finite "
+                                   f"non-negative numbers with non-zero rates (missing {missing}, bad {bad})")
+        if "measured_on" not in p:
+            raise DeclarationError(f"usd_per_attempt[{arm!r}] computed from a measured throughput needs 'measured_on': "
+                                   "the version it was measured on, or null to say it was not recorded")
+        usd = p["usd_per_hour"] / p["attempts_per_hour"] + (p["one_off_usd"] / p["horizon_attempts"]
+                                                           if "one_off_usd" in p else 0.0)
         return {**p, "usd": usd}
-    if isinstance(p.get("usd"), bool) or not isinstance(p.get("usd"), (int, float)) or p["usd"] < 0:
+    if not num(p.get("usd")):
         raise DeclarationError(f"usd_per_attempt[{arm!r}] needs a non-negative 'usd', or the inputs it is computed "
                                f"from ({list(_PRICE_INPUTS)})")
     return dict(p)
@@ -539,13 +556,27 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
     _check_interfaces(cfg, decl)
     claims = _Claims(cfg)
     versions = arm_versions(fresh_only(observations, decl, as_of))
+    price_checks: dict[str, dict] = {}
     for arm, p in decl.usd_per_attempt.items():
-        on = p.get("measured_on")
-        seen = versions.get(arm)
-        if on and seen is not None and seen != on and not p.get("stands_in_for"):
+        cand = cfg.candidates.get(arm)
+        if "usd_per_hour" in p and cand is not None and cand.hourly_usd is not None \
+                and not math.isclose(p["usd_per_hour"], cand.hourly_usd, rel_tol=1e-9):
+            raise DeclarationError(f"usd_per_attempt[{arm!r}].usd_per_hour {p['usd_per_hour']} differs from the "
+                                   f"candidate's hourly_usd {cand.hourly_usd}; one bill, declared once")
+        if "measured_on" not in p:
+            continue
+        on, seen = p["measured_on"], versions.get(arm)
+        sif = p.get("stands_in_for")
+        if on is None or seen is None:
+            price_checks[arm] = {"measured_on": on, "observed": seen, "check": "unchecked"}
+        elif seen == on:
+            price_checks[arm] = {"measured_on": on, "observed": seen, "check": "same version"}
+        elif sif is not None and sif["version"] == seen:
+            price_checks[arm] = {"measured_on": on, "observed": seen, "check": "stands in", "why": sif["why"]}
+        else:
             raise DeclarationError(f"usd_per_attempt[{arm!r}] was measured on {on!r} and the observations are from "
-                                   f"{seen or NO_VERSION}; say why one stands in for the other in 'stands_in_for', "
-                                   "or measure the version observed")
+                                   f"{seen or NO_VERSION}; say why one stands in for the other in 'stands_in_for' "
+                                   "naming that version, or measure the version observed")
     results, stale = tally_items(compose(observations, cfg), decl, as_of)
     part = {key: partition_of(key[2], decl.split_salt, decl.holdout_fraction) for key in results}
     observed_types = sorted({t for t, _, _ in results} | {t for t, _ in stale})
@@ -573,6 +604,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             per_arm[a] = {"selection": sel, "held_out": ho, "stale_attempts": stale.get((t, a), 0),
                           "fresh": whole["attempts"] > 0, "priced": whole["spend_usd"] is not None,
                           "priced_by": whole["priced_by"], **_versions_entry(a, versions, cfg),
+                          **({"price_check": price_checks[a]} if a in price_checks else {}),
                           "interface": interface_of(a, cfg)}
         if not per_arm:
             task_types[t] = {"status": UNASSIGNABLE, "arm": None, "reason_code": "no_observations",
@@ -598,16 +630,20 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
         held_items = sorted({key[2] for key in results if key[0] == t and part[key] == "held_out"})
         entry: dict = {"floor": floor, "arms": per_arm,
                        # Which held-out items this judgement looked at, as one digest: the key a looks ledger counts by.
-                       "held_out_set": hashlib.sha256("\n".join(held_items).encode()).hexdigest()}
+                       "held_out_set": hashlib.sha256(json.dumps(held_items).encode()).hexdigest(),
+                       "held_out_items": held_items}
         if decl.interfaces is not None:
             entry["excluded_by_interface"] = by_interface
         if by_provenance:
             entry["excluded_by_provenance"] = by_provenance
-        if not eligible and by_interface and any(per_arm[a]["selection"]["lower"] >= floor for a in by_interface) \
-                and not any(per_arm[a]["selection"]["lower"] >= floor for a in by_provenance):
-            entry.update(status=UNASSIGNABLE, arm=None, reason_code="excluded_by_interface",
-                         reason=f"every arm that clears the floor on selection is outside the declared interfaces "
-                                f"({by_interface})")
+        cleared = {a for a in excluded if per_arm[a]["selection"]["lower"] >= floor}
+        if not eligible and cleared:
+            iface, prov = sorted(cleared & set(by_interface)), sorted(cleared & set(by_provenance))
+            code = ("excluded_by_interface" if not prov else "excluded_by_provenance" if not iface
+                    else "excluded_by_interface_and_provenance")
+            entry.update(status=UNASSIGNABLE, arm=None, reason_code=code,
+                         reason=f"every arm that clears the floor on selection is excluded: outside the declared "
+                                f"interfaces {iface}, by its own provenance {prov}")
             task_types[t] = entry
             continue
         if not eligible:
@@ -671,6 +707,8 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
         task_types[t] = entry
 
     single = _single_best(results, part, arms_seen, certifiable, cfg, decl, bound)
+    # Set here so every caller's policy says it; `derive --ledger` replaces it with the ledger it was recorded in.
+    looks = "not recorded"
     fallback = _fallback(decl, single, cfg)
     return {
         "format": FORMAT,
@@ -692,6 +730,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
         "single_best": single,
         "fallback": fallback,
         "comparison": _comparison(task_types, single, results, part, cfg, decl),
+        "looks": looks,
     }
 
 
@@ -761,11 +800,14 @@ def _check_interfaces(cfg: Config, decl: Declarations) -> None:
 
 
 def _nodes(arm: str, cfg: Config) -> list[str]:
-    """Every candidate a cascade is built from, cascades included, the arm itself first."""
+    """Every candidate a cascade is built from, cascades included, the arm itself first, each once."""
     cand = cfg.candidates.get(arm)
     if cand is None or cand.cascade is None:
         return [arm]
-    return [arm, cand.cascade.primary] + _nodes(cand.cascade.fallback, cfg)
+    out = [arm]
+    for part in (cand.cascade.primary, cand.cascade.fallback):
+        out += [n for n in _nodes(part, cfg) if n not in out]
+    return out
 
 
 class _Claims:
@@ -842,6 +884,13 @@ def provenance_check(arm: str, held_out: set[str], selection: set[str], versions
             sel_hits[f"{node}:{kind}:{name}"] = len(ids)
     if ho_hits:
         exclude["held_out_overlap"] = ho_hits
+    if sets:
+        from tierbook.provenance import CONTENT_ID_PREFIX
+        by_id_only = sum(1 for it in held_out if not it.startswith(CONTENT_ID_PREFIX))
+        if by_id_only:
+            unchecked.append({"arm": arm, "check": "held-out overlap by content",
+                              "why": f"{by_id_only} held-out ids are not content digests, so only their ids were "
+                                     "compared"})
     return {"exclude": exclude, "unchecked": unchecked, "checked": checked, "selection_overlap": sel_hits}
 
 

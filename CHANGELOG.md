@@ -18,13 +18,18 @@
   that an arm exactly at the floor passes on that many items under the declared bound (round 14's 0.0204 and 0.0119
   are reproduced). `tierbook.bounds:clopper_pearson` is an exact interval. `tierbook power` gives the held-out size an
   assumed rate needs to pass a floor with a given probability, every input required.
-* **Declared price inputs.** `usd_per_attempt` may give `usd_per_hour`, `attempts_per_hour`, `one_off_usd` and
-  `horizon_attempts` instead of `usd`, and tierbook computes the price (round 13's $0.0000119 is reproduced).
-  `measured_on` names the version the throughput was measured on; `derive` refuses it against rows from another
-  version unless `stands_in_for` says why, in the operator's words, which is then carried as a claim.
-* **A looks ledger.** `derive --ledger FILE` appends one row per task type keyed by the digest of its held-out items,
-  and the policy says which look this is; without a ledger it says looks were not recorded. Three floors, a re-run with
-  another ladder, and a second look are all looks at the same held-out items.
+* **Declared price inputs.** `usd_per_attempt` may give `usd_per_hour` and `attempts_per_hour` (and `one_off_usd` with
+  `horizon_attempts`, or neither) instead of `usd`, and tierbook computes the price (round 13's $0.0000119 is
+  reproduced); `usd_per_hour` must equal the candidate's `hourly_usd`. The inputs form needs `measured_on`, the version
+  the throughput was measured on (null to say it was not recorded); `derive` refuses it against rows from another
+  version unless `stands_in_for: {version, why}` names that version, and reports the check per arm as `price_check`.
+  Unknown keys in a price entry are now refused (`_comment` is allowed).
+* **A looks ledger.** `derive --ledger FILE` appends one row per task type with its held-out item ids; `look` is one more
+  than the earlier looks at that task type that shared any item, and `items_seen_before` counts today's held-out items
+  an earlier look used. Three floors, a re-run with another ladder, and a second look after adding items are all looks
+  at the same items. Every policy carries `looks`, "not recorded" without a ledger.
+* **Reason codes for exclusions.** A cell whose floor-clearing arms were all excluded says `excluded_by_interface`,
+  `excluded_by_provenance`, or `excluded_by_interface_and_provenance`.
 * **Observation format 3: `arm_version` and `path`.** An observation may name the exact thing that answered (opaque,
   compared and never parsed) and the component arms that ran (listed, never used to split a rate). `derive` refuses an
   arm whose fresh rows name two versions, or a version on some rows and none on others; aged-out rows do not count.

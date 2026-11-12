@@ -136,8 +136,8 @@ def test_a_requirement_on_another_arms_version_excludes_on_mismatch_only(tmp_pat
     assert bad["arms"]["student"]["provenance"]["exclude"]["requirement_mismatch"][0]["observed"] == "t2"
     alone = certify.derive(rows(), cfg, declarations())["task_types"][T]
     assert alone["arm"] == "student"
-    assert alone["arms"]["student"]["provenance"]["unchecked"] == [
-        {"arm": "student", "check": "requires teacher", "why": "the required arm has no fresh rows"}]
+    assert {"arm": "student", "check": "requires teacher", "why": "the required arm has no fresh rows"} in \
+        alone["arms"]["student"]["provenance"]["unchecked"]
 
 
 def test_a_citation_that_does_not_match_its_digest_is_refused(tmp_path):

@@ -91,8 +91,12 @@ def load_manifest(name: str, path: str | Path, sha256: str) -> ItemSet:
 def load_sets(entries, base: Path, what: str) -> tuple[ItemSet, ...]:
     if not isinstance(entries, list):
         raise EvidenceError(f"{what}: sets must be a list")
-    out = []
+    out, names = [], set()
     for e in entries:
+        if isinstance(e, dict) and e.get("set") in names:
+            raise EvidenceError(f"{what}: set {e['set']!r} is cited twice")
+        if isinstance(e, dict):
+            names.add(e.get("set"))
         if not isinstance(e, dict) or not e.get("set") or not e.get("manifest") or not e.get("sha256"):
             raise EvidenceError(f"{what}: each set needs 'set', 'manifest' and the manifest file's 'sha256'")
         p = Path(e["manifest"])
