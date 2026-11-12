@@ -866,7 +866,7 @@ def test_prismyra_learn_export_sets_the_router_of_the_certified_student(tmp_path
     out = tmp_path / "out.json"
     rc = cli.main(["export-policy", "--policy", str(_policy_file(tmp_path, "certified", "student-w3")),
                    "--target", "prismyra-learn", "--learn-spec", str(_learn_spec(tmp_path)), "--arm-router",
-                   str(arms), "--signal", "finnews=finnews-v1", "--out", str(out)])
+                   str(arms), "--signal", "finnews=finnews-v1", "--out", str(out), "--allow-unversioned"])
     assert rc == 0
     assert json.loads(out.read_text())[0]["router"] == {"mode": "ab", "ratio": 10000, "student_path": "s.json"}
 
@@ -892,3 +892,109 @@ def test_prismyra_learn_export_refuses_an_arm_prismyra_cannot_serve(tmp_path):
                    "--target", "prismyra-learn", "--learn-spec", str(_learn_spec(tmp_path)), "--arm-router",
                    str(arms), "--signal", "finnews=finnews-v1", "--out", str(tmp_path / "o.json")])
     assert rc == 2
+
+
+def _versioned_policy(tmp_path, entry):
+    p = {"task_types": {"finnews": {"status": "certified", "reason": "r", **entry}},
+         "observations_digest": "d", "guarantee": "g", "fallback": {"arm": "x"}}
+    f = tmp_path / "policy.json"
+    f.write_text(json.dumps(p))
+    return f
+
+
+#: Version strings as Prismyra's observation writer stamps them (an artifact, and the fallback's serving stack).
+STUDENT_V = "student:0f3c9a1b2d4e5f60718293a4b5c6d7e8+package:0.5.1"
+PRISMYRA_V = "backbone:littlemex/prismyra-decision|package:0.5.1|spec:5d41402abc4b"
+
+
+def _export_learn(tmp_path, policy, spec=None, extra=()):
+    from tierbook import cli
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student": {"mode": "confidence", "tau": 0.9, "student_path": "s.json"},
+                                "routed": {"mode": "confidence", "tau": 0.9, "student_path": "s.json"},
+                                "prismyra": None}))
+    out = tmp_path / "out.json"
+    rc = cli.main(["export-policy", "--policy", str(policy), "--target", "prismyra-learn", "--learn-spec",
+                   str(spec or _learn_spec(tmp_path)), "--arm-router", str(arms), "--signal", "finnews=finnews-v1",
+                   "--out", str(out), *extra])
+    return rc, out
+
+
+def _record_of(tmp_path, out):
+    return json.loads((tmp_path / json.loads(out.read_text())[0]["admission"]["record"]).read_text())
+
+
+def test_prismyra_learn_export_writes_an_admission_record_bound_to_the_judged_version(tmp_path):
+    import hashlib
+    policy = _versioned_policy(tmp_path, {"arm": "student", "arm_version": STUDENT_V})
+    rc, out = _export_learn(tmp_path, policy)
+    assert rc == 0
+    entry = json.loads(out.read_text())[0]
+    assert entry["admission"] == {"mode": "external", "record": "out.json.admission/finnews-v1.json"}
+    rec = _record_of(tmp_path, out)
+    assert rec == {"format": 1, "tag": "finnews-v1", "version": STUDENT_V, "router": entry["router"],
+                   "admitted_by": "tierbook export-policy",
+                   "evidence": {"uri": str(policy.resolve()), "sha256": hashlib.sha256(policy.read_bytes()).hexdigest()}}
+
+
+def test_a_cascade_record_binds_the_named_student_component(tmp_path):
+    policy = _versioned_policy(tmp_path, {"arm": "routed", "arm_version": None,
+                                          "component_versions": {"student": STUDENT_V, "prismyra": PRISMYRA_V}})
+    assert _export_learn(tmp_path, policy)[0] == 2
+    assert _export_learn(tmp_path, policy, extra=["--served-student", "routed=teacher"])[0] == 2
+    rc, out = _export_learn(tmp_path, policy, extra=["--served-student", "routed=student"])
+    assert rc == 0 and _record_of(tmp_path, out)["version"] == STUDENT_V
+
+
+def test_an_unversioned_policy_is_refused_unless_allowed(tmp_path, capsys):
+    spec = _learn_spec(tmp_path)
+    raw = json.loads(spec.read_text())
+    raw[0]["admission"] = {"mode": "external", "record": "old.json"}
+    spec.write_text(json.dumps(raw))
+    policy = _versioned_policy(tmp_path, {"arm": "student"})
+    assert _export_learn(tmp_path, policy, spec=spec)[0] == 2
+    rc, out = _export_learn(tmp_path, policy, spec=spec, extra=["--allow-unversioned"])
+    assert rc == 0 and "admission" not in json.loads(out.read_text())[0]
+    assert "no admission record (--allow-unversioned)" in capsys.readouterr().out
+    assert json.loads((tmp_path / "out.json.provenance.json").read_text())["allow_unversioned"] is True
+
+
+def test_an_operators_own_admission_is_not_replaced(tmp_path):
+    spec = _learn_spec(tmp_path)
+    raw = json.loads(spec.read_text())
+    raw[0]["admission"] = {"mode": "confidence", "tau": 0.9}
+    spec.write_text(json.dumps(raw))
+    assert _export_learn(tmp_path, _versioned_policy(tmp_path, {"arm": "student", "arm_version": STUDENT_V}),
+                         spec=spec)[0] == 2
+
+
+def test_a_withdrawn_certificate_removes_the_external_admission_and_its_record(tmp_path):
+    policy = _versioned_policy(tmp_path, {"arm": "student", "arm_version": STUDENT_V})
+    rc, out = _export_learn(tmp_path, policy)
+    rec = tmp_path / "out.json.admission" / "finnews-v1.json"
+    assert rc == 0 and rec.exists()
+    withdrawn = _versioned_policy(tmp_path, {"arm": "student", "arm_version": STUDENT_V, "status": "inconclusive"})
+    rc, out = _export_learn(tmp_path, withdrawn, spec=out)
+    e = json.loads(out.read_text())[0]
+    assert rc == 0 and "router" not in e and "admission" not in e and not rec.exists()
+
+
+def test_an_unconfirmed_entry_gets_a_record_only_when_allowed(tmp_path):
+    policy = _versioned_policy(tmp_path, {"arm": "student", "arm_version": STUDENT_V, "status": "unconfirmed"})
+    rc, out = _export_learn(tmp_path, policy)
+    assert rc == 0 and "admission" not in json.loads(out.read_text())[0]
+    rc, out = _export_learn(tmp_path, policy, extra=["--allow-unconfirmed"])
+    assert rc == 0 and _record_of(tmp_path, out)["version"] == STUDENT_V
+
+
+def test_a_tag_that_cannot_name_a_file_is_refused(tmp_path):
+    from tierbook import cli
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps([{"task": "../x", "question": "q", "options": ["a", "b"], "kind": "choice"}]))
+    arms = tmp_path / "arms.json"
+    arms.write_text(json.dumps({"student": {"mode": "ab", "ratio": 1, "student_path": "s.json"}}))
+    rc = cli.main(["export-policy", "--policy", str(_versioned_policy(tmp_path, {"arm": "student",
+                                                                                "arm_version": STUDENT_V})),
+                   "--target", "prismyra-learn", "--learn-spec", str(spec), "--arm-router", str(arms),
+                   "--signal", "finnews=../x", "--out", str(tmp_path / "o.json")])
+    assert rc == 2 and not (tmp_path / "x.json").exists()

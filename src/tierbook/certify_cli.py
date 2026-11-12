@@ -10,7 +10,10 @@ so a scheduler can tell "the world moved" from "the run did not happen".
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -282,10 +285,11 @@ def cmd_export_policy(args) -> int:
     from tierbook.export_vsr import export, write
 
     try:
-        policy = json.loads(Path(args.policy).read_text())
+        policy_bytes = Path(args.policy).read_bytes()
+        policy = json.loads(policy_bytes)
         if args.target == "prismyra-learn":
             # The fallback here is the tag's own model, Prismyra, not an arm of the policy.
-            return _export_prismyra_learn(policy, args)
+            return _export_prismyra_learn(policy, policy_bytes, args)
         fb = (policy.get("fallback") or {}).get("arm")
         if not fb:
             raise ValueError("the policy has no fallback arm, so traffic with no certified assignment has nowhere "
@@ -321,7 +325,7 @@ def cmd_export_policy(args) -> int:
     return 0
 
 
-def _export_prismyra_learn(policy: dict, args) -> int:
+def _export_prismyra_learn(policy: dict, policy_bytes: bytes, args) -> int:
     """Write a Prismyra learn spec whose per-tag `router` follows the policy. Translation only.
 
     Prismyra's own router decides, per request, between a tag's distilled student and Prismyra itself; this sets
@@ -330,14 +334,28 @@ def _export_prismyra_learn(policy: dict, args) -> int:
     artifact or a confidence threshold is named. A task type certified on an arm the map does not name is refused:
     Prismyra cannot serve a metered API, and dropping the entry would leave the old router in place. A task type
     that is not certified gets no router, so its traffic is answered by Prismyra, the tag's own model.
+
+    A tag given a student also gets an admission record in Prismyra's own format (learn-spec admission mode
+    ``"external"``): the one version the policy judged for the student, the router block written, and the policy
+    file's path and SHA-256 as evidence. Prismyra then serves only an artifact of that version under exactly that
+    block, whatever its own bar said. The version is the entry's `arm_version`, or for a cascade the component
+    `--served-student` names. The router block is the caller's declaration, not something the policy judged. A
+    policy that names no version is refused unless `--allow-unversioned`, which writes the router with no record.
+    An admission the learn spec already declares in another mode is refused rather than replaced. Records are
+    written beside the output, each atomically, before the spec that points at them; records in that directory
+    the written spec no longer points at are removed.
     """
     if not args.learn_spec or not args.arm_router:
         raise ValueError("--target prismyra-learn needs --learn-spec and --arm-router")
     spec = json.loads(Path(args.learn_spec).read_text())
     arms = json.loads(Path(args.arm_router).read_text())
+    served_student = _pairs(args.served_student, "--served-student")
     tags = _pairs(args.signal, "--signal")
     by_task = {e["task"]: e for e in spec}
-    decisions = {}
+    decisions, records = {}, {}
+    out = Path(args.out)
+    record_dir = out.parent / f"{out.name}.admission"
+    evidence = {"uri": str(Path(args.policy).resolve()), "sha256": hashlib.sha256(policy_bytes).hexdigest()}
     for t, e in sorted(policy["task_types"].items()):
         if t not in tags:
             continue
@@ -345,9 +363,11 @@ def _export_prismyra_learn(policy: dict, args) -> int:
         if tag not in by_task:
             raise ValueError(f"task type {t!r} maps to tag {tag!r}, which the learn spec does not register")
         entry = by_task[tag]
+        prior = (entry.get("admission") or {}).get("mode")
         ok = e["status"] == "certified" or (args.allow_unconfirmed and e["status"] == "unconfirmed")
         if not ok:
             entry.pop("router", None)
+            _drop_external(entry)
             decisions[tag] = {"arm": None, "status": e["status"], "router": None,
                               "why": f"not certified ({e['status']}): Prismyra answers"}
             continue
@@ -355,21 +375,84 @@ def _export_prismyra_learn(policy: dict, args) -> int:
             raise ValueError(f"task type {t!r} is certified on {e['arm']!r}, which --arm-router does not map to a "
                              "Prismyra router; this target can only express arms the Prismyra server serves")
         block = arms[e["arm"]]
+        record = None
         if block is None:
             entry.pop("router", None)
+            _drop_external(entry)
         else:
+            version = _student_version(t, e, served_student, args.allow_unversioned)
+            if prior not in (None, "external") and version is not None:
+                raise ValueError(f"tag {tag!r} already declares admission mode {prior!r}; this target will not "
+                                 "replace an operator's admission. Remove it from the learn spec to hand the "
+                                 "decision to this policy")
             entry["router"] = block
-        decisions[tag] = {"arm": e["arm"], "status": e["status"], "router": block, "why": e["reason"]}
+            if version is None:
+                _drop_external(entry)
+            else:
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", tag):
+                    raise ValueError(f"tag {tag!r} cannot name a record file; tags here are letters, digits, '.', "
+                                     "'_' and '-'")
+                record = f"{record_dir.name}/{tag}.json"
+                records[record] = {"format": 1, "tag": tag, "version": version, "router": block,
+                                   "admitted_by": "tierbook export-policy", "evidence": evidence}
+                entry["admission"] = {"mode": "external", "record": record}
+        decisions[tag] = {"arm": e["arm"], "status": e["status"], "router": block, "why": e["reason"],
+                          "admission_record": record}
     unmapped = sorted(set(tags) - set(policy["task_types"]))
     if unmapped:
         raise ValueError(f"--signal names task types the policy does not have: {unmapped}")
-    Path(args.out).write_text(json.dumps(spec, indent=2) + "\n")
+    for rel, rec in records.items():
+        record_dir.mkdir(parents=True, exist_ok=True)
+        _write_atomic(out.parent / rel, json.dumps(rec, indent=2) + "\n")
+    _write_atomic(out, json.dumps(spec, indent=2) + "\n")
+    referenced = {(e.get("admission") or {}).get("record") for e in spec}
+    if record_dir.is_dir():
+        for f in record_dir.glob("*.json"):
+            if f"{record_dir.name}/{f.name}" not in referenced:
+                f.unlink()
     _dump({"decisions": decisions, "observations_digest": policy["observations_digest"],
-           "guarantee": policy["guarantee"]}, f"{args.out}.provenance.json")
+           "guarantee": policy["guarantee"], "allow_unversioned": bool(args.allow_unversioned)},
+          f"{args.out}.provenance.json")
     for tag, d in sorted(decisions.items()):
-        print(f"{tag}: {d['arm'] or 'prismyra'} ({d['status']})")
+        rec = d.get("admission_record")
+        note = f", admission record {rec}" if rec else (", no admission record (--allow-unversioned): Prismyra's "
+                                                         "own bar decides" if d["router"] else "")
+        print(f"{tag}: {d['arm'] or 'prismyra'} ({d['status']}{note})")
     print(f"wrote {args.out}")
     return 0
+
+
+def _student_version(task_type: str, e: dict, served_student: dict, allow_unversioned: bool) -> str | None:
+    """The one version a record admits: the arm's own, or the named component of a cascade."""
+    comps = e.get("component_versions")
+    if comps:
+        name = served_student.get(e["arm"])
+        if name is None:
+            raise ValueError(f"task type {task_type!r} is certified on cascade {e['arm']!r}; name the component "
+                             f"Prismyra serves as its student with --served-student {e['arm']}=COMPONENT "
+                             f"(components: {sorted(comps)})")
+        if name not in comps:
+            raise ValueError(f"--served-student {e['arm']}={name}: not a component of it ({sorted(comps)})")
+        version = comps[name]
+    else:
+        version = e.get("arm_version")
+    if not version and not allow_unversioned:
+        raise ValueError(f"task type {task_type!r}: the policy names no version for what it certified, so no record "
+                         "can bind the judgement to an artifact; ingest with versions, or pass --allow-unversioned "
+                         "to let Prismyra's own bar decide")
+    return version or None
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def _drop_external(entry: dict) -> None:
+    """A tag that gets no student from this policy keeps no record pointing at a judgement this policy withdrew."""
+    if (entry.get("admission") or {}).get("mode") == "external":
+        entry.pop("admission")
 
 
 def register(sub, common) -> None:
@@ -437,6 +520,11 @@ def register(sub, common) -> None:
                          "(e.g. avg_logprob); required to export a cascade")
     x.add_argument("--arm-router", default=None,
                    help="prismyra-learn: JSON mapping an arm to a Prismyra router block, or to null for Prismyra alone")
+    x.add_argument("--served-student", action="append", metavar="CASCADE_ARM=COMPONENT",
+                   help="prismyra-learn: which component of a certified cascade Prismyra serves as the student")
+    x.add_argument("--allow-unversioned", action="store_true",
+                   help="prismyra-learn: write a router for a certificate that names no version, with no admission "
+                        "record, so Prismyra's own bar decides")
     x.add_argument("--candidates", default=None)
     x.add_argument("--out", required=True)
     x.add_argument("--signal", action="append", metavar="TASK_TYPE=CLASSIFIER_LABEL")

@@ -41,6 +41,9 @@ tierbook export-policy --policy policy.json --target prismyra-learn --learn-spec
 ```
 
 A task type certified on an arm the map does not name (a metered API) is refused, because Prismyra cannot serve it; a
-task type that is not certified gets no router, so Prismyra answers it.
+task type that is not certified gets no router, so Prismyra answers it. When the policy names the version it judged,
+the tag also gets an admission record, and Prismyra serves only that artifact under that router block; a refit is
+refused until a new judgement covers it. A policy that names no version is refused unless `--allow-unversioned`, in
+which case Prismyra's own bar decides.
 
 The measured run is in `docs/verify/v0.5.0-distillation-loop.md`.

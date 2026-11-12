@@ -111,7 +111,10 @@ changed  history: {'status': 'certified', 'arm': 'qwen3-next-80b'} -> certified 
 ```
 
 Hand the policy to a router with `export-policy --target vsr` (vLLM Semantic Router) or `--target prismyra-learn`
-(Prismyra's own router). The full loop against live endpoints is in
+(Prismyra's own router). `prismyra-learn` also writes an admission record in Prismyra's format: the version judged, the
+router block, and the policy's digest. Prismyra then serves only an artifact of that version under exactly that block,
+and refuses a refit until a new judgement covers it. A certificate that names no version is refused unless
+`--allow-unversioned`. The full loop against live endpoints is in
 [`examples/certification_loop/`](examples/certification_loop/README.md).
 
 ## What a certificate means

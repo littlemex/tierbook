@@ -232,6 +232,49 @@ of this breaks it. What it costs is reach: a deployment already exporting OpenIn
 with a test on a recorded span from each of the three decision APIs the spec names; or (b) a recorded decision not to,
 with the reason. Re-survey the three conventions before starting; they moved within the last two months.
 
+**Decision (2026-11-12, Japan time): (b) for now, with a trigger.** No experiment so far had spans; every one had a call
+log or an observation writer, and the integration with Prismyra writes observations directly. Start (a) at the first
+deployment that has `DECISION` spans and no call log. The adapter would only write observations: `check-observations`
+is already the validator it has to pass.
+
+### T20 -- Two writers on one looks ledger
+
+**What.** `derive --ledger` appends one row per judgement and counts earlier looks by reading the file first. Two
+`derive` runs against one ledger at the same moment can each count the other's look as absent. The documentation says
+one writer at a time; nothing enforces it.
+
+**What would tell us it is finished.** A lock (or an atomic append that re-reads under the lock), with a test that two
+concurrent runs report looks 1 and 2, never 1 and 1. Not started because every run so far had one operator.
+
+### T21 -- `drift` does not appear in the ledger
+
+**What.** A `drift` re-derivation looks at fresh items, not the held-out half, so it is not a look at the certified
+set. But a drift run whose fresh rows overlap a held-out set does look at it, and the ledger does not see that.
+
+**What would tell us it is finished.** `drift --ledger` records the fresh items it judged and counts overlap with
+earlier looks the same way `derive` does. Start when a deployment reuses certification items as drift traffic.
+
+### T22 -- Which content digest a manifest uses is not declared
+
+**What.** Overlap by content works when the observation id is `sha256:<content>` and the manifest's `content_sha256`
+was computed the same way. Prismyra's writer digests `[context, question]` as compact JSON; another writer may digest
+something else, and two digests of one item under two schemes never match, so an overlap goes unseen rather than being
+refused.
+
+**What would tell us it is finished.** A manifest and an observation file each name their content scheme as an opaque
+string, and `derive` reports (never guesses) when a candidate's sets and its observations use different schemes, so
+the check is listed as unchecked. Start at the second writer.
+
+### T23 -- A feature builder's own version
+
+**What.** Prismyra's artifact version names the feature module but not a version of it, so changing the builder's code
+without renaming it keeps the version. The admission record and the certificate then cover a student whose features
+changed.
+
+**What would tell us it is finished.** Prismyra's side: the builder reports an opaque version and Prismyra folds it
+into the artifact version. Nothing changes in tierbook, which compares the string. Start when a builder changes
+in place, which a hidden-state builder that reads a backbone would.
+
 ## Deliberately not doing
 
 Recorded here so they are not rediscovered as gaps.

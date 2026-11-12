@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+* **`export-policy --target prismyra-learn` writes an admission record.** A tag given a student gets admission mode
+  `external` and a record beside the output spec in Prismyra's own format: the one `version` judged (the entry's
+  `arm_version`, or for a cascade the component named by `--served-student`), the `router` block written (the
+  caller's declaration, not something the policy judged), `admitted_by`, and `evidence` (the policy's resolved path
+  and the SHA-256 of the bytes read). Prismyra serves the student only if its version equals the record's and its live
+  router block equals the recorded one, whatever its own admission bar said. A certificate that names no version is
+  refused unless `--allow-unversioned`; an admission the learn spec declares in another mode is refused rather than
+  replaced; a tag that loses its certificate loses its external admission and its record. Records are written
+  atomically before the spec. Needed because the record double-gated each student: tierbook certified it while
+  Prismyra refused to serve it below its own 0.90/0.90 bar.
 * **Arm provenance and consulted sets, read only to subtract.** A candidate may cite `arm_provenance` (`{path, sha256}`
   of a file its trainer wrote: `arm_version`, `trained_on` set manifests, `requires: [{arm, arm_version}]` for arms it
   cannot be served without, and an opaque `trainer` section) and `consulted` sets (items its maker saw for a choice).
