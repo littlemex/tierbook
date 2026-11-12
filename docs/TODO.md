@@ -206,6 +206,32 @@ Several conclusions rest on `n=1`. The ledger records that repeats are what boun
 leaves it unmeasurable. `Hyper-tau-bench` makes this concrete and expensive: roughly **15 hours and $370** per pass, so
 a repeat there is a decision rather than a formality.
 
+### T19 -- Telemetry conventions moved; decide what the observation reader should accept
+
+**What.** The reason perigraph exists -- no shared shape for the records around a model call, so each collector's data
+has to be translated by hand -- is still only half solved. Surveyed on 2026-11-12 (Japan time) against the repositories
+themselves:
+
+| convention | state | what it now carries | what it still does not |
+|---|---|---|---|
+| OpenTelemetry GenAI ([semantic-conventions-genai](https://github.com/open-telemetry/semantic-conventions-genai) at `e6658f1`, 2026-11-06) | every attribute, span and event is `stability: development`; moved out of the core repository in semconv v1.42.0 | `gen_ai.evaluation.result` (name, score value, score label, explanation) | cost; a routing decision; a per-part content digest; a per-part sourcing mode |
+| OpenInference ([Arize-ai/openinference](https://github.com/Arize-ai/openinference) at `715e299`, 2026-11-11) | no stability marking | a `DECISION` span kind (`spec/decision_spans.md`, naming Jev, OpenAI's Decisions API and vLLM Semantic Router Decision 1.0); `llm.cost.*` in USD; `evaluation.*` with `annotator_kind` | a per-part content digest; a per-part sourcing mode |
+| OpenLLMetry ([traceloop/openllmetry](https://github.com/traceloop/openllmetry) at `e3d651a`, 2026-11-05) | follows OTel for the operation names | `traceloop.prompt.version_hash`, one digest for a whole prompt version | per-part digests; evaluation results; cost |
+
+The two things perigraph adds (a digest per part, labelled with the boundary it is over, and a sourcing mode per part)
+are in none of the three. Decision calls, cost and evaluation results now have a shape in OpenInference, but the three
+name the same facts differently (`gen_ai.*`, `llm.*` / `evaluation.*`, `traceloop.*`), so a record from one is still
+not a record from another.
+
+**Why it matters.** tierbook defines its own observation format and refuses what does not fit it at the door, so none
+of this breaks it. What it costs is reach: a deployment already exporting OpenInference `DECISION` spans and
+`evaluation.*` results has to be converted by hand before tierbook can certify anything from it.
+
+**What would tell us it is finished.** Either (a) an adapter that reads OpenInference `DECISION` spans with their
+`evaluation.*` results into observations, refusing a span that lacks what an observation needs and saying which field,
+with a test on a recorded span from each of the three decision APIs the spec names; or (b) a recorded decision not to,
+with the reason. Re-survey the three conventions before starting; they moved within the last two months.
+
 ## Deliberately not doing
 
 Recorded here so they are not rediscovered as gaps.
