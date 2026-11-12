@@ -172,6 +172,13 @@ def cmd_derive(args) -> int:
         cost = ho.get("spend_per_accepted_usd")
         print(f"{t:<24} {e['status']:<13} {e.get('arm') or '-':<24} "
               f"{'' if cost is None else f'${cost:.6f}/accepted  '}{e['reason']}")
+        for a, cell in sorted((e.get("arms") or {}).items()):
+            gap = sum((cell.get(p) or {}).get("fallback_missing_attempts", 0) for p in ("selection", "held_out"))
+            if gap:
+                # A deferral the fallback never answered counts as unobserved_as declares; often it means the
+                # parts' attempts do not pair (same item, different run), so say it where it is read.
+                print(f"  {a}: {gap} attempt(s) deferred to the fallback have no fallback attempt at the same item "
+                      "and run, and count as unobserved")
     c = policy.get("comparison")
     if c and c.get("policy_spend_per_accepted_usd") and c.get("single_best_spend_per_accepted_usd"):
         print(f"policy ${c['policy_spend_per_accepted_usd']:.6f}/accepted vs single best "

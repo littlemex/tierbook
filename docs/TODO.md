@@ -275,6 +275,15 @@ changed.
 into the artifact version. Nothing changes in tierbook, which compares the string. Start when a builder changes
 in place, which a hidden-state builder that reads a backbone would.
 
+### T24 -- Drift re-derives over the certified held-out half
+
+**What.** `drift` re-derives from `--observations` plus the fresh rows, so it reads the held-out half again; the
+ledger (T21) does not count that, and a re-derivation that changes the choice is reported as a change, not as a
+second look. Seen in the phase-6 run, where drift was run over the certification observations.
+
+**What would tell us it is finished.** Either drift judges fresh rows only against the deployed policy (no
+re-derivation over held-out items), or the re-derivation is recorded in the ledger as a look. Decide with T21.
+
 ## Deliberately not doing
 
 Recorded here so they are not rediscovered as gaps.

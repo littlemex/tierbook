@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **`derive` says when a cascade's deferrals found no fallback attempt.** Parts pair by item and run; a deferral with
+  no fallback attempt at the same item and run counts as `unobserved_as` declares. `derive` now prints that count per
+  cascade where it is read. Needed because an end-to-end run composed offline student scores (one run name) with
+  served teacher rows (one run per request id): every deferral counted as rejected, visible only in the policy JSON.
 * **`export-policy --target prismyra-learn` writes an admission record.** A tag given a student gets admission mode
   `external` and a record beside the output spec in Prismyra's own format: the one `version` judged (the entry's
   `arm_version`, or for a cascade the component named by `--served-student`), the `router` block written (the

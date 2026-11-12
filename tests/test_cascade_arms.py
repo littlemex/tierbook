@@ -426,3 +426,23 @@ def test_a_family_declared_as_all_traffic_gets_a_rule_with_no_conditions(tmp_pat
     (d,) = conf["routing"]["decisions"]
     assert d["rules"] == {"operator": "AND", "conditions": []}
     assert conf["routing"]["signals"] == {}
+
+
+def test_derive_says_when_deferred_attempts_found_no_fallback_attempt(tmp_path):
+    import subprocess
+    cfg_path = tmp_path / "candidates.json"
+    candidates(tmp_path)
+    decl = tmp_path / "decl.json"
+    decl.write_text(json.dumps(dict(alpha=0.05, bound="tierbook.bounds:wilson", holdout_fraction=FRACTION,
+                                    split_salt=SALT, unobserved_as="rejected", max_observation_age_days=None,
+                                    held_out_correction="none", holdout_ladder=1, task_types={T: {"floor": 0.5}},
+                                    usd_per_attempt={"student": {"usd": 0.1, "source": "t"}})))
+    from tierbook.observation import write
+    rows = [obs(f"i{k}", "student", "accepted", score=0.1) for k in range(40)]
+    rows += [dataclasses.replace(obs(f"i{k}", "teacher", "accepted", tokens=10), run="other") for k in range(40)]
+    write(rows, tmp_path / "o.jsonl")
+    r = subprocess.run([sys.executable, "-m", "tierbook.cli", "derive", "--observations", str(tmp_path / "o.jsonl"),
+                        "--candidates", str(cfg_path), "--declarations", str(decl), "--out", str(tmp_path / "p.json")],
+                       capture_output=True, text=True, env={"PYTHONPATH": str(ROOT / "src")})
+    assert r.returncode == 0, r.stderr
+    assert "routed: 40 attempt(s) deferred to the fallback have no fallback attempt at the same item and run" in r.stdout
