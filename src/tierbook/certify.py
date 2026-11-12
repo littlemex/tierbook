@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from tierbook.bounds import Bound, resolve
+from tierbook.bounds import false_pass_at_floor, Bound, resolve
 from tierbook.config import Config
 from tierbook.evidence import EvidenceError
 from tierbook.observation import Observation, digest as observations_digest
@@ -82,6 +82,40 @@ _REQUIRED = ("alpha", "bound", "holdout_fraction", "split_salt", "unobserved_as"
 _OPTIONAL = ("format", "repeat_rule", "min_items", "fallback_arm", "usd_per_attempt", "interfaces", "_comment")
 
 
+_PRICE_INPUTS = ("usd_per_hour", "attempts_per_hour", "one_off_usd", "horizon_attempts")
+
+
+def _per_attempt(arm: str, p) -> dict:
+    """A declared price per attempt: either `usd` with its `source`, or the inputs it is computed from.
+
+    The inputs form is `usd_per_hour / attempts_per_hour + one_off_usd / horizon_attempts`, every term declared and
+    none defaulted (a one-off of 0 is written as 0). `measured_on` names the arm version the throughput was measured
+    on; `derive` refuses it when the observed version differs, unless `stands_in_for` says, in the operator's words,
+    why the measured thing stands in for the observed one -- which is then carried as a claim, not checked.
+    """
+    if not isinstance(p, dict) or not p.get("source"):
+        raise DeclarationError(f"usd_per_attempt[{arm!r}] needs a 'source' saying where it was derived from")
+    known = {"usd", "source", "measured_on", "stands_in_for", *_PRICE_INPUTS}
+    extra = sorted(set(p) - known)
+    if extra:
+        raise DeclarationError(f"usd_per_attempt[{arm!r}] has unknown keys {extra}")
+    has_inputs = [k for k in _PRICE_INPUTS if k in p]
+    if has_inputs and "usd" in p:
+        raise DeclarationError(f"usd_per_attempt[{arm!r}] gives both 'usd' and its inputs; give one")
+    if has_inputs:
+        missing = [k for k in _PRICE_INPUTS if k not in p]
+        bad = [k for k in has_inputs if isinstance(p[k], bool) or not isinstance(p[k], (int, float)) or p[k] < 0]
+        if missing or bad or p["attempts_per_hour"] == 0 or p["horizon_attempts"] == 0:
+            raise DeclarationError(f"usd_per_attempt[{arm!r}] computed from inputs needs all of {list(_PRICE_INPUTS)} "
+                                   f"as non-negative numbers, with non-zero rates (missing {missing}, bad {bad})")
+        usd = p["usd_per_hour"] / p["attempts_per_hour"] + p["one_off_usd"] / p["horizon_attempts"]
+        return {**p, "usd": usd}
+    if isinstance(p.get("usd"), bool) or not isinstance(p.get("usd"), (int, float)) or p["usd"] < 0:
+        raise DeclarationError(f"usd_per_attempt[{arm!r}] needs a non-negative 'usd', or the inputs it is computed "
+                               f"from ({list(_PRICE_INPUTS)})")
+    return dict(p)
+
+
 def load_declarations(raw: dict | str | Path) -> Declarations:
     """Every problem at once, not the first of several: an operator fixes the file in one pass."""
     if not isinstance(raw, dict):
@@ -126,11 +160,12 @@ def load_declarations(raw: dict | str | Path) -> Declarations:
         extra = sorted(set(d or {}) - {"floor"}) if isinstance(d, dict) else []
         if extra:
             problems.append(f"task type {t!r} has unknown keys {extra}")
+    priced: dict[str, dict] = {}
     for arm, p in (raw.get("usd_per_attempt") or {}).items():
-        if not isinstance(p, dict) or not isinstance(p.get("usd"), (int, float)) or p["usd"] < 0 \
-                or not p.get("source"):
-            problems.append(f"usd_per_attempt[{arm!r}] needs a non-negative 'usd' and a 'source' saying where "
-                            "it was derived from")
+        try:
+            priced[arm] = _per_attempt(arm, p)
+        except DeclarationError as e:
+            problems.append(str(e))
     itf = raw.get("interfaces")
     if itf is not None and not (isinstance(itf, list) and itf and all(isinstance(x, str) and x for x in itf)):
         problems.append(f"interfaces must be a non-empty list of interface names, or absent, not {itf!r}")
@@ -146,7 +181,7 @@ def load_declarations(raw: dict | str | Path) -> Declarations:
                         max_observation_age_days=age, held_out_correction=raw["held_out_correction"],
                         floors=floors, holdout_ladder=None if lad == "all" else lad,
                         repeat_rule=raw.get("repeat_rule"), min_items=mi,
-                        fallback_arm=raw.get("fallback_arm"), usd_per_attempt=dict(raw.get("usd_per_attempt") or {}),
+                        fallback_arm=raw.get("fallback_arm"), usd_per_attempt=priced,
                         interfaces=tuple(itf) if itf is not None else None)
 
 
@@ -502,7 +537,15 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
                 f"usd_per_attempt names {arm!r}, which is not a fixed-cost candidate in {where}; a declared price "
                 "may only stand in for an hourly bill, never for a price card or for an arm the router cannot reach")
     _check_interfaces(cfg, decl)
+    claims = _Claims(cfg)
     versions = arm_versions(fresh_only(observations, decl, as_of))
+    for arm, p in decl.usd_per_attempt.items():
+        on = p.get("measured_on")
+        seen = versions.get(arm)
+        if on and seen is not None and seen != on and not p.get("stands_in_for"):
+            raise DeclarationError(f"usd_per_attempt[{arm!r}] was measured on {on!r} and the observations are from "
+                                   f"{seen or NO_VERSION}; say why one stands in for the other in 'stands_in_for', "
+                                   "or measure the version observed")
     results, stale = tally_items(compose(observations, cfg), decl, as_of)
     part = {key: partition_of(key[2], decl.split_salt, decl.holdout_fraction) for key in results}
     observed_types = sorted({t for t, _, _ in results} | {t for t, _ in stale})
@@ -538,26 +581,33 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
         # Priced on BOTH partitions: the shipped cost is the held-out one, so an arm whose held-out attempts cannot
         # be priced cannot ship a cost and is not eligible, however it looked on selection.
         for a, cell in per_arm.items():
-            held = {key[2] for key in results if key[0] == t and key[1] == a and part[key] == "held_out"}
-            why = provenance_exclusion(a, held, versions, cfg)
-            if why:
-                cell["excluded_by_provenance"] = why
-        excluded = sorted(a for a, s in per_arm.items()
-                          if (decl.interfaces is not None and s["interface"] not in decl.interfaces)
-                          or s.get("excluded_by_provenance"))
+            ho_n = cell["held_out"]["items"]
+            cell["held_out"]["false_pass_at_floor"] = false_pass_at_floor(ho_n, floor, alpha_ho, bound) if ho_n else None
+            keys = [key for key in results if key[0] == t and key[1] == a]
+            pc = provenance_check(a, {k[2] for k in keys if part[k] == "held_out"},
+                                  {k[2] for k in keys if part[k] == "selection"}, versions, claims, cfg)
+            if pc["checked"] or pc["unchecked"]:
+                cell["provenance"] = pc
+        by_interface = sorted(a for a, s in per_arm.items()
+                              if decl.interfaces is not None and s["interface"] not in decl.interfaces)
+        by_provenance = sorted(a for a, s in per_arm.items() if (s.get("provenance") or {}).get("exclude"))
+        excluded = sorted(set(by_interface) | set(by_provenance))
         eligible = [a for a, s in per_arm.items()
                     if a not in excluded and s["fresh"] and s["priced"] and s["selection"]["accepted"] > 0
                     and s["selection"]["lower"] >= floor]
-        entry: dict = {"floor": floor, "arms": per_arm}
+        held_items = sorted({key[2] for key in results if key[0] == t and part[key] == "held_out"})
+        entry: dict = {"floor": floor, "arms": per_arm,
+                       # Which held-out items this judgement looked at, as one digest: the key a looks ledger counts by.
+                       "held_out_set": hashlib.sha256("\n".join(held_items).encode()).hexdigest()}
         if decl.interfaces is not None:
-            entry["excluded_by_interface"] = sorted(a for a in excluded if not per_arm[a].get("excluded_by_provenance"))
-        if any(c.get("excluded_by_provenance") for c in per_arm.values()):
-            entry["excluded_by_provenance"] = {a: c["excluded_by_provenance"] for a, c in sorted(per_arm.items())
-                                               if c.get("excluded_by_provenance")}
-        if not eligible and excluded and any(per_arm[a]["selection"]["lower"] >= floor for a in excluded):
-            entry.update(status=UNASSIGNABLE, arm=None, reason_code="excluded",
-                         reason=f"every arm that clears the floor on selection is excluded, by the declared "
-                                f"interfaces or by its own provenance ({excluded})")
+            entry["excluded_by_interface"] = by_interface
+        if by_provenance:
+            entry["excluded_by_provenance"] = by_provenance
+        if not eligible and by_interface and any(per_arm[a]["selection"]["lower"] >= floor for a in by_interface) \
+                and not any(per_arm[a]["selection"]["lower"] >= floor for a in by_provenance):
+            entry.update(status=UNASSIGNABLE, arm=None, reason_code="excluded_by_interface",
+                         reason=f"every arm that clears the floor on selection is outside the declared interfaces "
+                                f"({by_interface})")
             task_types[t] = entry
             continue
         if not eligible:
@@ -567,8 +617,10 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             why = (f"stale: all {s['stale_attempts']} attempt(s) older than max_observation_age_days"
                    if not s["fresh"] else f"unpriced: {s['priced_by']}" if not s["priced"]
                    else f"selection lower bound {s['selection']['lower']:.4f} < floor {floor}")
+            removed = f"; excluded by their own provenance: {by_provenance}" if by_provenance else ""
             entry.update(status=UNASSIGNABLE, arm=None, reason_code="nothing_clears_floor",
-                         reason=f"no fresh, priced arm clears the floor on selection; nearest miss {miss} ({why})")
+                         reason=f"no fresh, priced arm clears the floor on selection; nearest miss {miss} ({why})"
+                                f"{removed}")
             task_types[t] = entry
             continue
         ladder, dropped, above = _ladder(eligible, per_arm, decl.holdout_ladder)
@@ -708,39 +760,89 @@ def _check_interfaces(cfg: Config, decl: Declarations) -> None:
                                f"{interface_of(decl.fallback_arm, cfg)!r}, outside the declared interfaces")
 
 
-def provenance_exclusion(arm: str, held_out_items: set[str], versions: dict[str, str], cfg: Config) -> dict | None:
-    """Why an arm's own claims rule it out, or None. Claims only subtract: nothing here can make an arm eligible.
-
-    Each ordinary arm a cascade reaches brings its own provenance, and the cascade's own `consulted` sets count too.
-    """
-    from tierbook.provenance import held_out_overlap
-
-    why: dict = {}
+def _nodes(arm: str, cfg: Config) -> list[str]:
+    """Every candidate a cascade is built from, cascades included, the arm itself first."""
     cand = cfg.candidates.get(arm)
-    sets = list(cand.consulted) if cand is not None else []
-    for leaf in _leaves(arm, cfg):
-        lc = cfg.candidates.get(leaf)
-        if lc is None:
+    if cand is None or cand.cascade is None:
+        return [arm]
+    return [arm, cand.cascade.primary] + _nodes(cand.cascade.fallback, cfg)
+
+
+class _Claims:
+    """Provenance and consulted citations, read once per derive."""
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self._pv: dict[str, object] = {}
+        self._cs: dict[str, tuple] = {}
+
+    def provenance(self, arm: str):
+        from tierbook.provenance import load_provenance
+
+        if arm not in self._pv:
+            c = self.cfg.candidates[arm].arm_provenance
+            pv = load_provenance(c["path"], c["sha256"]) if c else None
+            if pv is not None and pv.arm != arm:
+                raise EvidenceError(f"candidate {arm!r} cites provenance for arm {pv.arm!r}")
+            self._pv[arm] = pv
+        return self._pv[arm]
+
+    def consulted(self, arm: str) -> tuple:
+        from tierbook.provenance import load_sets
+
+        if arm not in self._cs:
+            cs = list(self.cfg.candidates[arm].consulted)
+            self._cs[arm] = load_sets([{"set": c["set"], "manifest": c["manifest"], "sha256": c["sha256"]} for c in cs],
+                                      Path("."), f"candidate {arm!r} consulted") if cs else ()
+        return self._cs[arm]
+
+
+def provenance_check(arm: str, held_out: set[str], selection: set[str], versions: dict[str, str], claims: _Claims,
+                     cfg: Config) -> dict:
+    """What the arm's own claims say about it: `exclude` (reasons it is removed from selection, empty if none),
+    `unchecked` (checks that could not be made), and `checked` (which cited files were read). Claims only subtract."""
+    from tierbook.provenance import overlap
+
+    exclude: dict = {}
+    unchecked: list[dict] = []
+    checked: dict = {}
+    sets: list = []
+    for node in _nodes(arm, cfg):
+        if node not in cfg.candidates:
             continue
-        sets += list(lc.consulted)
-        pv = lc.provenance
+        for s_ in claims.consulted(node):
+            sets.append((node, "consulted", s_))
+        pv = claims.provenance(node)
         if pv is None:
             continue
-        sets += list(pv.trained_on)
-        seen = versions.get(leaf)
-        if pv.arm_version and seen is not None and seen != pv.arm_version:
-            why.setdefault("version_mismatch", []).append(
-                {"arm": leaf, "provenance": pv.arm_version, "observed": seen or NO_VERSION})
+        checked[node] = {"arm_provenance": pv.sha256}
+        for s_ in pv.trained_on:
+            sets.append((node, "trained_on", s_))
+        seen = versions.get(node)
+        if pv.arm_version:
+            if seen is None:
+                unchecked.append({"arm": node, "check": "arm_version", "why": "no fresh rows of this arm"})
+            elif seen != pv.arm_version:
+                exclude.setdefault("version_mismatch", []).append(
+                    {"arm": node, "provenance": pv.arm_version, "observed": seen or NO_VERSION})
         for req_arm, req_version in pv.requires:
             got = versions.get(req_arm)
-            if got is not None and got != req_version:
-                why.setdefault("requirement_mismatch", []).append(
-                    {"arm": leaf, "requires": req_arm, "version": req_version, "observed": got or NO_VERSION})
-    hit = held_out_overlap(held_out_items, tuple(sets))
-    if hit:
-        why["held_out_overlap"] = {"count": len(hit), "first": hit[:5],
-                                   "sets": sorted({s.name for s in sets})}
-    return why or None
+            if got is None:
+                unchecked.append({"arm": node, "check": f"requires {req_arm}", "why": "the required arm has no fresh rows"})
+            elif got != req_version:
+                exclude.setdefault("requirement_mismatch", []).append(
+                    {"arm": node, "requires": req_arm, "version": req_version, "observed": got or NO_VERSION})
+    for node, kind, s_ in sets:
+        checked.setdefault(node, {}).setdefault(kind, {})[s_.name] = s_.sha256
+    ho_hits, sel_hits = {}, {}
+    for node, kind, s_ in sets:
+        for name, ids in overlap(held_out, (s_,)).items():
+            ho_hits[f"{node}:{kind}:{name}"] = {"count": len(ids), "examples": ids[:5]}
+        for name, ids in overlap(selection, (s_,)).items():
+            sel_hits[f"{node}:{kind}:{name}"] = len(ids)
+    if ho_hits:
+        exclude["held_out_overlap"] = ho_hits
+    return {"exclude": exclude, "unchecked": unchecked, "checked": checked, "selection_overlap": sel_hits}
 
 
 def fresh_only(observations: Iterable[Observation], decl: Declarations, as_of: datetime) -> list[Observation]:

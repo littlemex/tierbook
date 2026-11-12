@@ -234,9 +234,10 @@ needs none of them installed to derive a policy.
 | command | what it does |
 |---|---|
 | `ingest --calls C --outcomes O --out obs.jsonl [--cache-additive-arm ARM] [--arm-version ARM=V]` | join a chat-completions log to grades; `--append` to add to an existing file; `--arm-version` stamps an arm's attempts with an opaque version |
-| `check-provenance FILE [--sha256 H]` | read an arm's provenance and the item sets it cites; writes nothing |
+| `check-provenance FILE [--sha256 H]` | read an arm's provenance and the item sets it cites, and print the digest to cite it by; writes nothing |
+| `power --floor F --assumed-rate P --alpha A --power Q --bound B --max-n N` | held-out items an assumed rate needs to pass a floor |
 | `check-observations FILE ...` | parse observation files as `derive` does and print each arm's versions, paths and outcome counts; writes nothing |
-| `derive --observations ... --candidates C --declarations D --out policy.json [--as-of T]` | certify per task type |
+| `derive --observations ... --candidates C --declarations D --out policy.json [--as-of T] [--ledger L]` | certify per task type; `--ledger` counts this as a look at each held-out set |
 | `drift --observations ... --deployed P --fresh F ... --out drift.json` | diff, contradiction checks, cells to measure; exit 3 on a contradiction |
 | `export-policy --policy P --target vsr\|prismyra-learn\|table --out ...` | translate a policy for a router; refuses what the target cannot express |
 | `validate`, `explain`, `compile`, `route`, `export-vsr`, `assign`, `accept`, `admit-*` | the ledger workflow, still supported: [`docs/ledger-path.md`](docs/ledger-path.md) |
@@ -255,9 +256,11 @@ deployed assignment was contradicted by fresh evidence.
   `drift` refuses fresh rows from another version. A certificate issued over unversioned rows binds nothing, and
   `drift` says so. A declared `interfaces` list keeps arms a router cannot serve out of selection; with it declared,
   every candidate, cascades included, must say what it is.
-* **A trainer's claims only subtract.** A candidate may cite what its arm was trained on and which sets a choice
-  consulted; an arm whose held-out items appear there is excluded from selection. Nothing a trainer claims can admit
-  an arm.
+* **A trainer's claims only subtract.** A candidate may cite what its arm was trained on and which sets its maker
+  saw; an arm whose held-out items appear there is excluded from selection, and checks that cannot be made are
+  reported as unchecked. Nothing a trainer claims can admit an arm.
+* **Arithmetic is computed, not typed.** Prices may be declared as their inputs, every held-out cell carries the exact
+  chance an at-floor arm passes, `power` sizes a held-out set before looking, and `derive --ledger` counts looks.
 * **The unit is the item.** Repeated runs of one item combine by a declared rule rather than counting as independent
   evidence.
 * **Refusals come from the record.** A missing floor, an unpriced arm, stale evidence or an unservable export is a

@@ -134,10 +134,12 @@ class Candidate:
     #: tierbook: it is compared against a declared `interfaces` filter and never interpreted, and never inferred --
     #: a cascade declares its own, because whether a router can serve the composition is the operator's knowledge.
     interface: str | None = None
-    #: What the arm was made from (`tierbook.provenance.Provenance`), when the candidate cites a provenance file.
-    provenance: object | None = None
-    #: The item sets a choice about this arm was made on (a recipe compared, a threshold tuned), when cited.
-    consulted: tuple = ()
+    #: The citation of what the arm was made from, `{"path", "sha256"}` with the path resolved against the candidate
+    #: file. Only the citation is held here; `derive` and `check-provenance` read the file, so verbs that never
+    #: certify do not need a trainer's files on disk.
+    arm_provenance: dict | None = None
+    #: Citations of item sets the arm's maker saw for a choice (a recipe compared, a threshold tuned), resolved paths.
+    consulted: tuple[dict, ...] = ()
 
     @property
     def is_fixed_cost(self) -> bool:
@@ -392,24 +394,26 @@ def _cascade_candidate(cid: str, entry: dict, ep: dict, base: Path) -> Candidate
 
 
 def _cited(cid: str, entry: dict, base: Path) -> dict:
-    """A candidate's `provenance` and `consulted` citations, loaded now so a bad citation fails at load time."""
-    from tierbook.evidence import EvidenceError
-    from tierbook.provenance import _sets, load_provenance
-
+    """A candidate's `arm_provenance` and `consulted` citations, checked for shape and resolved to absolute paths."""
     out: dict = {}
-    try:
-        pv = entry.get("arm_provenance")
-        if pv is not None:
-            if not isinstance(pv, dict) or not pv.get("path"):
-                raise ConfigError(f"candidate {cid!r}: arm_provenance must be {{'path': ..., 'sha256': ...}}")
-            path = Path(pv["path"])
-            out["provenance"] = load_provenance(path if path.is_absolute() else base / path, pv.get("sha256"))
-            if out["provenance"].arm != cid:
-                raise ConfigError(f"candidate {cid!r} cites provenance for arm {out['provenance'].arm!r}")
-        if entry.get("consulted") is not None:
-            out["consulted"] = _sets(entry["consulted"], base, f"candidate {cid!r} consulted")
-    except EvidenceError as e:
-        raise ConfigError(f"candidate {cid!r}: {e}") from None
+
+    def resolved(c: dict) -> dict:
+        p = Path(c.get("path") or c.get("manifest"))
+        key = "path" if "path" in c else "manifest"
+        return {**c, key: str(p if p.is_absolute() else base / p)}
+
+    pv = entry.get("arm_provenance")
+    if pv is not None:
+        if not isinstance(pv, dict) or not pv.get("path") or not pv.get("sha256"):
+            raise ConfigError(f"candidate {cid!r}: arm_provenance must be {{'path': ..., 'sha256': ...}}, the digest "
+                              "of the file's bytes")
+        out["arm_provenance"] = resolved(pv)
+    cs = entry.get("consulted")
+    if cs is not None:
+        if not isinstance(cs, list) or not all(isinstance(c, dict) and c.get("set") and c.get("manifest")
+                                               and c.get("sha256") for c in cs):
+            raise ConfigError(f"candidate {cid!r}: consulted must be a list of {{'set', 'manifest', 'sha256'}}")
+        out["consulted"] = tuple(resolved(c) for c in cs)
     return out
 
 

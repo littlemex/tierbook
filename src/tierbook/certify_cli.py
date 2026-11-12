@@ -1,7 +1,8 @@
-"""The certification plane's verbs: `ingest`, `check-observations`, `check-provenance`, `derive`, `drift`, `export-policy`.
+"""The certification plane's verbs: `ingest`, `check-observations`, `check-provenance`, `power`, `derive`, `drift`,
+`export-policy`.
 
 Kept beside `cli.py` rather than inside it so the plane's door can be read on its own; `cli.main` registers these.
-Each verb reads files and writes at most one file (the two `check-*` verbs write none), and prints what it refused.
+Each verb reads files and writes at most one file (the two `check-*` verbs and `power` write none; `derive --ledger` also appends to its ledger), and prints what it refused.
 
 Exit codes: 0 done; 2 refused (bad input, a missing declaration, an export the target cannot express);
 3 `drift` found a deployed assignment contradicted by fresh evidence. A refusal and a contradiction never share a code,
@@ -125,7 +126,8 @@ def cmd_check_observations(args) -> int:
 
 
 def cmd_check_provenance(args) -> int:
-    """Read an arm's provenance file and the manifests it cites, and print what it claims. Nothing is written."""
+    """Read an arm's provenance and the manifests it cites, and print what it claims and the digest to cite it by."""
+    from tierbook.certify import NO_VERSION
     from tierbook.provenance import load_provenance
 
     try:
@@ -133,12 +135,12 @@ def cmd_check_provenance(args) -> int:
     except _refusals() as e:
         print(f"refused: {e}", file=sys.stderr)
         return REFUSED
-    print(f"arm {pv.arm} version {pv.arm_version or '<none>'}")
+    print(f"arm {pv.arm} version {pv.arm_version or NO_VERSION}; cite as sha256 {pv.sha256}")
     for s in pv.trained_on:
-        print(f"trained_on {s.name}: {len(s.items)} items, digest {s.digest}")
+        print(f"trained_on {s.name}: {len(s.items)} items, manifest sha256 {s.sha256}")
     for arm, v in pv.requires:
         print(f"requires {arm} at {v}")
-    print("claims only remove an arm from selection; none is verified")
+    print("these are claims: they can only remove the arm from selection, and none is verified")
     return 0
 
 
@@ -157,6 +159,7 @@ def cmd_derive(args) -> int:
     try:
         cfg, decl, obs, cdig = _load(args)
         policy = derive(obs, cfg, decl, as_of=_as_of(args), candidates_digest=cdig)
+        _record_looks(policy, args.ledger)
     except _refusals() as e:
         print(f"refused: {e}", file=sys.stderr)
         return REFUSED
@@ -172,6 +175,58 @@ def cmd_derive(args) -> int:
               f"{policy['single_best']['arm']} ${c['single_best_spend_per_accepted_usd']:.6f}/accepted "
               f"on {c['common_held_out_items']} common held-out items of {len(c['task_types'])} certified task type(s)")
     print(f"fallback: {(policy.get('fallback') or {}).get('arm')}  wrote {args.out}")
+    return 0
+
+
+def _record_looks(policy: dict, ledger: str | None) -> None:
+    """Count this judgement as one more look at each task type's held-out set, and say which look it is.
+
+    A held-out half is spent by being looked at: three floors, a re-run with a different ladder, or a second look after
+    adding items are all looks at the same items. The ledger is append-only JSONL keyed by the held-out set's digest;
+    without one, the policy says looks were not recorded rather than implying this was the first."""
+    if ledger is None:
+        policy["looks"] = "not recorded (no --ledger)"
+        for e in policy["task_types"].values():
+            if "held_out_set" in e:
+                e["look"] = None
+        return
+    path = Path(ledger)
+    prior = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+    rows = []
+    for t, e in sorted(policy["task_types"].items()):
+        if "held_out_set" not in e:
+            continue
+        k = 1 + sum(1 for r in prior if r.get("task_type") == t and r.get("held_out_set") == e["held_out_set"])
+        e["look"] = k
+        rows.append({"task_type": t, "held_out_set": e["held_out_set"], "look": k, "floor": e.get("floor"),
+                     "alpha": policy["declarations"]["alpha"], "bound": policy["declarations"]["bound"],
+                     "holdout_ladder": policy["declarations"]["holdout_ladder"],
+                     "candidates_digest": policy["candidates_digest"],
+                     "observations_digest": policy["observations_digest"], "derived_at": policy["derived_at"],
+                     "status": e.get("status"), "arm": e.get("arm")})
+    with path.open("a") as f:
+        for r in rows:
+            f.write(json.dumps(r, sort_keys=True) + "\n")
+    policy["looks"] = f"recorded in {ledger}"
+
+
+def cmd_power(args) -> int:
+    """How many held-out items an arm with an assumed true rate needs to pass a floor with a given probability.
+    Arithmetic only, for before a look: every input is the caller's and none is defaulted."""
+    from tierbook.bounds import false_pass_at_floor, items_for_power, resolve
+
+    try:
+        bound = resolve(args.bound)
+        n = items_for_power(args.floor, args.assumed_rate, args.alpha, args.power, bound, max_n=args.max_n)
+    except _refusals() as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return REFUSED
+    if n is None:
+        print(f"not reached by {args.max_n} held-out items")
+        return 0
+    fp = false_pass_at_floor(n, args.floor, args.alpha, bound)
+    print(f"{n} held-out items: an arm at {args.assumed_rate} passes floor {args.floor} with probability >= "
+          f"{args.power}; an arm exactly at the floor passes with {fp:.4f}")
     return 0
 
 
@@ -326,6 +381,16 @@ def register(sub, common) -> None:
     c.add_argument("observations", nargs="+")
     c.set_defaults(fn=cmd_check_observations)
 
+    pw = sub.add_parser("power", parents=[common],
+                        help="held-out items an assumed rate needs to pass a floor, before looking")
+    pw.add_argument("--floor", type=float, required=True)
+    pw.add_argument("--assumed-rate", type=float, required=True)
+    pw.add_argument("--alpha", type=float, required=True)
+    pw.add_argument("--power", type=float, required=True)
+    pw.add_argument("--bound", required=True, help="e.g. tierbook.bounds:wilson or tierbook.bounds:clopper_pearson")
+    pw.add_argument("--max-n", type=int, required=True)
+    pw.set_defaults(fn=cmd_power)
+
     pv = sub.add_parser("check-provenance", parents=[common],
                         help="read an arm's provenance and the manifests it cites, writing nothing")
     pv.add_argument("provenance")
@@ -340,6 +405,10 @@ def register(sub, common) -> None:
         d.add_argument("--declarations", required=True)
         d.add_argument("--out", required=True)
         d.add_argument("--as-of", default=None, help="ISO time freshness is judged at; default now, recorded")
+        if name == "derive":
+            d.add_argument("--ledger", default=None,
+                           help="append-only looks ledger (JSONL): this judgement is counted as one more look at "
+                                "each task type's held-out set, and the policy says which look it is")
         if name == "drift":
             d.add_argument("--deployed", required=True, help="the policy the router is running")
             d.add_argument("--fresh", nargs="*", default=None, help="observations since it was deployed")

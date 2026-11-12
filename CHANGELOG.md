@@ -2,17 +2,29 @@
 
 ## Unreleased
 
-* **Arm provenance and consulted sets, read only to subtract.** A candidate may cite `arm_provenance` (`{path, sha256}`,
-  a file its trainer wrote: `arm_version`, `trained_on` set manifests, `requires: [{arm, arm_version}]`, and an
-  opaque `trainer` section) and `consulted` sets (the items a recipe or threshold was chosen on). `derive` excludes an
-  arm from selection when a held-out item appears in a set it was trained on or consulted (by id, or by content when
-  ids are content digests), when its observed version is not its provenance's, or when a required arm is observed at
-  another version, and says which under `excluded_by_provenance`. A citation that does not match its digest is refused
-  at load time. These are claims tierbook cannot verify, so they can remove an arm and never admit one. Set manifests
-  are JSONL `{item, content_sha256}`; a set's digest is over its sorted content digests. `tierbook check-provenance`
-  reads a provenance file and the manifests it cites. Needed because the record cleaned certification items out of a
-  training log by hand, and tuned thresholds and compared recipes on sets nothing recorded.
-
+* **Arm provenance and consulted sets, read only to subtract.** A candidate may cite `arm_provenance` (`{path, sha256}`
+  of a file its trainer wrote: `arm_version`, `trained_on` set manifests, `requires: [{arm, arm_version}]` for arms it
+  cannot be served without, and an opaque `trainer` section) and `consulted` sets (items its maker saw for a choice).
+  Every citation carries the SHA-256 of the cited file's bytes, which pins ids and contents together; a mismatch is
+  refused. `derive` excludes an arm from selection when a held-out item appears in a set it, or any node of a cascade
+  it is built from, was trained on or consulted (by id, or by content for `sha256:<content>` ids), when its observed
+  version is not its provenance's, or when a required arm is observed at another version. It reports per arm which
+  files it read, what it could not check (an arm or requirement with no fresh rows), and selection-half overlap,
+  which is recorded and does not exclude. These are claims tierbook cannot verify, so they can remove an arm and
+  never admit one; `excluded_by_provenance` and `excluded_by_interface` are listed separately. Set manifests are JSONL
+  `{item, content_sha256}`. `tierbook check-provenance` reads a provenance file and the manifests it cites and prints
+  the digest to cite it by. Only `derive` and `check-provenance` read these files.
+* **Exact arithmetic beside the bound.** Every held-out cell carries `false_pass_at_floor`: the exact binomial chance
+  that an arm exactly at the floor passes on that many items under the declared bound (round 14's 0.0204 and 0.0119
+  are reproduced). `tierbook.bounds:clopper_pearson` is an exact interval. `tierbook power` gives the held-out size an
+  assumed rate needs to pass a floor with a given probability, every input required.
+* **Declared price inputs.** `usd_per_attempt` may give `usd_per_hour`, `attempts_per_hour`, `one_off_usd` and
+  `horizon_attempts` instead of `usd`, and tierbook computes the price (round 13's $0.0000119 is reproduced).
+  `measured_on` names the version the throughput was measured on; `derive` refuses it against rows from another
+  version unless `stands_in_for` says why, in the operator's words, which is then carried as a claim.
+* **A looks ledger.** `derive --ledger FILE` appends one row per task type keyed by the digest of its held-out items,
+  and the policy says which look this is; without a ledger it says looks were not recorded. Three floors, a re-run with
+  another ladder, and a second look are all looks at the same held-out items.
 * **Observation format 3: `arm_version` and `path`.** An observation may name the exact thing that answered (opaque,
   compared and never parsed) and the component arms that ran (listed, never used to split a rate). `derive` refuses an
   arm whose fresh rows name two versions, or a version on some rows and none on others; aged-out rows do not count.
