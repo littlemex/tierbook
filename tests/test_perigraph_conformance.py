@@ -26,6 +26,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -35,7 +37,7 @@ from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, CONTEXT_CROSS
                                DIGEST_BOUNDARIES, HARNESS_SOURCING, IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING)
 
 SPEC_PATH = Path(__file__).resolve().parent / "spec" / "perigraph-vocabularies.json"
-SPEC_DIGEST = "4d07c22912a44c541a77804c1ce9e11a89a7c5e66d6d8284aba441387b478f2a"
+SPEC_DIGEST = "d2e12f5d935a623e1e89673e40744aca6d8a84a2c6a821b43605469d47e83074"
 SPEC = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
 
 
@@ -53,8 +55,14 @@ def test_the_parts_match():
 
 
 def test_the_sourcing_modes_and_which_may_identify_match():
-    assert HARNESS_SOURCING == tuple(SPEC["sourcing"]["values"])
+    """Version 2 added `loaded_by_us`, which only a model part may carry and a harness part must refuse. This package
+    holds harness parts only, so its sourcing list is the spec's less the model-only one -- and a `Part` refuses it."""
+    model_only = set(SPEC["sourcing"]["may_key_model_identity"])
+    assert HARNESS_SOURCING == tuple(v for v in SPEC["sourcing"]["values"] if v not in model_only)
     assert IDENTIFYING_SOURCING == tuple(SPEC["sourcing"]["may_key_identity"])
+    for v in model_only:
+        with pytest.raises(hn.Unidentified):
+            hn.Part(kind="instruction", sourcing=v, digest="a" * 64)
 
 
 def test_the_digest_boundaries_and_which_may_identify_match():
@@ -121,11 +129,12 @@ def test_every_refusal_the_spec_requires_is_either_implemented_or_unreachable_wi
     performs reads identifying parts, and an identifying part is `model_visible` by construction. The comparison cannot
     reach a `parsed` digest, which is stronger than refusing to.
     """
+    from tierbook import certify as ce
     from tierbook import counterfactual as cf
 
     implemented = {
         "A verdict over a record whose status is not complete.": hn.Collection.admissible_to_a_verdict,
-        "A verdict over a record with no identity.": hn.Collection.admissible_to_a_verdict,
+        "A verdict over a record with no harness identity.": hn.Collection.admissible_to_a_verdict,
         "A verdict over a record where the collector's manifest claims a part the record reports not_reachable, or "
         "says nothing about.": hn.Collection.contradictions,
         "An identity built on any digest whose boundary is not model_visible.": hn.Part.identifying,
@@ -135,10 +144,23 @@ def test_every_refusal_the_spec_requires_is_either_implemented_or_unreachable_wi
         "A statement of what an alternative would have cost when either side's context_partitioning is unrecorded.":
             sp.refuse_undefined_counterfactual,
         "A comparison where two traces diverge on the same occasion and the tool declared determinism.": hn.veto,
+        # tierbook reads a model identity only as the opaque `arm_version` a sender composed from it, so grouping by
+        # model identity is grouping by `arm_version`, and "some with one and some without" is "" beside a value.
+        "A verdict over records grouped as one arm that carry more than one model identity, or some with one and some "
+        "without.": ce.arm_versions,
+        # A provenance or a deployed certificate is the claim; its `arm_version` is what it is bound to.
+        "A claim bound to a model identity, applied to records that do not carry that model identity.":
+            ce.provenance_check,
     }
     unreachable = {
         "A comparison of two `parsed` digests produced by different collectors or different collector versions.":
             "this package never compares a parsed digest at all -- see the proof below",
+        "A model identity or an artifact identity built on any part whose sourcing is not loaded_by_us.":
+            "this package builds no model or artifact identity: it holds no model part, and a harness Part refuses "
+            "loaded_by_us (test_the_sourcing_modes_and_which_may_identify_match)",
+        "A comparison of two model identities produced by different collectors or different collector versions.":
+            "this package compares `arm_version` strings for equality only, and inequality only ever excludes or "
+            "refuses; it never reads two versions as the same model, nor a difference as a licence -- proved below",
     }
 
     required = set(SPEC["receiver_obligations"]["must_refuse"])
@@ -148,7 +170,16 @@ def test_every_refusal_the_spec_requires_is_either_implemented_or_unreachable_wi
     for obligation, callable_ in implemented.items():
         assert callable_ is not None, obligation
 
-    # The proof for the unreachable one. `refuse_incomparable` builds its difference from identifying parts only, and a
+    # The proof for the cross-collector one: two strings that differ only because two collectors rendered one model are
+    # refused as a mix, never merged -- the comparison the spec forbids would have to conclude something, and this one
+    # can only refuse.
+    from tierbook.observation import Observation
+    rows = [Observation(item="i", task_type="t", arm="a", outcome="accepted", arm_version=v)
+            for v in ("perigraph/2/model/" + "1" * 24, "perigraph/2/model/" + "2" * 24)]
+    with pytest.raises(ce.EvidenceError):
+        ce.arm_versions(rows)
+
+    # The proof for the parsed-digest one. `refuse_incomparable` builds its difference from identifying parts only, and a
     # part carrying a non-model_visible digest is never identifying, so no comparison here can read one.
     parsed = hn.Part(kind="decoding", sourcing="in_the_request", label="t=0",
                      digest=hn.digest_bytes("temperature=0.0"), boundary="parsed")

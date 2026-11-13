@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+* **Observation format 4 adds an opaque `arm_artifact`, and a provenance may name one.** `derive` refuses an arm whose
+  fresh rows name two artifacts, or one on some rows and none on others, by the same rule as `arm_version`; a
+  provenance's `arm_artifact` excludes the arm when the observed one differs, and is reported unchecked when the arm
+  has no fresh rows. Each of a provenance's `arm_version` and `arm_artifact` is checked only when it is named. Needed
+  because a trainer knows the files it wrote and not how a server will load them: binding its claim to `arm_version`
+  broke the claim on every runtime change (phase 6: an edit to a spec moved the teacher's version and refused every
+  row), while binding it to nothing let a retrain under the same name inherit the old certificate (R5 to R6). A row
+  is written in format 4 only when it names an artifact, so older files stay readable.
+* **The vendored perigraph spec is version 2.** The conformance test maps its four new receiver obligations: mixed
+  model identities under one arm to `arm_versions`, a claim bound to a model identity to `provenance_check`, and two
+  proved unreachable (this package builds no model identity, and it compares versions for equality only, so a
+  difference can only refuse). Its harness sourcing list is the spec's less `loaded_by_us`, which only a model part
+  may carry.
 * **`export-policy --target prismyra-learn` refuses what it would otherwise skip in silence.** A task type the policy
   exports (certified, or unconfirmed under `--allow-unconfirmed`) that no `--signal TASK_TYPE=TAG` maps to a tag is
   refused; so is a tag carrying an external admission this tool wrote earlier that no task type maps to, two task

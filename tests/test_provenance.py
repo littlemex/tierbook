@@ -191,3 +191,57 @@ def test_manifest_digests_must_be_lowercase_hex(tmp_path):
     p.write_text(json.dumps({"item": "a", "content_sha256": "A" * 64}) + "\n")
     with pytest.raises(EvidenceError, match="lowercase hex"):
         load_manifest("m", p, file_sha256(p))
+
+
+# --- arm_artifact: the stored files the trainer wrote, not how a server loaded them ---------------------------------
+
+def artifact_trainer(tmp_path, artifact):
+    """A trainer that names only what it holds at save time: the artifact, not the served version."""
+    mpath, digest = manifest(tmp_path, "trained", ["train-1"])
+    prov = {"format": 1, "arm": "student", "arm_artifact": artifact,
+            "trained_on": [{"set": "trained", "manifest": mpath.name, "sha256": digest}]}
+    path = tmp_path / "student.provenance.json"
+    path.write_text(json.dumps(prov))
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def artifact_rows(artifact, version="perigraph/2/model/" + "1" * 24, n=60):
+    return [dataclasses.replace(r, arm_artifact=artifact) for r in rows(n, version=version)]
+
+
+A1, A2 = "perigraph/2/artifact/" + "a" * 24, "perigraph/2/artifact/" + "b" * 24
+
+
+def test_a_retrained_artifact_under_the_same_arm_name_is_excluded(tmp_path):
+    """R5 -> R6: the certificate was over bytes that no longer existed. The trainer named R5's files; R6's answer."""
+    cfg = config(tmp_path, artifact_trainer(tmp_path, A1))
+    entry = certify.derive(artifact_rows(A2), cfg, declarations())["task_types"][T]
+    assert entry["arm"] != "student"
+    pv = entry["arms"]["student"]["provenance"]
+    assert pv["exclude"]["artifact_mismatch"] == [{"arm": "student", "provenance": A1, "observed": A2}]
+
+
+def test_a_runtime_change_does_not_break_a_claim_bound_to_the_artifact(tmp_path):
+    """Phase 6 and R14: what the server ran changed (arm_version moved), the trainer's files did not. A provenance
+    naming only the artifact still applies, so it neither excludes the arm nor goes unchecked."""
+    cfg = config(tmp_path, artifact_trainer(tmp_path, A1))
+    entry = certify.derive(artifact_rows(A1, version="perigraph/2/model/" + "9" * 24), cfg,
+                           declarations())["task_types"][T]
+    assert entry["arm"] == "student" and entry["status"] == certify.CERTIFIED
+    pv = entry["arms"]["student"]["provenance"]
+    assert not pv["exclude"] and not [u for u in pv["unchecked"] if u["check"] == "arm_artifact"]
+
+
+def test_two_artifacts_under_one_arm_name_are_refused():
+    mixed = artifact_rows(A1, n=4) + artifact_rows(A2, n=4)
+    with pytest.raises(EvidenceError, match="2 artifacts"):
+        certify.arm_artifacts(mixed)
+    with pytest.raises(EvidenceError, match="2 artifacts"):
+        certify.arm_artifacts(artifact_rows(A1, n=4) + rows(4))
+
+
+def test_an_artifact_claim_against_rows_that_name_no_artifact_excludes_rather_than_passes(tmp_path):
+    cfg = config(tmp_path, artifact_trainer(tmp_path, A1))
+    entry = certify.derive(rows(), cfg, declarations())["task_types"][T]
+    pv = entry["arms"]["student"]["provenance"]
+    assert pv["exclude"]["artifact_mismatch"][0]["observed"] == certify.NO_VERSION

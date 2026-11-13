@@ -106,12 +106,13 @@ def cmd_check_observations(args) -> int:
     The validator a sender runs before handing files over: a row this reader refuses is refused here first, with its
     file and line, and an arm that mixes versions is named. Candidates, declarations and freshness are not read, so
     a file that passes here can still be refused by `derive` for those. Nothing is written."""
-    from tierbook.certify import NO_VERSION, arm_versions
+    from tierbook.certify import NO_VERSION, arm_artifacts, arm_versions
     from tierbook.observation import read
 
     try:
         obs = read(args.observations)
         arm_versions(obs)
+        arm_artifacts(obs)
     except _refusals() as e:
         print(f"refused: {e}", file=sys.stderr)
         return REFUSED

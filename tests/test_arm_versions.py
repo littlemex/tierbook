@@ -216,3 +216,13 @@ def test_ingest_stamps_a_declared_version(tmp_path):
                "--arm-version", "student=b").returncode == 2
     assert run("ingest", "--calls", str(calls), "--out", str(out), "--append",
                "--arm-version", "student=other").returncode == 2
+
+
+def test_format_4_is_written_only_for_an_artifact_and_an_older_format_may_not_carry_it(tmp_path):
+    a = dataclasses.replace(obs("x", "student", "accepted"), arm_artifact="perigraph/2/artifact/" + "a" * 24)
+    p = tmp_path / "o.jsonl"
+    write([a], p)
+    assert json.loads(p.read_text())["format"] == 4 and read(p) == [a]
+    row = {"format": 3, "item": "x", "task_type": T, "arm": "student", "outcome": "accepted", "arm_artifact": "a"}
+    with pytest.raises(EvidenceError, match="format 4"):
+        Observation.from_row(row)

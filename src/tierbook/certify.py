@@ -555,7 +555,9 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
                 "may only stand in for an hourly bill, never for a price card or for an arm the router cannot reach")
     _check_interfaces(cfg, decl)
     claims = _Claims(cfg)
-    versions = arm_versions(fresh_only(observations, decl, as_of))
+    fresh_rows = fresh_only(observations, decl, as_of)
+    versions = arm_versions(fresh_rows)
+    artifacts = arm_artifacts(fresh_rows)
     price_checks: dict[str, dict] = {}
     for arm, p in decl.usd_per_attempt.items():
         cand = cfg.candidates.get(arm)
@@ -617,7 +619,8 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             cell["held_out"]["false_pass_at_floor"] = false_pass_at_floor(ho_n, floor, alpha_ho, bound) if ho_n else None
             keys = [key for key in results if key[0] == t and key[1] == a]
             pc = provenance_check(a, {k[2] for k in keys if part[k] == "held_out"},
-                                  {k[2] for k in keys if part[k] == "selection"}, versions, claims, cfg)
+                                  {k[2] for k in keys if part[k] == "selection"}, versions, claims, cfg,
+                                  artifacts=artifacts)
             if pc["checked"] or pc["unchecked"]:
                 cell["provenance"] = pc
         by_interface = sorted(a for a, s in per_arm.items()
@@ -745,16 +748,25 @@ def arm_versions(observations: Iterable[Observation]) -> dict[str, str]:
     different things that answered is a rate of neither, and a certificate over it binds to nothing that can be served.
     Give each version its own arm name, or observe one version only.
     """
+    return _one_per_arm(observations, "arm_version", "versions")
+
+
+def arm_artifacts(observations: Iterable[Observation]) -> dict[str, str]:
+    """The one `arm_artifact` each arm's attempts carry, by the same rule as `arm_versions`: two stored artifacts under
+    one arm name is a retrain nobody renamed, which is how R5's certificate came to describe R6."""
+    return _one_per_arm(observations, "arm_artifact", "artifacts")
+
+
+def _one_per_arm(observations: Iterable[Observation], field: str, plural: str) -> dict[str, str]:
     seen: dict[str, set[str]] = {}
     for o in observations:
-        seen.setdefault(o.arm, set()).add(o.arm_version)
+        seen.setdefault(o.arm, set()).add(getattr(o, field))
     out: dict[str, str] = {}
     for arm, vs in sorted(seen.items()):
         if len(vs) > 1:
             shown = sorted(v or NO_VERSION for v in vs)
-            raise EvidenceError(f"arm {arm!r} has attempts from {len(vs)} versions {shown}; a rate over two things "
-                                "that answered certifies neither. Give each version its own arm name, or observe "
-                                "one version only")
+            raise EvidenceError(f"arm {arm!r} has attempts from {len(vs)} {plural} {shown}; a rate over two things "
+                                f"that answered certifies neither. Give each its own arm name, or observe one only")
         out[arm] = next(iter(vs))
     return out
 
@@ -840,7 +852,7 @@ class _Claims:
 
 
 def provenance_check(arm: str, held_out: set[str], selection: set[str], versions: dict[str, str], claims: _Claims,
-                     cfg: Config) -> dict:
+                     cfg: Config, *, artifacts: dict[str, str] | None = None) -> dict:
     """What the arm's own claims say about it: `exclude` (reasons it is removed from selection, empty if none),
     `unchecked` (checks that could not be made), and `checked` (which cited files were read). Claims only subtract."""
     from tierbook.provenance import overlap
@@ -867,6 +879,13 @@ def provenance_check(arm: str, held_out: set[str], selection: set[str], versions
             elif seen != pv.arm_version:
                 exclude.setdefault("version_mismatch", []).append(
                     {"arm": node, "provenance": pv.arm_version, "observed": seen or NO_VERSION})
+        if pv.arm_artifact:
+            got_artifact = (artifacts or {}).get(node)
+            if got_artifact is None:
+                unchecked.append({"arm": node, "check": "arm_artifact", "why": "no fresh rows of this arm"})
+            elif got_artifact != pv.arm_artifact:
+                exclude.setdefault("artifact_mismatch", []).append(
+                    {"arm": node, "provenance": pv.arm_artifact, "observed": got_artifact or NO_VERSION})
         for req_arm, req_version in pv.requires:
             got = versions.get(req_arm)
             if got is None:

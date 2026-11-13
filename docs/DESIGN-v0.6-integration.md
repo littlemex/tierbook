@@ -24,6 +24,8 @@ certificate to exactly what answered, and refuses evidence that cannot support a
 
 tierbook does not say what a version is made of. A weights digest, an image digest, a perigraph identity, or a
 composition of them is the sender's choice, and so is an interface name. The opaque string is compared, never parsed.
+Format 4 adds `arm_artifact` beside it, for what a trainer can name at save time; perigraph 2 recommends
+`perigraph/2/model/<model identity>` and `perigraph/2/artifact/<artifact identity>` for the two.
 
 ## Phase 2 to 7 (contracts)
 

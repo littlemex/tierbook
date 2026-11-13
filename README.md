@@ -257,7 +257,10 @@ deployed assignment was contradicted by fresh evidence.
 * **A certificate may be bound to what answered.** An observation may name an opaque `arm_version`; an arm whose fresh
   rows name two versions is refused, the policy names the version it certified (per component for a cascade), and
   `drift` refuses fresh rows from another version. A certificate issued over unversioned rows binds nothing, and
-  `drift` says so. A declared `interfaces` list keeps arms a router cannot serve out of selection; with it declared,
+  `drift` says so. An observation may also name an opaque `arm_artifact` -- the stored files, which a trainer can name
+  at save time -- and a provenance naming one is checked against it, so a server's runtime change does not break a
+  trainer's claim and a retrain under the same name does. perigraph 2's model and artifact identities are one way to
+  compose the two strings (`perigraph/2/model/<id>`, `perigraph/2/artifact/<id>`); tierbook never parses either. A declared `interfaces` list keeps arms a router cannot serve out of selection; with it declared,
   every candidate, cascades included, must say what it is.
 * **A trainer's claims only subtract.** A candidate may cite what its arm was trained on and which sets its maker
   saw; an arm whose held-out items appear there is excluded from selection, and checks that cannot be made are

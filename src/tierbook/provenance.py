@@ -10,7 +10,7 @@ compact JSON). A manifest is cited by the SHA-256 of its file bytes, which pins 
 **An arm's provenance** (JSON), written by whatever trained or froze the arm (a distillation trainer, a fine-tune
 script, an RL system's snapshot):
 
-    {"format": 1, "arm": "student-a", "arm_version": "...",
+    {"format": 1, "arm": "student-a", "arm_version": "...", "arm_artifact": "...",
      "trained_on": [{"set": "stream", "manifest": "sets/stream.jsonl", "sha256": "..."}],
      "requires": [{"arm": "teacher", "arm_version": "..."}],
      "trainer": {...anything...}}
@@ -22,7 +22,10 @@ threshold tuned) as ``"consulted": [{"set", "manifest", "sha256"}]``. Every cita
 
 The one rule. These are claims tierbook cannot verify, so they can only remove an arm from selection, never admit one.
 An arm is excluded when an item of its held-out half appears in a set it was trained on or consulted, when its observed
-`arm_version` differs from its provenance's, or when a required arm is observed at another version. A check that
+`arm_version` or `arm_artifact` differs from its provenance's, or when a required arm is observed at another version.
+Each is checked only when the provenance names it. A trainer usually knows only `arm_artifact` -- the stored files it
+wrote -- and not `arm_version`, which also covers how a server loaded them; naming the artifact binds the claim to the
+bytes without breaking it when the server's runtime changes. A check that
 cannot be made (an arm or a requirement not observed) is reported as unchecked, not passed. Overlap is by item id, and
 also by content when an observation's id has the form ``sha256:<content_sha256>``.
 """
@@ -40,7 +43,7 @@ FORMAT = 1
 #: The id form whose tail is an item's content digest, so a manifest that names other ids still matches by content.
 CONTENT_ID_PREFIX = "sha256:"
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_PROVENANCE_KEYS = {"format", "arm", "arm_version", "trained_on", "requires", "trainer"}
+_PROVENANCE_KEYS = {"format", "arm", "arm_version", "arm_artifact", "trained_on", "requires", "trainer"}
 
 
 def file_sha256(path: str | Path) -> str:
@@ -111,6 +114,7 @@ class Provenance:
     trained_on: tuple[ItemSet, ...]
     requires: tuple[tuple[str, str], ...]
     sha256: str
+    arm_artifact: str = ""
 
 
 def load_provenance(path: str | Path, sha256: str | None) -> Provenance:
@@ -140,7 +144,7 @@ def load_provenance(path: str | Path, sha256: str | None) -> Provenance:
         req.append((str(r["arm"]), str(r["arm_version"])))
     return Provenance(arm=raw["arm"], arm_version=str(raw.get("arm_version") or ""),
                       trained_on=load_sets(raw.get("trained_on") or [], p.parent, f"provenance {p}"),
-                      requires=tuple(req), sha256=got)
+                      requires=tuple(req), sha256=got, arm_artifact=str(raw.get("arm_artifact") or ""))
 
 
 def overlap(items, sets: tuple[ItemSet, ...]) -> dict[str, list[str]]:
