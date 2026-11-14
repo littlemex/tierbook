@@ -524,10 +524,16 @@ COLLECTION_STATUS = ("complete", "aborted", "collector_failed")
 #: versions can serialise differently and decode to an identical model-visible string, which splits two runs that were
 #: the same, and two strings that canonicalise to one value can behave differently when embedded verbatim in a prompt,
 #: which merges two runs that were not.
-DIGEST_BOUNDARIES = ("transport", "parsed", "model_visible")
+#:
+#: `canonical_value` (perigraph 4) is the protocol value again, under one serialisation every implementation computes
+#: alike, so it compares across collectors. It merges two spellings of one value, which is right where an engine reads
+#: the value, and it keys only the generation controls, and only beside an instruction.
+DIGEST_BOUNDARIES = ("transport", "parsed", "canonical_value", "model_visible")
 
-#: Which boundary may key an identity. Only the one the model actually read, for the reason above.
-IDENTIFYING_BOUNDARIES = ("model_visible",)
+#: The one boundary at which each part may key an identity (perigraph 4 `keying_boundary`). A part not listed never
+#: keys one; a listed part at another boundary keys nothing.
+KEYING_BOUNDARY = {"instruction": "model_visible", "request_template": "model_visible",
+                   "generation_controls": "canonical_value"}
 
 #: What crosses between two contexts, which is what decides whether splitting them is cheap. Closed, because the three
 #: entries have opposite economics and an open-ended name would hide which one applied.

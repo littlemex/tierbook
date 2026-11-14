@@ -26,7 +26,9 @@ tierbook does not say what a version is made of. A weights digest, an image dige
 composition of them is the sender's choice, and so is an interface name. The opaque string is compared, never parsed.
 Format 4 adds `arm_artifact` beside it, for what a trainer can name at save time; perigraph 2 recommends
 `perigraph/2/model/<model identity>` and `perigraph/2/artifact/<artifact identity>` for the two. Format 5 adds
-`arm_harness`, refused the same way: `perigraph/3/harness/<harness identity>` is one composition. Because tierbook
+`arm_harness`, refused the same way: `perigraph/4/harness/<harness identity>` is one composition, and perigraph 4's
+rules over the parts that never key its identity (readout, retry policy, sampler settings, unlisted request members)
+reach tierbook only if the sender folds them into the string. Because tierbook
 refuses on a difference and never admits on an agreement, a sender may put into `arm_harness` anything that can only
 split arms, for example a digest of the parts a record holds when the record has no harness identity; tierbook still
 does not read what the string is made of.

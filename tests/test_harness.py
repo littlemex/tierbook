@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from tierbook import harness as hn  # noqa: E402
 from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, DIGEST_BOUNDARIES,  # noqa: E402
-                              HARNESS_SOURCING, IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING)
+                              HARNESS_SOURCING, IDENTIFYING_SOURCING, KEYING_BOUNDARY)
 
 TERSE = "Answer with the option letter only. Do not explain."
 EXPLAIN = "Think step by step, then answer with the option letter."
@@ -155,6 +155,7 @@ def test_the_unobserved_parts_are_reported():
 
 def test_the_parts_nothing_was_recorded_about_are_reported_too():
     assert set(full().missing) == {"request_template", "turn_budget", "retry_policy", "readout", "decoding",
+                                   "generation_controls",
                                    "context_partitioning", "tool_trace"}
 
 
@@ -236,7 +237,8 @@ def test_a_manifest_cannot_claim_an_unknown_part():
 def test_a_record_with_one_part_is_valid_and_names_what_it_lacks():
     """The permissive half. A collector that refused a partial record would produce no record, and a run that emitted
     nothing is indistinguishable from a run that emitted a perfect record of nothing."""
-    no_template = (hn.Absence(kind="request_template", reason="not_provided"),)
+    no_template = (hn.Absence(kind="request_template", reason="not_provided"),
+                   hn.Absence(kind="generation_controls", reason="not_provided"))
     coll = hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)), absences=no_template)
     assert coll.admissible_to_a_verdict() is True
     assert "tool_schemas" in coll.unaccounted and "decoding" in coll.unaccounted
@@ -246,7 +248,8 @@ def test_a_request_template_nobody_reported_withdraws_the_identity():
     """perigraph 3 `must_be_known_for_identity`: a template the record says nothing about might have been there, so the
     instruction alone cannot stand for the harness; a template the collector could not read is the same."""
     coll = hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)))
-    assert coll.admissible_to_a_verdict() is False and coll.identity_withdrawn == ("request_template",)
+    assert coll.admissible_to_a_verdict() is False
+    assert coll.identity_withdrawn == ("request_template", "generation_controls")
     assert "neither held nor reported as not sent" in coll.why_not()
     unread = hn.collect_from_request({"messages": [{"role": "system", "content": "Terse."}],
                                       "perigraph_template": {"messages": [{"role": "system"}]}},
@@ -330,8 +333,8 @@ def test_only_the_text_the_model_read_may_key_an_identity():
     """Non-identifying rather than refused, and the difference matters: a `tools` array is in the request and is not text
     the model reads, so `in_the_request` with a `parsed` digest is the COMMON case. Refusing it made the ordinary part
     unrepresentable; excluding it from the hash makes the wrong identity unrepresentable instead."""
-    assert DIGEST_BOUNDARIES == ("transport", "parsed", "model_visible")
-    assert IDENTIFYING_BOUNDARIES == ("model_visible",)
+    assert DIGEST_BOUNDARIES == ("transport", "parsed", "canonical_value", "model_visible")
+    assert KEYING_BOUNDARY["instruction"] == "model_visible"
     for boundary in ("transport", "parsed"):
         p = part(boundary=boundary)
         assert p.identifying is False, boundary
@@ -369,7 +372,7 @@ def test_the_collision_is_unrepresentable_rather_than_hashed_around():
 
     What this pins is the reachability claim -- there is no way to construct an identifying part on another boundary."""
     for boundary in DIGEST_BOUNDARIES:
-        assert part(boundary=boundary).identifying is (boundary in IDENTIFYING_BOUNDARIES), boundary
+        assert part(boundary=boundary).identifying is (boundary == KEYING_BOUNDARY["instruction"]), boundary
 
 
 def test_the_default_boundary_is_the_true_statement_about_existing_callers():
@@ -583,3 +586,13 @@ def test_the_manifest_is_static_per_version_so_it_can_actually_contradict():
     for."""
     assert collected().manifest.reaches == hn.FROM_A_REQUEST
     assert collected({"messages": [{"role": "user", "content": "Q"}]}).manifest.reaches == hn.FROM_A_REQUEST
+
+
+def test_generation_controls_this_collector_does_not_read_withdraw_the_identity():
+    """perigraph 4. R17b's base and reasoning bodies differed only in max_tokens and enable_thinking; a collector that
+    does not read generation controls must not give both the instruction's identity."""
+    sys_only = {"messages": [{"role": "system", "content": "Terse."}]}
+    assert hn.collect_from_request(sys_only, collector="c", version="1").admissible_to_a_verdict() is True
+    with_controls = hn.collect_from_request({**sys_only, "max_tokens": 8}, collector="c", version="1")
+    assert with_controls.admissible_to_a_verdict() is False
+    assert with_controls.identity_withdrawn == ("generation_controls",)

@@ -34,10 +34,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from tierbook import harness as hn  # noqa: E402
 from tierbook import spend as sp  # noqa: E402
 from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, CONTEXT_CROSSINGS,  # noqa: E402
-                               DIGEST_BOUNDARIES, HARNESS_SOURCING, IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING)
+                               DIGEST_BOUNDARIES, HARNESS_SOURCING, IDENTIFYING_SOURCING, KEYING_BOUNDARY)
 
 SPEC_PATH = Path(__file__).resolve().parent / "spec" / "perigraph-vocabularies.json"
-SPEC_DIGEST = "1ca5b18c7a2f66f3fd8d0140709b4e570004590ff2f11b4e3932f74b9e9e62b3"
+SPEC_DIGEST = "cee8630349b598a1062a6d2fdc75e9defb3a5c688f1782ed7a3a15ab6d1ed8c6"
 SPEC = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
 
 
@@ -67,7 +67,14 @@ def test_the_sourcing_modes_and_which_may_identify_match():
 
 def test_the_digest_boundaries_and_which_may_identify_match():
     assert DIGEST_BOUNDARIES == tuple(SPEC["boundaries"]["values"])
-    assert IDENTIFYING_BOUNDARIES == tuple(SPEC["boundaries"]["may_key_identity"])
+    assert KEYING_BOUNDARY == SPEC["keying_boundary"]["parts"]
+
+
+def test_the_generation_control_members_match_the_binding():
+    """Version 4. This collector does not digest generation controls; it must still know which members are they, so a
+    body carrying one withdraws the identity instead of keeping the coarser one."""
+    members = SPEC["bindings"]["openai_chat_completions"]["members"]
+    assert hn.GENERATION_CONTROL_MEMBERS == tuple(k for k, v in members.items() if v == ["generation_controls"])
 
 
 def test_the_parts_that_may_never_identify_match():
@@ -145,7 +152,8 @@ def test_every_refusal_the_spec_requires_is_either_implemented_or_unreachable_wi
         "A verdict over a record with no harness identity.": hn.Collection.admissible_to_a_verdict,
         "A verdict over a record where the collector's manifest claims a part the record reports not_reachable, or "
         "says nothing about.": hn.Collection.contradictions,
-        "An identity built on any digest whose boundary is not model_visible.": hn.Part.identifying,
+        "An identity built on any digest whose boundary is not the one keying_boundary lists for its part.":
+            hn.Part.identifying,
         "A comparison of two arms whose decisions were missing different facts, or where one recorded its missingness "
         "and the other did not.": cf.refuse_differential_missingness,
         "A comparison of two conversations of different turn counts.": sp.refuse_incomparable_shapes,
@@ -161,6 +169,16 @@ def test_every_refusal_the_spec_requires_is_either_implemented_or_unreachable_wi
         "A verdict over records grouped as one arm when the distinct harness identities derived from them number more "
         "than one, or number one while some record has none.": ce.arm_harnesses,
         # A provenance or a deployed certificate is the claim; its `arm_version` is what it is bound to.
+        # Version 4. tierbook does not hold the parts that never key the identity or the unlisted members: it reads only
+        # the opaque `arm_harness`. A sender meets these two by composing `arm_harness` so that it differs whenever they
+        # would refuse -- for example from the harness identity and the uniform_within_arm digests and the unlisted
+        # names -- and `arm_harnesses` then refuses the mix. tierbook still does not parse the string.
+        "A verdict over records grouped as one arm when, for a part in uniform_within_arm, two records hold it at "
+        "canonical_value with different digests, or one holds it at canonical_value and another has it absent as "
+        "not_provided.": ce.arm_harnesses,
+        "A verdict over records grouped as one arm whose perigraph.request.unlisted sets or "
+        "perigraph.request.unlisted_omitted counts differ, or where some records carry them and some do not.":
+            ce.arm_harnesses,
         "A claim bound to a model identity, applied to records that do not carry that model identity.":
             ce.provenance_check,
     }

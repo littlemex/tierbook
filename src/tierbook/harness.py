@@ -41,7 +41,7 @@ import hashlib
 from dataclasses import dataclass
 
 from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, DIGEST_BOUNDARIES, HARNESS_SOURCING,
-                              IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING, EvidenceError)
+                              IDENTIFYING_SOURCING, KEYING_BOUNDARY, EvidenceError)
 
 #: The parts of a harness this package can name. Closed, because a part nobody named is a part that changes without the
 #: identity changing, and that is the whole defect.
@@ -64,7 +64,11 @@ HARNESS_PARTS = (
     "turn_budget",          # how many turns it may take
     "retry_policy",         # what it retries and how often
     "readout",              # how the final answer is taken out of the reply
-    "decoding",             # temperature, top-p, and whether output is grammar-constrained
+    # The request members that select what the engine renders, constrain the output's form or bound its length
+    # (perigraph 4): max_tokens, stop, response_format, chat_template_kwargs and reasoning switches. R17b's base and
+    # reasoning-before-the-answer bodies differed only here and shared one perigraph 3 identity. Refines only.
+    "generation_controls",
+    "decoding",             # the sampler settings; never identifying, uniform within an arm
     # The ninth, and the part a whole published saving lives inside. Local Fusion reports $7.47 to $4.54 (39.2%) and
     # the entire mechanism is that a frontier model and a cheap one run in SEPARATE persistent contexts exchanging only
     # briefs and results, because switching models inside one context breaks prompt caching. The other eight cannot
@@ -94,7 +98,9 @@ BEST_AVAILABLE_SOURCING = {
     "loop": "pushed_by_owner",
     "turn_budget": "pushed_by_owner",
     "retry_policy": "pushed_by_owner",
-    "readout": "in_the_request",
+    "generation_controls": "in_the_request",
+    # The caller's rule for taking the answer out of the reply, which no request carries (perigraph 4).
+    "readout": "pushed_by_owner",
     "decoding": "in_the_request",
     # Pushed, and the reason is the same one that puts `loop` there: how many contexts a caller keeps and what it copies
     # between them is a property of their scaffold, not of any request we hold. We see one request at a time and cannot
@@ -183,11 +189,11 @@ class Part:
 
     #: Parts that may refine an identity another identifying part establishes and never establish one (perigraph 3
     #: `refines_only`). A harness whose only identifying parts are these has no identity.
-    REFINES_ONLY = ("request_template",)
+    REFINES_ONLY = ("request_template", "generation_controls")
 
     #: Parts a record must hold, or report `not_provided`, to have an identity (perigraph 3 `must_be_known_for_identity`): one the
     #: collector could not read might have been there, and an identity without it joins runs that differ in it.
-    MUST_BE_KNOWN_FOR_IDENTITY = ("instruction", "request_template")
+    MUST_BE_KNOWN_FOR_IDENTITY = ("instruction", "request_template", "generation_controls")
 
     @property
     def identifying(self) -> bool:
@@ -202,7 +208,7 @@ class Part:
         """
         if self.kind in Part.NEVER_IDENTIFYING:
             return False
-        if self.digest and self.boundary not in IDENTIFYING_BOUNDARIES:
+        if self.digest and KEYING_BOUNDARY.get(self.kind) != self.boundary:
             return False
         return self.sourcing in IDENTIFYING_SOURCING
 
@@ -505,7 +511,11 @@ class Collection:
     def identity_withdrawn(self) -> tuple[str, ...]:
         """The `Part.MUST_BE_KNOWN_FOR_IDENTITY` parts this record neither holds nor reports `not_provided`. Any one of them
         withdraws the identity: the collector could not show the part was not there."""
-        held = {p.kind for p in self.harness.parts} if self.harness else set()
+        # Held in the request at its keying boundary (perigraph 4): a declaration in its place would lift the refusal on
+        # the owner's word.
+        held = ({p.kind for p in self.harness.parts
+                 if p.sourcing == "in_the_request" and KEYING_BOUNDARY.get(p.kind) == p.boundary}
+                if self.harness else set())
         kept = {a.kind for a in self.absences if a.reason == "not_provided"}
         return tuple(k for k in Part.MUST_BE_KNOWN_FOR_IDENTITY if k not in held and k not in kept)
 
@@ -649,7 +659,16 @@ def digest_bytes(payload: str) -> str:
 
 #: What this collector claims it can reach from a request body, and nothing more. Static per version on purpose: a
 #: manifest that adapted to what it happened to find could never contradict a record, which is the one thing it is for.
-FROM_A_REQUEST = ("instruction", "tool_schemas", "readout", "decoding")
+FROM_A_REQUEST = ("instruction", "tool_schemas", "decoding")
+
+#: The request members perigraph 4's OpenAI Chat Completions binding reads into `generation_controls`, mirrored from the
+#: vendored spec (tests check the two agree). This collector does not digest them: a body carrying any of them has
+#: generation controls we did not read, which withdraws the identity, as an unread request template does.
+GENERATION_CONTROL_MEMBERS = (
+    "chat_template_kwargs", "reasoning_effort", "reasoning", "thinking", "enable_thinking", "max_tokens",
+    "max_completion_tokens", "stop", "response_format", "tool_choice", "parallel_tool_calls", "chat_template",
+    "add_generation_prompt", "continue_final_message", "guided_json", "guided_regex", "guided_choice",
+    "guided_grammar", "structured_outputs", "min_tokens", "stop_token_ids")
 
 #: Which boundary each of those digests is actually over -- and this table is the finding rather than a detail.
 #:
@@ -664,7 +683,6 @@ FROM_A_REQUEST = ("instruction", "tool_schemas", "readout", "decoding")
 REQUEST_BOUNDARIES = {
     "instruction": "model_visible",
     "tool_schemas": "parsed",
-    "readout": "parsed",
     "decoding": "parsed",
 }
 
@@ -724,15 +742,15 @@ def collect_from_request(body: dict, *, collector: str, version: str) -> Collect
     else:
         absences.append(Absence(kind="tool_schemas", reason="not_provided"))
 
-    fmt = body.get("response_format")
-    if fmt:
-        add("readout", _canonical_scalars([("response_format", fmt)]),
-            label=str(fmt.get("type", "")) if isinstance(fmt, dict) else "")
+    sent = sorted(k for k in GENERATION_CONTROL_MEMBERS if body.get(k) is not None)
+    if sent:
+        absences.append(Absence(kind="generation_controls", reason="not_reachable",
+                                detail=f"{','.join(sent)} present and this collector does not read generation controls"))
     else:
-        # Not our failure: without a declared format the answer is read out of prose by a convention that lives on the
-        # caller's side, and this repository has measured what that costs -- a mis-set convention put 1,822 of 2,364
-        # answers on one option.
-        absences.append(Absence(kind="readout", reason="not_provided"))
+        absences.append(Absence(kind="generation_controls", reason="not_provided"))
+    # The caller's convention, in no request. This repository has measured what a mis-set one costs: 1,822 of 2,364
+    # answers on one option.
+    absences.append(Absence(kind="readout", reason="not_provided"))
 
     knobs = [(k, body[k]) for k in ("temperature", "top_p", "top_k", "seed") if k in body]
     if knobs:

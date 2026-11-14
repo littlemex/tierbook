@@ -265,8 +265,11 @@ deployed assignment was contradicted by fresh evidence.
   each item, the decoding settings) as the sender names it, refused by the same rule: two harnesses under one arm, or
   one on some rows and none on others. A policy names the harness it certified (per component for a cascade) only when
   the rows did, `drift` refuses fresh rows under another harness, and `check-observations` prints each arm's harness,
-  or says it was not stated: rows that name none are not assumed to share one. perigraph 3's harness identity is one
-  way to compose it (`perigraph/3/harness/<id>`). A declared `interfaces` list keeps arms a router cannot serve out of selection; with it declared,
+  or says it was not stated: rows that name none are not assumed to share one. perigraph 4's harness identity is one
+  way to compose it (`perigraph/4/harness/<id>`). It does not cover what never keys a perigraph identity -- the caller's
+  readout rule, a retry policy, the sampler settings, the request members perigraph did not read -- so a sender that
+  wants tierbook to refuse an arm pooling two of those composes `arm_harness` from them too; tierbook still compares the
+  string and never parses it. A declared `interfaces` list keeps arms a router cannot serve out of selection; with it declared,
   every candidate, cascades included, must say what it is.
 * **A trainer's claims only subtract.** A candidate may cite what its arm was trained on and which sets its maker
   saw; an arm whose held-out items appear there is excluded from selection, and checks that cannot be made are
