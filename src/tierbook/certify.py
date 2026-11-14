@@ -558,6 +558,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
     fresh_rows = fresh_only(observations, decl, as_of)
     versions = arm_versions(fresh_rows)
     artifacts = arm_artifacts(fresh_rows)
+    harnesses = arm_harnesses(fresh_rows)
     price_checks: dict[str, dict] = {}
     for arm, p in decl.usd_per_attempt.items():
         cand = cfg.candidates.get(arm)
@@ -606,6 +607,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             per_arm[a] = {"selection": sel, "held_out": ho, "stale_attempts": stale.get((t, a), 0),
                           "fresh": whole["attempts"] > 0, "priced": whole["spend_usd"] is not None,
                           "priced_by": whole["priced_by"], **_versions_entry(a, versions, cfg),
+                          **_harness_entry(a, harnesses, cfg),
                           **({"price_check": price_checks[a]} if a in price_checks else {}),
                           "interface": interface_of(a, cfg)}
         if not per_arm:
@@ -701,6 +703,7 @@ def derive(observations: list[Observation], cfg: Config, decl: Declarations, *,
             entry["cascade"] = {"primary": cas.primary, "fallback": cas.fallback, "threshold": cas.threshold,
                                 "on_no_score": cas.on_no_score}
         entry.update(_versions_entry(chosen, versions, cfg))
+        entry.update(_harness_entry(chosen, harnesses, cfg))
         entry.update(status=status, arm=chosen, reason_code=code, held_out=ho, label_sources=labels,
                      reason=(("cheapest per accepted task" if len(ladder) == 1 else
                               f"cheapest confirmed rung of a {len(ladder)}-rung held-out ladder" if status == CERTIFIED
@@ -757,6 +760,13 @@ def arm_artifacts(observations: Iterable[Observation]) -> dict[str, str]:
     return _one_per_arm(observations, "arm_artifact", "artifacts")
 
 
+def arm_harnesses(observations: Iterable[Observation]) -> dict[str, str]:
+    """The one `arm_harness` each arm's attempts carry, by the same rule as `arm_versions`. One checkpoint under two
+    wrappers is two configurations: in R17a the same instruction in the system turn and in the user turn moved accuracy
+    by 3.75 and 4.58 points while the weights were byte-identical."""
+    return _one_per_arm(observations, "arm_harness", "harnesses")
+
+
 def _one_per_arm(observations: Iterable[Observation], field: str, plural: str) -> dict[str, str]:
     seen: dict[str, set[str]] = {}
     for o in observations:
@@ -785,6 +795,17 @@ def _versions_entry(arm: str, versions: dict[str, str], cfg: Config) -> dict:
     if cand is not None and cand.cascade is not None:
         return {"arm_version": None, "component_versions": {a: versions.get(a) or None for a in _leaves(arm, cfg)}}
     return {"arm_version": versions.get(arm) or None}
+
+
+def _harness_entry(arm: str, harnesses: dict[str, str], cfg: Config) -> dict:
+    """`arm_harness` (or `component_harnesses` for a cascade), written only when some row of a reached arm names one,
+    so a policy over observations that name no harness is unchanged."""
+    cand = cfg.candidates.get(arm)
+    if cand is not None and cand.cascade is not None:
+        comp = {a: harnesses.get(a) or None for a in _leaves(arm, cfg)}
+        return {"component_harnesses": comp} if any(comp.values()) else {}
+    h = harnesses.get(arm)
+    return {"arm_harness": h} if h else {}
 
 
 def interface_of(arm: str, cfg: Config) -> str | None:
@@ -1108,6 +1129,24 @@ def drift(deployed: dict, rederived: dict, fresh: list[Observation], decl: Decla
     # The deployed certificate names what answered when it was issued. Fresh rows from anything else are not a check
     # of that certificate, whatever their rate.
     fresh_versions = arm_versions(fresh)
+    fresh_harnesses = arm_harnesses(fresh)
+    harness_unchecked = []
+    for t, e in sorted(deployed["task_types"].items()):
+        if e.get("status") != CERTIFIED:
+            continue
+        want_h = e.get("component_harnesses") or ({e["arm"]: e["arm_harness"]} if "arm_harness" in e else {})
+        for arm in ([e["arm"]] if not e.get("component_harnesses") else list(want_h)):
+            if arm not in fresh_harnesses:
+                continue
+            got, v = fresh_harnesses[arm] or None, want_h.get(arm)
+            if v is None:
+                if got is not None:
+                    harness_unchecked.append({"task_type": t, "arm": arm, "fresh_harness": got})
+                continue
+            if got != v:
+                raise EvidenceError(f"{t!r}: the deployed certificate is for {arm!r} under harness {v!r}, and the "
+                                    f"fresh attempts are under {got or NO_VERSION}; drift over a different harness "
+                                    "checks nothing that was certified. Re-derive for the harness now serving")
     version_unchecked = []
     for t, e in sorted(deployed["task_types"].items()):
         if e.get("status") != CERTIFIED:
@@ -1182,6 +1221,9 @@ def drift(deployed: dict, rederived: dict, fresh: list[Observation], decl: Decla
             "unattributed_attempts": unattributed_rows,
             # A certificate issued without a version cannot be checked against what serves now; said, not skipped.
             "version_unchecked": version_unchecked,
+            # The same for the harness: a certificate issued over rows that named none cannot be checked against a
+            # harness that serves now.
+            "harness_unchecked": harness_unchecked,
             # Why a re-derivation may differ besides the evidence: the inputs it was derived under.
             "declarations_changed": deployed.get("declarations") != rederived.get("declarations"),
             "candidates_changed": deployed.get("candidates_digest") != rederived.get("candidates_digest")}

@@ -101,18 +101,20 @@ def cmd_ingest(args) -> int:
 
 
 def cmd_check_observations(args) -> int:
-    """Parse observation files the way `derive` parses rows, and print what they hold per (task type, arm, version).
+    """Parse observation files the way `derive` parses rows, and print what they hold per (task type, arm, version)
+    and the harness each arm was observed under.
 
     The validator a sender runs before handing files over: a row this reader refuses is refused here first, with its
-    file and line, and an arm that mixes versions is named. Candidates, declarations and freshness are not read, so
+    file and line, and an arm that mixes versions or harnesses is named. Candidates, declarations and freshness are not read, so
     a file that passes here can still be refused by `derive` for those. Nothing is written."""
-    from tierbook.certify import NO_VERSION, arm_artifacts, arm_versions
+    from tierbook.certify import NO_VERSION, arm_artifacts, arm_harnesses, arm_versions
     from tierbook.observation import read
 
     try:
         obs = read(args.observations)
         arm_versions(obs)
         arm_artifacts(obs)
+        harnesses = arm_harnesses(obs)
     except _refusals() as e:
         print(f"refused: {e}", file=sys.stderr)
         return REFUSED
@@ -125,6 +127,10 @@ def cmd_check_observations(args) -> int:
             c[k] = c.get(k, 0) + 1
     for (t, a, v), c in sorted(cells.items()):
         print(f"{t}\t{a}\t{v}\t" + " ".join(f"{k}={n}" for k, n in sorted(c.items())))
+    for a, h in sorted(harnesses.items()):
+        # Absent stays absent: rows that name no harness are not shown to share one, and saying so here is the only
+        # place a sender sees it before a certificate is issued over them.
+        print(f"harness\t{a}\t{h}" if h else f"harness\t{a}\t{NO_VERSION}\tnot stated: equal harnesses are not assumed")
     print(f"{len(obs)} observations in {len(args.observations)} file(s): parsed")
     return 0
 

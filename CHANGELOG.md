@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+* **Observation format 5 adds an opaque `arm_harness`.** `derive`, `check-observations` and `drift` refuse an arm whose
+  rows name two harnesses, or one on some rows and none on others, by the same rule as `arm_version`; the policy
+  records `arm_harness` (or `component_harnesses` for a cascade) only when the rows name one, `drift` refuses fresh rows
+  under another harness and lists a certificate issued without one as `harness_unchecked`, and `check-observations`
+  prints each arm's harness or that it was not stated. Needed because R17a pooled one checkpoint under three harnesses
+  under one arm name and `check-observations` accepted it: the same weights answered 0.8983, 0.8608 and 0.8525 with no
+  instruction, the instruction as the system message, and the instruction in the user message. A row is written in
+  format 5 only when it names a harness, so older files stay readable.
+* **The vendored perigraph spec is version 3.** It adds the `request_template` part, which may refine a harness
+  identity and never establish one, and a refusal of an arm with more than one harness identity, which the
+  conformance test maps to `arm_harnesses`. tierbook's own harness model gains the part: its request collector records
+  `request_template` as not sent when a body carries no `perigraph_template` and as not reachable when one does,
+  which withdraws the identity, because it does not read the template.
+
 * **Observation format 4 adds an opaque `arm_artifact`, and a provenance may name one.** `derive` refuses an arm whose
   fresh rows name two artifacts, or one on some rows and none on others, by the same rule as `arm_version`; a
   provenance's `arm_artifact` excludes the arm when the observed one differs, and is reported unchecked when the arm

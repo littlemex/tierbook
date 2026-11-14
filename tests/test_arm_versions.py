@@ -226,3 +226,83 @@ def test_format_4_is_written_only_for_an_artifact_and_an_older_format_may_not_ca
     row = {"format": 3, "item": "x", "task_type": T, "arm": "student", "outcome": "accepted", "arm_artifact": "a"}
     with pytest.raises(EvidenceError, match="format 4"):
         Observation.from_row(row)
+
+
+# --- harness binding -----------------------------------------------------------------------------------------------
+
+def harnessed(o: Observation, h: str) -> Observation:
+    return dataclasses.replace(o, arm_harness=h)
+
+
+def test_format_5_is_written_only_for_a_harness_and_an_older_format_may_not_carry_it(tmp_path):
+    a = harnessed(obs("x", "student", "accepted"), "perigraph/3/harness/" + "b" * 24)
+    p = tmp_path / "o.jsonl"
+    write([a, obs("y", "student", "accepted")], p)
+    assert [json.loads(line)["format"] for line in p.read_text().splitlines()] == [5, 1]
+    assert read(p)[0] == a
+    row = {"format": 4, "item": "x", "task_type": T, "arm": "student", "outcome": "accepted", "arm_harness": "h"}
+    with pytest.raises(EvidenceError, match="format 5"):
+        Observation.from_row(row)
+    with pytest.raises(EvidenceError, match="arm_harness"):
+        harnessed(obs("x", "student", "accepted"), 3)
+
+
+def test_two_harnesses_under_one_arm_are_refused_even_at_one_version(tmp_path):
+    cfg, decl = candidates(tmp_path), declarations()
+    rows = [harnessed(o, "h1") for o in many("student", 10, version="v1")]
+    rows += [harnessed(versioned(obs("j", "student", "accepted"), "v1"), "h2")]
+    with pytest.raises(EvidenceError, match="2 harnesses"):
+        certify.derive(rows, cfg, decl)
+
+
+def test_a_harness_on_some_rows_and_none_on_others_is_refused(tmp_path):
+    cfg, decl = candidates(tmp_path), declarations()
+    rows = [harnessed(o, "h1") for o in many("student", 10)] + [obs("j", "student", "accepted")]
+    with pytest.raises(EvidenceError, match="<none>"):
+        certify.derive(rows, cfg, decl)
+
+
+def test_the_policy_names_the_harness_only_when_the_rows_do(tmp_path):
+    cfg, decl = candidates(tmp_path), declarations()
+    entry = certify.derive([harnessed(o, "h1") for o in many("student", 60)], cfg, decl)["task_types"][T]
+    assert entry["arm_harness"] == "h1" and entry["arms"]["student"]["arm_harness"] == "h1"
+    plain = certify.derive(many("student", 60), cfg, decl)["task_types"][T]
+    assert "arm_harness" not in plain and "arm_harness" not in plain["arms"]["student"]
+
+
+def test_a_cascade_reports_its_components_harnesses(tmp_path):
+    cfg, decl = candidates(tmp_path), declarations(usd_per_attempt={"student": {"usd": 0.5, "source": "test"}})
+    rows = [harnessed(o, "hs") for o in many("student", 60, score=0.9)] + many("teacher", 60, tokens=10)
+    cell = certify.derive(rows, cfg, decl)["task_types"][T]["arms"]["routed"]
+    assert cell["component_harnesses"] == {"student": "hs", "teacher": None}
+
+
+def test_drift_refuses_fresh_rows_under_another_harness(tmp_path):
+    cfg, decl = candidates(tmp_path), declarations(min_items=5)
+    deployed = certify.derive([harnessed(o, "h1") for o in many("student", 60)], cfg, decl)
+    with pytest.raises(EvidenceError, match="different harness"):
+        certify.drift(deployed, deployed, [harnessed(o, "h2") for o in many("student", 20)], decl, cfg)
+    with pytest.raises(EvidenceError, match="different harness"):
+        certify.drift(deployed, deployed, many("student", 20), decl, cfg)
+    certify.drift(deployed, deployed, [harnessed(o, "h1") for o in many("student", 20)], decl, cfg)
+
+
+def test_drift_says_when_a_certificate_without_a_harness_meets_rows_with_one(tmp_path):
+    cfg, decl = candidates(tmp_path), declarations(min_items=5)
+    deployed = certify.derive(many("student", 60), cfg, decl)
+    report = certify.drift(deployed, deployed, [harnessed(o, "h9") for o in many("student", 20)], decl, cfg)
+    assert report["harness_unchecked"] == [{"task_type": T, "arm": "student", "fresh_harness": "h9"}]
+    assert certify.drift(deployed, deployed, many("student", 20), decl, cfg)["harness_unchecked"] == []
+
+
+def test_check_observations_refuses_mixed_harnesses_and_reports_an_unstated_one(tmp_path):
+    same, mixed, absent = tmp_path / "same.jsonl", tmp_path / "mixed.jsonl", tmp_path / "absent.jsonl"
+    write([harnessed(o, "h1") for o in many("student", 3)], same)
+    write([harnessed(o, "h1") for o in many("student", 3)] + [harnessed(obs("q", "student", "rejected"), "h2")], mixed)
+    write(many("student", 3), absent)
+    ok = run("check-observations", str(same))
+    assert ok.returncode == 0 and "harness\tstudent\th1\n" in ok.stdout
+    no = run("check-observations", str(mixed))
+    assert no.returncode == 2 and "2 harnesses" in no.stderr
+    quiet = run("check-observations", str(absent))
+    assert quiet.returncode == 0 and "harness\tstudent\t<none>\tnot stated" in quiet.stdout

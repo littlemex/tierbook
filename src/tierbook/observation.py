@@ -32,10 +32,10 @@ OUTCOMES = ("accepted", "rejected", "unobserved")
 #: Token kinds a price card can bill differently. Names are the candidate file's `price_per_mtok` keys.
 USAGE_KEYS = ("fresh_in", "cached_in", "out")
 
-#: The newest format this reader understands. A row is written in the oldest format that can carry it: 4 only when it
-#: names an `arm_artifact`, 3 only when it names an `arm_version` or a `path`, 2 only when it has a `score`, so an older
-#: file stays readable by an older reader.
-FORMAT = 4
+#: The newest format this reader understands. A row is written in the oldest format that can carry it: 5 only when it
+#: names an `arm_harness`, 4 only when it names an `arm_artifact`, 3 only when it names an `arm_version` or a `path`,
+#: 2 only when it has a `score`, so an older file stays readable by an older reader.
+FORMAT = 5
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,11 @@ class Observation:
     #: server has loaded it (perigraph's artifact identity is one such name). Opaque like `arm_version`, and compared
     #: only against an arm's provenance: `arm_version` names what answered, which a trainer cannot know in advance.
     arm_artifact: str = ""
+    #: What surrounded the model for this attempt, as the sender names it: the system text, the wrapper around the item,
+    #: the decoding settings -- whatever the sender composes (perigraph's harness identity is one such name). Opaque and
+    #: compared for equality only, like `arm_version`: the same weights answer differently under a different wrapper,
+    #: so two harnesses under one arm name pool two configurations. Empty means the sender did not say.
+    arm_harness: str = ""
     #: The component arms that actually ran for this attempt, in order, when `arm` names something that routes inside
     #: itself (a router assigned this request, then a student and a fallback answered). Recorded for the reader and
     #: listed by `check-observations`; a rate is never split by it, because the router's choice is part of the arm.
@@ -95,21 +100,22 @@ class Observation:
         for name in ("item", "task_type", "arm"):
             if not getattr(self, name):
                 raise EvidenceError(f"an observation needs a non-empty {name}")
-        for name in ("arm_version", "arm_artifact"):
+        for name in ("arm_version", "arm_artifact", "arm_harness"):
             if not isinstance(getattr(self, name), str):
                 raise EvidenceError(f"{name} must be a string, not {type(getattr(self, name)).__name__}")
         if not isinstance(self.path, tuple) or not all(isinstance(a, str) and a for a in self.path):
             raise EvidenceError(f"path must be a list of non-empty arm names, not {self.path!r} (item {self.item!r})")
 
     def to_row(self) -> dict:
-        fmt = 4 if self.arm_artifact else 3 if (self.arm_version or self.path) else 2 if self.score is not None else 1
+        fmt = (5 if self.arm_harness else 4 if self.arm_artifact else 3 if (self.arm_version or self.path)
+               else 2 if self.score is not None else 1)
         row = {"format": fmt, "item": self.item, "task_type": self.task_type, "arm": self.arm,
                "outcome": self.outcome, "usage": dict(self.usage)}
         for name in ("billed_usd", "latency_s", "score"):
             if getattr(self, name) is not None:
                 row[name] = getattr(self, name)
         for name in ("run", "reason", "grader", "observed_at", "label_source", "finish_reason", "source",
-                     "arm_version", "arm_artifact"):
+                     "arm_version", "arm_artifact", "arm_harness"):
             if getattr(self, name):
                 row[name] = getattr(self, name)
         if self.path:
@@ -130,9 +136,12 @@ class Observation:
         if fmt < 4 and "arm_artifact" in row:
             raise EvidenceError(f"a format-{fmt} observation carries `arm_artifact`, which format 4 introduced; an "
                                 "older reader would refuse this row")
+        if fmt < 5 and "arm_harness" in row:
+            raise EvidenceError(f"a format-{fmt} observation carries `arm_harness`, which format 5 introduced; an "
+                                "older reader would refuse this row")
         known = {"format", "item", "task_type", "arm", "outcome", "usage", "billed_usd", "latency_s", "run",
                  "reason", "grader", "observed_at", "label_source", "finish_reason", "source", "score",
-                 "arm_version", "arm_artifact", "path"}
+                 "arm_version", "arm_artifact", "arm_harness", "path"}
         unknown = sorted(set(row) - known)
         if unknown:
             raise EvidenceError(f"unknown observation keys {unknown}; a field this reader drops silently is a "
@@ -146,6 +155,7 @@ class Observation:
                    label_source=str(row.get("label_source", "")), finish_reason=str(row.get("finish_reason", "")),
                    source=str(row.get("source", "")), score=row.get("score"),
                    arm_version=row.get("arm_version", ""), arm_artifact=row.get("arm_artifact", ""),
+                   arm_harness=row.get("arm_harness", ""),
                    path=tuple(row["path"]) if isinstance(row.get("path"), list) else row.get("path", ()))
 
 

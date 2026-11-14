@@ -154,7 +154,7 @@ def test_the_unobserved_parts_are_reported():
 
 
 def test_the_parts_nothing_was_recorded_about_are_reported_too():
-    assert set(full().missing) == {"turn_budget", "retry_policy", "readout", "decoding",
+    assert set(full().missing) == {"request_template", "turn_budget", "retry_policy", "readout", "decoding",
                                    "context_partitioning", "tool_trace"}
 
 
@@ -236,9 +236,30 @@ def test_a_manifest_cannot_claim_an_unknown_part():
 def test_a_record_with_one_part_is_valid_and_names_what_it_lacks():
     """The permissive half. A collector that refused a partial record would produce no record, and a run that emitted
     nothing is indistinguishable from a run that emitted a perfect record of nothing."""
-    coll = hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)))
+    no_template = (hn.Absence(kind="request_template", reason="not_provided"),)
+    coll = hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)), absences=no_template)
     assert coll.admissible_to_a_verdict() is True
     assert "tool_schemas" in coll.unaccounted and "decoding" in coll.unaccounted
+
+
+def test_a_request_template_nobody_reported_withdraws_the_identity():
+    """perigraph 3 `must_be_known_for_identity`: a template the record says nothing about might have been there, so the
+    instruction alone cannot stand for the harness; a template the collector could not read is the same."""
+    coll = hn.Collection(manifest=manifest(), harness=hn.Harness(parts=(part(),)))
+    assert coll.admissible_to_a_verdict() is False and coll.identity_withdrawn == ("request_template",)
+    assert "neither held nor reported as not sent" in coll.why_not()
+    unread = hn.collect_from_request({"messages": [{"role": "system", "content": "Terse."}],
+                                      "perigraph_template": {"messages": [{"role": "system"}]}},
+                                     collector="c", version="1")
+    assert unread.admissible_to_a_verdict() is False
+    plain = hn.collect_from_request({"messages": [{"role": "system", "content": "Terse."}]}, collector="c", version="1")
+    assert plain.admissible_to_a_verdict() is True
+
+
+def test_a_request_template_alone_identifies_nothing():
+    tpl = hn.Part(kind="request_template", sourcing="in_the_request", digest="b" * 64)
+    assert tpl.identifying and not hn.Harness(parts=(tpl,)).has_identity
+    assert hn.Harness(parts=(part(), tpl)).identity != hn.Harness(parts=(part(),)).identity
 
 
 def test_a_record_with_nothing_identifying_still_exists_and_supports_no_claim():

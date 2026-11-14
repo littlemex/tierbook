@@ -37,7 +37,7 @@ from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, CONTEXT_CROSS
                                DIGEST_BOUNDARIES, HARNESS_SOURCING, IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING)
 
 SPEC_PATH = Path(__file__).resolve().parent / "spec" / "perigraph-vocabularies.json"
-SPEC_DIGEST = "59d879b8a5fd5cfec00b422340ee5ffee086902a7981f9a115256f1fe112b996"
+SPEC_DIGEST = "ceb73a2f14ec736bb1ac6b787ecab69510341295233d232720b255475de75fc0"
 SPEC = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
 
 
@@ -72,6 +72,14 @@ def test_the_digest_boundaries_and_which_may_identify_match():
 
 def test_the_parts_that_may_never_identify_match():
     assert hn.Part.NEVER_IDENTIFYING == tuple(SPEC["never_identifying"]["values"])
+
+
+def test_the_parts_that_only_refine_and_the_parts_an_identity_needs_known_match():
+    """Version 3: a request template may split an identity the instruction establishes and never establish one, and a
+    part the collector could not show was absent withdraws the identity."""
+    assert hn.Part.REFINES_ONLY == tuple(SPEC["refines_only"]["values"])
+    assert hn.Part.MUST_BE_KNOWN_FOR_IDENTITY == tuple(SPEC["must_be_known_for_identity"]["values"])
+    assert SPEC["must_be_known_for_identity"]["known_when_absent_as"] == "not_provided"
 
 
 def test_the_absence_reasons_and_who_each_blames_match():
@@ -148,6 +156,10 @@ def test_every_refusal_the_spec_requires_is_either_implemented_or_unreachable_wi
         # model identity is grouping by `arm_version`, and "some with one and some without" is "" beside a value.
         "A verdict over records grouped as one arm that carry more than one model identity, or some with one and some "
         "without.": ce.arm_versions,
+        # Version 3. tierbook reads a harness identity only as the opaque `arm_harness` a sender composed from it, so
+        # this is `arm_harnesses`: more than one value under one arm, or a value on some rows and "" on others, refuses.
+        "A verdict over records grouped as one arm when the distinct harness identities derived from them number more "
+        "than one, or number one while some record has none.": ce.arm_harnesses,
         # A provenance or a deployed certificate is the claim; its `arm_version` is what it is bound to.
         "A claim bound to a model identity, applied to records that do not carry that model identity.":
             ce.provenance_check,

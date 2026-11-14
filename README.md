@@ -260,7 +260,13 @@ deployed assignment was contradicted by fresh evidence.
   `drift` says so. An observation may also name an opaque `arm_artifact` -- the stored files, which a trainer can name
   at save time -- and a provenance naming one is checked against it, so a server's runtime change does not break a
   trainer's claim and a retrain under the same name does. perigraph 2's model and artifact identities are one way to
-  compose the two strings (`perigraph/2/model/<id>`, `perigraph/2/artifact/<id>`); tierbook never parses either. A declared `interfaces` list keeps arms a router cannot serve out of selection; with it declared,
+  compose the two strings (`perigraph/2/model/<id>`, `perigraph/2/artifact/<id>`); tierbook never parses either.
+  Observation format 5 adds an opaque `arm_harness`, what surrounded the model (the system text, the wrapper around
+  each item, the decoding settings) as the sender names it, refused by the same rule: two harnesses under one arm, or
+  one on some rows and none on others. A policy names the harness it certified (per component for a cascade) only when
+  the rows did, `drift` refuses fresh rows under another harness, and `check-observations` prints each arm's harness,
+  or says it was not stated: rows that name none are not assumed to share one. perigraph 3's harness identity is one
+  way to compose it (`perigraph/3/harness/<id>`). A declared `interfaces` list keeps arms a router cannot serve out of selection; with it declared,
   every candidate, cascades included, must say what it is.
 * **A trainer's claims only subtract.** A candidate may cite what its arm was trained on and which sets its maker
   saw; an arm whose held-out items appear there is excluded from selection, and checks that cannot be made are

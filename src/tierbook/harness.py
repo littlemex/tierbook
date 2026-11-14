@@ -47,6 +47,11 @@ from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, DIGEST_BOUNDA
 #: identity changing, and that is the whole defect.
 HARNESS_PARTS = (
     "instruction",          # the system prompt / the instruction text
+    # The fixed text the requester wraps around each item in the other messages, as the requester declares it (perigraph
+    # 3). The same instruction moved from the system message into the user message moved accuracy 4.58 points on one
+    # checkpoint while every other part stayed the same. It may split an identity the instruction establishes and never
+    # establishes one, because which text is fixed is the requester's word.
+    "request_template",
     "tool_schemas",         # what tools were offered, and their declared shapes
     # What a tool actually does, split in two because one classification was covering two different objects. The
     # FUNCTION is unobservable -- somebody can change what a tool does behind an unchanged schema and nothing in the
@@ -79,6 +84,7 @@ HARNESS_PARTS = (
 #: say so would group two different harnesses under one identity.
 BEST_AVAILABLE_SOURCING = {
     "instruction": "in_the_request",
+    "request_template": "in_the_request",
     "tool_schemas": "in_the_request",
     "tool_extension": "not_observable",
     # In the request, and after the fact: the trace is bytes the run produced. It may never key an identity, and that is
@@ -175,6 +181,14 @@ class Part:
     #: direction, so the exclusion is by name rather than by mode.
     NEVER_IDENTIFYING = ("tool_trace",)
 
+    #: Parts that may refine an identity another identifying part establishes and never establish one (perigraph 3
+    #: `refines_only`). A harness whose only identifying parts are these has no identity.
+    REFINES_ONLY = ("request_template",)
+
+    #: Parts a record must hold, or report `not_provided`, to have an identity (perigraph 3 `must_be_known_for_identity`): one the
+    #: collector could not read might have been there, and an identity without it joins runs that differ in it.
+    MUST_BE_KNOWN_FOR_IDENTITY = ("instruction", "request_template")
+
     @property
     def identifying(self) -> bool:
         """Whether this part may contribute to the harness's identity. Three conditions, and all of them are needed.
@@ -226,8 +240,9 @@ class Harness:
 
     @property
     def has_identity(self) -> bool:
-        """Whether anything here is identified by bytes we hold that the model provably read."""
-        return any(p.identifying for p in self.parts)
+        """Whether anything here is identified by bytes we hold that the model provably read, other than a part that
+        may only refine an identity (`Part.REFINES_ONLY`)."""
+        return any(p.identifying and p.kind not in Part.REFINES_ONLY for p in self.parts)
 
     @property
     def identity(self) -> str:
@@ -484,7 +499,15 @@ class Collection:
         harness, so a comparison against it groups things that have nothing in common.
         """
         return (self.status == "complete" and not self.contradictions
-                and self.harness is not None and self.harness.has_identity)
+                and self.harness is not None and self.harness.has_identity and not self.identity_withdrawn)
+
+    @property
+    def identity_withdrawn(self) -> tuple[str, ...]:
+        """The `Part.MUST_BE_KNOWN_FOR_IDENTITY` parts this record neither holds nor reports `not_provided`. Any one of them
+        withdraws the identity: the collector could not show the part was not there."""
+        held = {p.kind for p in self.harness.parts} if self.harness else set()
+        kept = {a.kind for a in self.absences if a.reason == "not_provided"}
+        return tuple(k for k in Part.MUST_BE_KNOWN_FOR_IDENTITY if k not in held and k not in kept)
 
     def why_not(self) -> str:
         """One sentence naming everything standing between this record and a published claim."""
@@ -500,6 +523,9 @@ class Collection:
         if self.harness is None or not self.harness.has_identity:
             parts.append("no part was identified by bytes we hold that the model provably read, so the identity would "
                          "be the same for every possible harness")
+        elif self.identity_withdrawn:
+            parts.append(f"{list(self.identity_withdrawn)} were neither held nor reported as not sent, so the identity "
+                         "could join runs that differ in them")
         return "not admissible to a verdict -- " + "; and ".join(parts)
 
     def __str__(self) -> str:
@@ -679,6 +705,13 @@ def collect_from_request(body: dict, *, collector: str, version: str) -> Collect
         add("instruction", system)
     else:
         absences.append(Absence(kind="instruction", reason="not_provided"))
+    # This collector does not read a request template. A body that declares none has none to read, which is the
+    # sender's absence; a body that declares one has one we did not read, which is ours and withdraws the identity.
+    if body.get("perigraph_template") is None:
+        absences.append(Absence(kind="request_template", reason="not_provided"))
+    else:
+        absences.append(Absence(kind="request_template", reason="not_reachable",
+                                detail="perigraph_template is present and this collector does not read it"))
 
     tools = body.get("tools")
     if tools:
