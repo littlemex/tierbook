@@ -37,7 +37,7 @@ from tierbook.evidence import (ABSENCE_REASONS, COLLECTION_STATUS, CONTEXT_CROSS
                                DIGEST_BOUNDARIES, HARNESS_SOURCING, IDENTIFYING_BOUNDARIES, IDENTIFYING_SOURCING)
 
 SPEC_PATH = Path(__file__).resolve().parent / "spec" / "perigraph-vocabularies.json"
-SPEC_DIGEST = "ceb73a2f14ec736bb1ac6b787ecab69510341295233d232720b255475de75fc0"
+SPEC_DIGEST = "1ca5b18c7a2f66f3fd8d0140709b4e570004590ff2f11b4e3932f74b9e9e62b3"
 SPEC = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
 
 
